@@ -86,10 +86,39 @@ thực sự (đo đạc ở Phase 3, không giả định trước).
 | Gemini / GPT-4V | Tương tự, có thể ensemble thêm | Tương tự |
 | Model mở (Qwen2-VL, InternVL) tự host | Không giới hạn API, chạy local | Cần GPU mạnh, setup phức tạp hơn |
 
-**Quyết định**: Dùng Claude API cho tầng fine rerank (chỉ áp lên **top 50-100
-candidate sau coarse retrieval**, không bao giờ áp lên toàn bộ dataset — đúng
-tinh thần "coarse filter cực nhanh, fine rerank chính xác" từ thách thức #2
-trong slide tập huấn BTC).
+**Quyết định**: Dùng Claude API cho tầng fine rerank VÀ cho bước làm giàu dữ liệu
+lúc indexing (xem Mục 2.4). **BTC cung cấp API cho thí sinh nên chi phí (cost)
+không phải ràng buộc** — ràng buộc thực sự là **độ trễ lúc thi đấu (latency
+trong time budget của vòng thi)**, không áp dụng cho giai đoạn indexing (làm
+offline trước ngày thi, không giới hạn thời gian chặt). Vì vậy:
+- Ở giai đoạn **Indexing** (offline): dùng LLM/LVLM thoải mái, càng nhiều càng
+  tốt cho độ chính xác (xem Mục 2.4 — LLM Auto-Captioning).
+- Ở giai đoạn **Retrieval** (online, lúc thi): vẫn phải giới hạn số lần gọi
+  LVLM theo time budget đo được thực nghiệm (Mục 4.4), KHÔNG phải vì tốn tiền
+  mà vì không kịp thời gian trả lời của vòng thi.
+
+### 2.4 LLM Auto-Captioning (làm giàu dữ liệu lúc Indexing — chỉ khả thi vì API miễn phí)
+
+Vì API không giới hạn chi phí, hãy chạy LVLM sinh **caption tự nhiên** cho MỌI
+keyframe đại diện (sau dedup ở Mục 5.1) ngay trong bước indexing:
+
+```
+Với mỗi keyframe đại diện:
+  gọi LVLM với prompt: "Mô tả chi tiết những gì đang diễn ra trong ảnh này
+  bằng 1-2 câu, chú ý: người, hành động, địa điểm, màu sắc, đồ vật, mối quan
+  hệ tương tác giữa các đối tượng."
+  → lưu vào field `llm_caption` (xem KeyframeRecord ở Mục 7)
+  → đưa vào BM25/full-text index cùng OCR/ASR
+```
+
+**Lý do quan trọng**: Object detector (600 categories, rời rạc — xem Objects
+BTC cấp) chỉ ra được "person", "child", "flower" riêng lẻ, KHÔNG nắm bắt được
+mối quan hệ ngữ nghĩa như "người lớn đang hướng dẫn trẻ em tưới hoa" — đúng
+thách thức AVS nêu trong slide BTC ("AI phải hiểu quan hệ tương tác ngữ nghĩa,
+không chỉ nhận diện vật thể rời rạc"). Caption tự nhiên do LVLM sinh giải quyết
+trực tiếp khoảng trống này. Việc chạy LVLM cho HÀNG TRIỆU keyframe chỉ khả thi
+về mặt chi phí vì BTC cấp API miễn phí — đây là lợi thế nên tận dụng tối đa,
+không phải giới hạn.
 
 ---
 
@@ -189,14 +218,16 @@ RRF không cần chuẩn hóa thang điểm giữa các nguồn khác nhau, là 
 chuẩn trong Information Retrieval khi kết hợp nhiều ranked list không đồng nhất
 về đơn vị đo.
 
-### 4.4 Fine Rerank bằng LVLM + Time budget
+### 4.4 Fine Rerank bằng LVLM + Time budget (giới hạn là ĐỘ TRỄ, không phải chi phí)
 
-Với mỗi candidate trong top 50-100, gọi LVLM với prompt dạng:
-`"Cho ảnh keyframe này và mô tả: '{query}', đánh giá độ khớp từ 0-10 và giải
-thích ngắn gọn lý do."` — Batch hóa nhiều candidate/request khi API hỗ trợ để
-giảm số lần gọi. **Time budget**: đặt giới hạn cứng (vd 15-20s/query) — nếu vượt
-ngưỡng, cắt bớt top-K rerank (giảm từ 100 xuống 30) thay vì bỏ qua tầng rerank
-hoàn toàn (giữ nguyên tắc accuracy-first trong phạm vi cho phép).
+Với mỗi candidate trong top-K (có thể tăng lên **200-300** thay vì 50-100, vì
+API miễn phí — chỉ bị giới hạn bởi độ trễ, không phải tiền), gọi LVLM với prompt
+dạng: `"Cho ảnh keyframe này và mô tả: '{query}', đánh giá độ khớp từ 0-10 và
+giải thích ngắn gọn lý do."` — Batch hóa nhiều candidate/request khi API hỗ trợ
+để giảm số round-trip (giảm độ trễ mạng, không phải giảm chi phí). **Time
+budget là số đo thực nghiệm** (chạy thử trên phần cứng/API thật để đo giây/candidate,
+rồi tính ngược ra top-K tối đa cho vừa giới hạn thời gian vòng thi), KHÔNG phải
+số cố định đoán trước — cập nhật ngay khi có dữ liệu thực đo ở Phase 5.
 
 ### 4.5 Temporal Consistency Check (giải quyết thách thức #3 — temporal logic)
 
@@ -240,6 +271,7 @@ aic2026_system/
 │   ├── embed_clip.py            <- Phase 2: load CLIP feature có sẵn từ BTC
 │   ├── embed_siglip.py          <- Phase 2: tự trích xuất SigLIP
 │   ├── ocr_asr_extract.py       <- Phase 2: OCR (PaddleOCR) + ASR (Whisper)
+│   ├── llm_captioning.py        <- Phase 2: sinh caption tự nhiên bằng LVLM (Mục 2.4)
 │   └── build_index.py           <- Phase 3: build Faiss HNSW + BM25 index
 ├── retrieval/
 │   ├── query_understanding.py   <- Phase 4: LLM decompose query -> JSON
@@ -272,6 +304,7 @@ class KeyframeRecord:
     objects: list[str]               # từ BTC cấp sẵn (Open Images 600 categories)
     ocr_text: str | None
     asr_text: str | None             # transcript đoạn audio quanh timestamp này
+    llm_caption: str | None          # caption tự nhiên do LVLM sinh lúc indexing (Mục 2.4)
     is_cluster_representative: bool  # True nếu là đại diện sau dedup
     cluster_span: tuple[float, float] | None  # (t_start, t_end) nếu là cụm
 
@@ -295,7 +328,7 @@ class StructuredQuery:
 |---|---|---|
 | **0** | Setup project structure theo Mục 6, viết `configs/settings.yaml` với các ngưỡng mặc định (dedup threshold=0.97, coarse top-K=1000, rerank top-K=100, time_budget=20s) | Chạy `pytest` trống không lỗi, cấu trúc thư mục đúng Mục 6 |
 | **1** | Viết `ingestion/dedup.py` + unit test với dữ liệu keyframe giả (synthetic) mô phỏng chuỗi frame gần giống nhau | Test chứng minh giảm >30% số record trên dữ liệu giả mà không mất representative nào |
-| **2** | Viết `embed_clip.py` (load feature BTC cấp) + `embed_siglip.py` (trích xuất mới) + `ocr_asr_extract.py`, test trên 1 video mẫu nhỏ | Ra được `KeyframeRecord` đầy đủ field cho ≥1 video mẫu thật |
+| **2** | Viết `embed_clip.py` (load feature BTC cấp) + `embed_siglip.py` (trích xuất mới) + `ocr_asr_extract.py` + `llm_captioning.py` (gọi LVLM sinh caption cho mọi keyframe đại diện — Mục 2.4, khả thi vì API BTC cấp miễn phí), test trên 1 video mẫu nhỏ | Ra được `KeyframeRecord` đầy đủ field (kể cả `llm_caption`) cho ≥1 video mẫu thật |
 | **3** | Viết `build_index.py` (Faiss HNSW) + `coarse_retriever.py` implement `HybridRetriever` thật (thay `MockRetriever`) | Query mẫu trả về candidate hợp lý trong <200ms trên tập test |
 | **4** | Viết `query_understanding.py` + `query_expansion.py` (gọi Claude API), test với 5 câu query mẫu từ case study trong slide BTC | JSON output đúng schema Mục 7 cho cả 5 câu |
 | **5** | Viết `fusion.py` (RRF) + `fine_rerank.py` (LVLM verifier có time budget) | Trên tập test có ground-truth nhỏ (tự tạo ~20 cặp query-answer), Top-1 accuracy được đo và ghi log |
@@ -331,4 +364,45 @@ hạn phát hiện), rồi DỪNG lại chờ xác nhận — không tự độn
    làm gì) — để người review (Trường) hiểu được kiến trúc, không chỉ chạy được.
 5. Mỗi Phase phải có ít nhất 1 file test trong `tests/` chạy được bằng `pytest`.
 6. Không refactor code của `kisc_module/` đã có sẵn trừ khi được yêu cầu rõ ràng.
+
+---
+
+## 11. Chiến lược cân bằng Tốc độ và Độ chính xác (Speed vs Accuracy)
+
+**Nguyên tắc cốt lõi**: Speed và accuracy chỉ thật sự đánh đổi khi áp cùng 1
+phương pháp đắt tiền cho toàn bộ dữ liệu. Giải pháp là tách rõ 2 giai đoạn:
+mọi thứ **tính được trước ngày thi** dồn vào Indexing (không giới hạn thời
+gian); chỉ những gì **phụ thuộc vào query cụ thể lúc thi** mới cần tối ưu tốc độ.
+
+### 11.1 Kỹ thuật tăng tốc KHÔNG đánh đổi độ chính xác (bắt buộc áp dụng)
+
+1. **Metadata pre-filter trước vector search** — lọc cứng theo time/location
+   trước khi vào Faiss, giảm không gian tìm kiếm mà không mất ứng viên đúng nào.
+2. **Tuning `efSearch` của HNSW theo benchmark, không đoán mò**: đo recall@K và
+   latency với nhiều giá trị efSearch (32/64/128/256), vẽ đường cong, chọn điểm
+   "khuỷu tay" (Pareto frontier) — nơi tăng thêm efSearch không còn đáng tăng
+   recall nhưng vẫn tăng latency.
+3. **Two-precision trick**: coarse dùng vector nén (PQ/binary) để search nhanh
+   trên toàn bộ dataset; fine rerank luôn dùng vector float32 gốc trên top-K đã
+   lọc — độ chính xác cuối cùng không bị ảnh hưởng bởi việc nén ở tầng coarse.
+4. **Early stopping trong fine rerank**: dừng đánh giá LVLM sớm khi đã có
+   Top-1 vượt trội rõ rệt so với phần còn lại (dùng lại logic
+   `kisc_module/ambiguity.py::is_confident_enough` cho fine rerank).
+5. **Batch hóa + song song hóa**: encode nhiều query variant trong 1 batch GPU;
+   gọi LVLM rerank đồng thời (concurrent, có giới hạn theo rate limit API) thay
+   vì tuần tự.
+6. **Cache embedding của query/filter đã gặp** trong phiên KISC nhiều lượt.
+
+### 11.2 Kỹ thuật tăng độ chính xác KHÔNG ảnh hưởng tốc độ lúc thi (làm ở Indexing)
+
+Mọi kỹ thuật ở Mục 2.4 (LLM Auto-Captioning), 2.1 (Ensemble CLIP+SigLIP), và
+Mục 5.1 (Dedup) đều thuộc nhóm này — chạy xong trước ngày thi, không tính vào
+latency lúc thi đấu thật.
+
+### 11.3 Bắt buộc: benchmark thực nghiệm, không dùng số liệu giả định
+
+Trước khi chốt bất kỳ tham số nào ở Mục 11.1 (efSearch, top-K coarse, top-K
+rerank, ngưỡng early-stop), viết script benchmark đo trên dữ liệu mẫu thật, ghi
+lại đường cong recall/latency, và lưu kết quả vào `evaluation/` để tham chiếu
+khi tinh chỉnh — không hard-code con số đoán trước trong `configs/settings.yaml`.
 

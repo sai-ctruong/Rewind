@@ -1,0 +1,25 @@
+# pyproject.toml — cấu hình dự án & pytest cho hệ thống AIC 2026
+#
+# Vì sao cần file này ở Phase 0:
+#   - Đặt pythonpath = ["."] để cả package con (ingestion/, retrieval/, ...) LẪN
+#     package kisc_module/ đều import được khi chạy pytest từ project root. Nhờ đó
+#     absolute import trong kisc_module/demo.py ("from kisc_module.retriever ...")
+#     tiếp tục hoạt động sau khi đã dời KISC vào subfolder — không phải sửa code
+#     KISC (tôn trọng Mục 10.6: không refactor kisc_module trừ khi được yêu cầu).
+#   - Khai báo yêu cầu Python >=3.10 đúng ràng buộc Mục 1.4.
+
+[project]
+name = "aic2026-system"
+version = "0.1.0"
+description = "Trợ lý ảo Truy xuất Đa phương tiện (AIC 2026) — KIS/AVS/VQA/KISC"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+# Thêm project root vào sys.path để import package tuyệt đối mà không cần cài đặt.
+pythonpath = ["."]
+testpaths = ["tests"]
+# -ra: in tóm tắt lý do skip/xfail; -q: gọn. Giúp báo cáo cuối mỗi Phase rõ ràng.
+addopts = "-ra -q"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

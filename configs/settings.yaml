@@ -1,0 +1,163 @@
+# =============================================================================
+# settings.yaml — Cấu hình trung tâm cho hệ thống AIC 2026
+# =============================================================================
+# Vì sao tập trung cấu hình vào 1 file:
+#   Blueprint (CLAUDE.md Mục 1.1) đặt accuracy là ưu tiên số 1 và yêu cầu tinh
+#   chỉnh tham số dựa trên BENCHMARK THỰC NGHIỆM (Mục 11.3), không phải số đoán.
+#   Gom mọi ngưỡng vào một chỗ để khi có số đo thật ở Phase 3/5 chỉ cần sửa ở đây,
+#   không phải đi lục từng module.
+#
+# QUY ƯỚC QUAN TRỌNG (đọc kỹ):
+#   - Các mục đánh dấu [PROVISIONAL] là GIÁ TRỊ KHỞI TẠO TẠM cho Phase 0.
+#     Theo Mục 11.3, KHÔNG được coi chúng là số cuối cùng — phải thay bằng kết
+#     quả benchmark (recall/latency curve) đo ở Phase 3 (efSearch, top-K coarse)
+#     và Phase 5 (top-K rerank, ngưỡng early-stop, time budget).
+#   - Các mục đánh dấu [FIXED] là hằng số chuẩn trong lý thuyết (vd k=60 của RRF),
+#     không cần benchmark.
+# =============================================================================
+
+# --- Phiên bản schema cấu hình (để module đọc biết mình đang parse đúng bản) ---
+config_version: 1
+
+# -----------------------------------------------------------------------------
+# 1. INGESTION — Deduplication (Mục 5.1)
+# -----------------------------------------------------------------------------
+# Lý do có bước dedup: video lifelog có nhiều frame liên tiếp gần giống hệt nhau.
+# Gộp chúng lại giảm 30-60% số vector cần index MÀ KHÔNG mất recall (các frame bị
+# gộp gần như đồng nhất về ngữ nghĩa).
+dedup:
+  # [PROVISIONAL] Ngưỡng cosine similarity giữa 2 keyframe liên tiếp cùng video;
+  # >= ngưỡng này thì gộp thành 1 cụm. 0.97 là điểm khởi đầu Blueprint đề nghị
+  # (Mục 5.1). Cần kiểm chứng trên dữ liệu thật: quá cao -> gộp thiếu (phí vector),
+  # quá thấp -> gộp nhầm frame khác ngữ nghĩa (MẤT RECALL — vi phạm Mục 1.2).
+  similarity_threshold: 0.97
+
+# -----------------------------------------------------------------------------
+# 2. INGESTION — Embedding extraction (Mục 2.1, 5.2)
+# -----------------------------------------------------------------------------
+embedding:
+  # Ensemble 2 encoder để giảm rủi ro "cùng sai" (correlated errors) — Mục 2.1.
+  clip:
+    # CLIP ViT-L/14 do BTC cấp sẵn feature -> không tốn compute trích xuất lại.
+    model_name: "ViT-L/14"
+    dim: 768                     # [FIXED] chiều embedding CLIP ViT-L/14
+  siglip:
+    # SigLIP tự trích xuất (zero-shot tốt hơn CLIP ở benchmark retrieval — Mục 2.1).
+    model_name: "google/siglip-large-patch16-384"
+    dim: 1024                    # [PROVISIONAL] xác nhận lại theo model thực dùng
+  # [PROVISIONAL] Batch lớn + fp16 để tăng throughput ~40% (Mục 5.2). Điều chỉnh
+  # theo VRAM thực tế ở Phase 2.
+  batch_size: 256
+  precision: "fp16"             # fp16 | bf16 | fp32
+
+# -----------------------------------------------------------------------------
+# 3. INGESTION — Vector index (Faiss HNSW) (Mục 2.2, 11.1)
+# -----------------------------------------------------------------------------
+# Quyết định Mục 2.2: Faiss HNSW cho tầng coarse (ưu tiên accuracy). Chỉ chuyển
+# sang IVF-PQ nếu profiling Phase 3 cho thấy RAM là nút thắt THỰC SỰ.
+index:
+  type: "HNSW"                  # HNSW | IVF_PQ  (IVF_PQ chỉ bật sau khi đo RAM)
+  hnsw:
+    # [PROVISIONAL] M = số neighbor mỗi node lúc build. Giá trị chuẩn hay dùng
+    # 16-64; càng cao càng chính xác nhưng tốn RAM/thời gian build. Chốt ở Phase 3.
+    M: 32
+    # [PROVISIONAL] efConstruction — độ rộng tìm kiếm lúc build index.
+    ef_construction: 200
+    # [PROVISIONAL] efSearch — độ rộng tìm kiếm lúc query. Mục 11.1.2 YÊU CẦU đo
+    # recall@K vs latency với 32/64/128/256, vẽ đường cong, chọn điểm "khuỷu tay".
+    # KHÔNG được chốt số này bằng cảm tính — đây chỉ là seed để benchmark.
+    ef_search: 128
+  # Ngưỡng số lượng vector mà trên đó CẤM brute-force linear scan (Mục 1.3).
+  # Vượt mức này bắt buộc phải dùng ANN (HNSW/IVF-PQ).
+  brute_force_max_vectors: 50000  # [FIXED] theo ràng buộc Mục 1.3
+
+# -----------------------------------------------------------------------------
+# 4. RETRIEVAL — Coarse (recall-first) (Mục 3, 4.2, 1.2)
+# -----------------------------------------------------------------------------
+coarse:
+  # [PROVISIONAL] Số candidate lấy ra ở tầng coarse. Blueprint Phase 0 đặt 1000.
+  # Ưu tiên RECALL (Mục 1.2): thà lấy dư còn hơn loại nhầm ứng viên đúng, vì frame
+  # bị loại ở đây KHÔNG BAO GIỜ được xét lại. Tinh chỉnh theo recall@K ở Phase 3/5.
+  top_k: 1000
+  # Multi-Query Expansion (Mục 4.2): sinh 3-5 biến thể diễn đạt để tăng recall.
+  query_expansion:
+    enabled: true
+    num_variants: 4              # [PROVISIONAL] trong khoảng 3-5 theo Mục 4.2
+    # Cách hợp nhất nhiều biến thể: "weighted_avg_embedding" hoặc "union_results".
+    fusion_strategy: "union_results"
+
+# -----------------------------------------------------------------------------
+# 5. RETRIEVAL — Score Fusion (RRF) (Mục 4.3)
+# -----------------------------------------------------------------------------
+fusion:
+  method: "RRF"                 # Reciprocal Rank Fusion — chuẩn IR cho việc gộp
+                                 # nhiều ranked list khác đơn vị đo (CLIP/BM25/meta).
+  # [FIXED] Hằng số k trong công thức RRF_score = Σ 1/(k + rank). k=60 là mặc định
+  # chuẩn trong tài liệu IR (Mục 4.3).
+  rrf_k: 60
+  # Số candidate giữ lại sau fusion trước khi vào fine rerank (Mục 3, bước [3]).
+  top_k_after_fusion: 100       # [PROVISIONAL]
+
+# -----------------------------------------------------------------------------
+# 6. RETRIEVAL — Fine Rerank (LVLM verifier) (Mục 2.3, 4.4, 11.1)
+# -----------------------------------------------------------------------------
+# Ràng buộc THỰC SỰ ở đây là ĐỘ TRỄ trong time budget vòng thi, KHÔNG phải chi phí
+# (BTC cấp API miễn phí) — Mục 2.3, 4.4.
+fine_rerank:
+  enabled: true
+  # [PROVISIONAL] Số candidate đưa vào LVLM rerank. Blueprint Phase 0 đặt 100;
+  # Mục 4.4 nói có thể nâng 200-300 vì API miễn phí, MIỄN vừa time budget. Con số
+  # cuối cùng phải suy ra ngược từ giây/candidate đo thực nghiệm ở Phase 5.
+  top_k: 100
+  # Batch nhiều candidate/request để giảm round-trip mạng (giảm ĐỘ TRỄ) — Mục 4.4.
+  batch_size: 8                 # [PROVISIONAL]
+  # Early stopping (Mục 11.1.4): dừng sớm khi Top-1 vượt trội rõ rệt, tái dùng
+  # logic kisc_module/ambiguity.py::is_confident_enough.
+  early_stopping:
+    enabled: true
+    # [PROVISIONAL] ngưỡng tự tin để dừng sớm — chốt bằng thực nghiệm Phase 5.
+    confidence_margin: 0.15
+  # Số kết quả cuối trả sau rerank (Mục 3, bước [4] -> top 20).
+  top_k_final: 20               # [PROVISIONAL]
+
+# -----------------------------------------------------------------------------
+# 7. RETRIEVAL — Time budget (Mục 4.4)
+# -----------------------------------------------------------------------------
+# LƯU Ý: time_budget là NGÂN SÁCH ĐỘ TRỄ online lúc thi, dùng để suy ra top-K
+# rerank tối đa. KHÔNG áp cho giai đoạn indexing (offline, không giới hạn — Mục 2.3).
+runtime:
+  # [PROVISIONAL] Blueprint Phase 0 đặt 20s. Đây là tổng thời gian tối đa cho 1
+  # query online. Phải kiểm bằng đo thực nghiệm ở Phase 5 (Mục 4.4).
+  time_budget_seconds: 20
+  # Số lời gọi LVLM đồng thời (concurrent) — bị chặn bởi rate limit API, KHÔNG
+  # phải chi phí (Mục 11.1.5). Chốt theo rate limit thực tế.
+  max_concurrent_lvlm_calls: 8  # [PROVISIONAL]
+
+# -----------------------------------------------------------------------------
+# 8. KISC — module hội thoại đã có sẵn (Mục 9, tích hợp ở Phase 8)
+# -----------------------------------------------------------------------------
+kisc:
+  # Khi độ tự tin của kết quả thấp hơn ngưỡng này -> gọi kisc_module hỏi lại người
+  # dùng để thu hẹp phạm vi (Mục 3, bước [6] KISC).
+  low_confidence_threshold: 0.5  # [PROVISIONAL] căn chỉnh cùng ambiguity.py
+
+# -----------------------------------------------------------------------------
+# 9. LLM / LVLM API (Claude) (Mục 2.3, 2.4)
+# -----------------------------------------------------------------------------
+llm:
+  # Model dùng cho Query Understanding / Expansion (text) và caption/rerank (vision).
+  # Dùng ID model mới nhất theo hướng dẫn môi trường; xác nhận lại khi cắm API thật.
+  text_model: "claude-sonnet-5"
+  vision_model: "claude-opus-4-8"
+  # Khóa API đọc từ biến môi trường, KHÔNG hard-code trong repo.
+  api_key_env: "ANTHROPIC_API_KEY"
+
+# -----------------------------------------------------------------------------
+# 10. Đường dẫn dữ liệu (điền khi có dữ liệu BTC thật ở Phase 2+)
+# -----------------------------------------------------------------------------
+paths:
+  clip_features_dir: null       # thư mục feature CLIP BTC cấp sẵn
+  keyframes_dir: null           # thư mục ảnh keyframe gốc
+  objects_dir: null             # metadata object (Open Images 600 categories)
+  index_dir: "artifacts/index"  # nơi lưu Faiss index + BM25 sau build (Phase 3)
+  benchmark_dir: "evaluation/benchmarks"  # nơi lưu recall/latency curve (Mục 11.3)

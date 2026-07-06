@@ -1,0 +1,21 @@
+# requirements.txt — phụ thuộc runtime cho hệ thống AIC 2026
+#
+# NGUYÊN TẮC (Mục 10.2): chỉ thêm thư viện KHI Phase tương ứng thực sự cần, không
+# cài trước hàng loạt. Danh sách này sẽ lớn dần theo từng Phase. Các thư viện nặng
+# (faiss, torch, whisper, paddleocr...) chỉ thêm ở Phase 2/3 khi bắt đầu dùng.
+
+# --- Phase 0: cấu hình + test ---
+PyYAML>=6.0        # đọc configs/settings.yaml
+pytest>=7.4        # chạy unit test theo DoD mỗi Phase
+
+# --- Phase 1: dedup ---
+numpy>=1.26        # thao tác embedding + cosine similarity (KeyframeRecord.clip_embedding)
+
+# --- Phase 2+ (sẽ bổ sung khi tới): ---
+# faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
+# torch            # backend cho SigLIP encoder
+# transformers     # load SigLIP (Mục 2.1)
+# rank-bm25        # sparse retrieval trên OCR/ASR/caption (Mục 3 bước [2])
+# anthropic        # Claude API cho Query Understanding / caption / rerank (Mục 2.3)
+# paddleocr        # OCR (Mục 6 ocr_asr_extract.py)
+# openai-whisper   # ASR (Mục 6 ocr_asr_extract.py)
