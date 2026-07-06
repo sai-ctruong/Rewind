@@ -1,0 +1,20 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Virtual env (interpreter chuẩn: CPython 3.10+ theo Mục 1.4) ---
+.venv/
+venv/
+
+# --- Bí mật: KHÔNG commit khóa API (Mục 2.3 — đọc từ biến môi trường) ---
+.env
+
+# --- Artifact sinh ra lúc build/benchmark, không đưa vào git ---
+artifacts/
+evaluation/benchmarks/*.json
+evaluation/benchmarks/*.csv
+
+# --- Dữ liệu BTC cấp (nặng, không commit) ---
+data/
