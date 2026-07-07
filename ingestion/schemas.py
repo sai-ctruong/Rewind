@@ -23,6 +23,27 @@ import numpy as np
 
 
 @dataclass
+class RawKeyframe:
+    """Đầu vào THÔ của một keyframe cho pipeline ingestion Phase 2.
+
+    Đây là những gì ta có TRƯỚC khi làm giàu dữ liệu: keyframe do BTC trích xuất
+    (id, thuộc video nào, mốc thời gian, đường dẫn ảnh gốc, danh sách object đã
+    detect sẵn, và tuỳ chọn đường dẫn audio để ASR). Pipeline sẽ bổ sung embedding,
+    OCR, ASR, caption để tạo ra một `KeyframeRecord` hoàn chỉnh.
+
+    Tách RawKeyframe khỏi KeyframeRecord để phân biệt rõ "dữ liệu đầu vào" với
+    "record đã làm giàu" — giúp mock/test dễ dàng và không phải bịa các field chưa có.
+    """
+
+    id: str
+    video_id: str
+    timestamp: float
+    image_path: Optional[str] = None      # đường dẫn ảnh keyframe gốc (cho SigLIP/OCR/caption)
+    audio_path: Optional[str] = None      # đoạn audio quanh timestamp (cho ASR)
+    objects: list[str] = field(default_factory=list)  # Open Images 600 categories (BTC cấp)
+
+
+@dataclass
 class KeyframeRecord:
     """Một keyframe đã trích xuất + toàn bộ tín hiệu đa phương tiện kèm theo.
 
