@@ -11,7 +11,11 @@ pytest>=7.4        # chạy unit test theo DoD mỗi Phase
 # --- Phase 1: dedup ---
 numpy>=1.26        # thao tác embedding + cosine similarity (KeyframeRecord.clip_embedding)
 
-# --- Phase 2+ (sẽ bổ sung khi tới): ---
+# --- Phase 3: index + coarse retrieval ---
+faiss-cpu>=1.8     # vector index HNSW (Mục 2.2). Đổi faiss-gpu nếu có CUDA.
+rank-bm25>=0.2     # sparse retrieval BM25 trên OCR/ASR/objects/caption (Mục 3 bước [2])
+
+# --- Phase 2+ real / các Phase sau (bổ sung khi tới): ---
 # faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
 # torch            # backend cho SigLIP encoder
 # transformers     # load SigLIP (Mục 2.1)
