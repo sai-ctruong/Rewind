@@ -74,3 +74,28 @@ class KeyframeRecord:
             self.siglip_embedding, np.ndarray
         ):
             self.siglip_embedding = np.asarray(self.siglip_embedding, dtype=np.float32)
+
+
+# Các loại bài toán hợp lệ cho query_type (Mục 0 + Mục 7).
+QUERY_TYPES = {"KIS_video", "KIS_textual", "AVS", "VQA", "KISC"}
+
+
+@dataclass
+class StructuredQuery:
+    """Query tự nhiên đã được decompose thành cấu trúc (CLAUDE.md Mục 4.1, Mục 7).
+
+    Bắt buộc parse query thô -> cấu trúc TRƯỚC khi retrieval (Mục 4.1), không search
+    trực tiếp câu thô (giảm accuracy do semantic gap). `temporal_order` là input cho
+    bước Temporal consistency check (Mục 4.5, Phase 6).
+
+    Không đổi tên field (Mục 7). `query_type` phải thuộc QUERY_TYPES.
+    """
+
+    raw_text: str
+    objects: list[str] = field(default_factory=list)
+    actions: list[str] = field(default_factory=list)
+    location: Optional[str] = None
+    attributes: dict = field(default_factory=dict)
+    time_constraint: Optional[str] = None
+    temporal_order: Optional[list[dict]] = None
+    query_type: str = "KIS_textual"

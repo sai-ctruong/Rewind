@@ -1,0 +1,240 @@
+"""Dựng index cho tầng coarse retrieval (CLAUDE.md Phase 3, Mục 2.2 / 3 / 5).
+
+Index gồm 3 thành phần song song, phục vụ tầng coarse "recall-first" (Mục 3 bước [2]):
+  1. DENSE — Faiss HNSW cho embedding thị giác. Dựng RIÊNG 1 index cho CLIP và 1 cho
+     SigLIP (ensemble 2 encoder độc lập — Mục 2.1) để giảm rủi ro "cùng sai".
+  2. SPARSE — BM25 trên `searchable_text` (objects + OCR + ASR + llm_caption). Bắt
+     các tín hiệu chữ/ngữ nghĩa mà embedding thuần thị giác bỏ sót (Mục 2.4).
+  3. METADATA — mảng video_id / timestamp / objects để PRE-FILTER trước vector search
+     (Mục 11.1.1: lọc cứng thu hẹp không gian mà không mất ứng viên đúng nào).
+
+VÌ SAO HNSW (Mục 2.2): cân bằng tốc độ/độ chính xác, KHÔNG nén (giữ float) -> ưu tiên
+accuracy theo Mục 1.1. Dùng METRIC_INNER_PRODUCT trên vector đã chuẩn hoá L2 = cosine.
+
+VÌ SAO GIỮ THÊM MA TRẬN FLOAT (self._clip_matrix, _siglip_matrix): để tầng coarse có
+thể EXACT search trên tập con nhỏ sau metadata pre-filter (Mục 11.1: pre-filter +
+exact trên subset thay vì ANN post-filter, tránh mất recall). HNSW dùng khi KHÔNG có
+filter (toàn dataset).
+"""
+from __future__ import annotations
+
+import pickle
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, Optional
+
+import numpy as np
+
+from .schemas import KeyframeRecord
+
+EncoderName = Literal["clip", "siglip"]
+
+# Tokenizer BM25: tách theo ký tự chữ-số Unicode (giữ được tiếng Việt có dấu).
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def tokenize(text: str) -> list[str]:
+    """Tokenize đơn giản cho BM25: lowercase + tách \\w+ (hỗ trợ Unicode/tiếng Việt).
+
+    Cố ý giữ đơn giản, KHÔNG stemming: tên riêng/màu sắc/đồ vật cần khớp nguyên dạng;
+    stemming tiếng Việt phức tạp và dễ làm hại precision ở giai đoạn này.
+    """
+    return _TOKEN_RE.findall(text.lower())
+
+
+def l2_normalize(matrix: np.ndarray) -> np.ndarray:
+    """Chuẩn hoá L2 theo hàng, để inner product = cosine. Bảo vệ hàng norm 0."""
+    matrix = np.asarray(matrix, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return matrix / norms
+
+
+@dataclass
+class IndexConfig:
+    """Tham số dựng index. Giá trị mặc định khớp configs/settings.yaml (index.hnsw).
+
+    Đây là các tham số [PROVISIONAL] (Mục 11.3) — phải benchmark efSearch/M ở Phase 3,
+    không chốt bằng cảm tính. Truyền từ settings.yaml khi dùng thật.
+    """
+
+    hnsw_m: int = 32
+    ef_construction: int = 200
+    ef_search: int = 128
+
+
+@dataclass
+class KeyframeIndex:
+    """Index đã dựng + metadata, cùng các phép search nguyên thuỷ (dense/sparse).
+
+    Không tự làm fusion hay filtering logic — đó là việc của coarse_retriever.py.
+    Ở đây chỉ cung cấp: dense_search, exact_dense_search (trên subset), sparse_search.
+    """
+
+    ids: list[str]
+    video_ids: list[str]
+    timestamps: list[float]
+    objects: list[list[str]]
+    config: IndexConfig = field(default_factory=IndexConfig)
+
+    def __post_init__(self) -> None:
+        self._clip_index = None
+        self._siglip_index = None
+        self._clip_matrix: Optional[np.ndarray] = None
+        self._siglip_matrix: Optional[np.ndarray] = None
+        self._bm25 = None
+        self._id_to_row = {kid: i for i, kid in enumerate(self.ids)}
+
+    # ---------------------------------------------------------------- build
+    @classmethod
+    def build(
+        cls, records: list[KeyframeRecord], config: Optional[IndexConfig] = None
+    ) -> "KeyframeIndex":
+        from .build_records import searchable_text  # tránh vòng import ở top-level
+
+        config = config or IndexConfig()
+        idx = cls(
+            ids=[r.id for r in records],
+            video_ids=[r.video_id for r in records],
+            timestamps=[r.timestamp for r in records],
+            objects=[list(r.objects) for r in records],
+            config=config,
+        )
+        # DENSE: dựng HNSW cho từng encoder có mặt.
+        clip_mat = np.stack([r.clip_embedding for r in records]).astype(np.float32)
+        idx._clip_matrix = l2_normalize(clip_mat)
+        idx._clip_index = idx._build_hnsw(idx._clip_matrix)
+
+        if all(r.siglip_embedding is not None for r in records):
+            sig_mat = np.stack([r.siglip_embedding for r in records]).astype(np.float32)
+            idx._siglip_matrix = l2_normalize(sig_mat)
+            idx._siglip_index = idx._build_hnsw(idx._siglip_matrix)
+
+        # SPARSE: BM25 trên text gộp.
+        from rank_bm25 import BM25Okapi
+
+        corpus = [tokenize(searchable_text(r)) for r in records]
+        # BM25Okapi không chịu được doc rỗng hoàn toàn -> đảm bảo mỗi doc ≥1 token.
+        corpus = [toks if toks else ["∅"] for toks in corpus]
+        idx._bm25 = BM25Okapi(corpus)
+        return idx
+
+    def _build_hnsw(self, matrix: np.ndarray):
+        import faiss
+
+        dim = matrix.shape[1]
+        index = faiss.IndexHNSWFlat(dim, self.config.hnsw_m, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efConstruction = self.config.ef_construction
+        index.hnsw.efSearch = self.config.ef_search
+        index.add(matrix)
+        return index
+
+    # --------------------------------------------------------------- search
+    def _matrix(self, encoder: EncoderName) -> Optional[np.ndarray]:
+        return self._clip_matrix if encoder == "clip" else self._siglip_matrix
+
+    def _index(self, encoder: EncoderName):
+        return self._clip_index if encoder == "clip" else self._siglip_index
+
+    def has_encoder(self, encoder: EncoderName) -> bool:
+        return self._index(encoder) is not None
+
+    def dense_search(
+        self, query_vec: np.ndarray, encoder: EncoderName, top_k: int
+    ) -> list[tuple[int, float]]:
+        """ANN search HNSW trên TOÀN dataset. Trả [(row, cosine_score)] giảm dần."""
+        index = self._index(encoder)
+        if index is None:
+            raise ValueError(f"Index cho encoder {encoder!r} chưa được dựng.")
+        q = l2_normalize(np.asarray(query_vec, dtype=np.float32).reshape(1, -1))
+        scores, rows = index.search(q, min(top_k, len(self.ids)))
+        return [(int(r), float(s)) for r, s in zip(rows[0], scores[0]) if r != -1]
+
+    def exact_dense_search(
+        self,
+        query_vec: np.ndarray,
+        encoder: EncoderName,
+        candidate_rows: list[int],
+        top_k: int,
+    ) -> list[tuple[int, float]]:
+        """EXACT cosine trên TẬP CON đã lọc (Mục 11.1: pre-filter + exact, không mất
+        recall). Dùng khi metadata filter đã thu hẹp đủ nhỏ."""
+        matrix = self._matrix(encoder)
+        if matrix is None:
+            raise ValueError(f"Ma trận cho encoder {encoder!r} chưa có.")
+        if not candidate_rows:
+            return []
+        q = l2_normalize(np.asarray(query_vec, dtype=np.float32).reshape(1, -1))[0]
+        rows = np.asarray(candidate_rows, dtype=np.int64)
+        sims = matrix[rows] @ q
+        order = np.argsort(-sims)[:top_k]
+        return [(int(rows[i]), float(sims[i])) for i in order]
+
+    def sparse_search(
+        self, query_text: str, top_k: int, candidate_rows: Optional[list[int]] = None
+    ) -> list[tuple[int, float]]:
+        """BM25 search. Nếu truyền candidate_rows -> chỉ xếp hạng trong tập con đó."""
+        if self._bm25 is None:
+            raise ValueError("BM25 chưa được dựng.")
+        tokens = tokenize(query_text)
+        if not tokens:
+            return []
+        scores = self._bm25.get_scores(tokens)
+        rows = (
+            np.asarray(candidate_rows, dtype=np.int64)
+            if candidate_rows is not None
+            else np.arange(len(self.ids))
+        )
+        row_scores = [(int(r), float(scores[r])) for r in rows if scores[r] > 0]
+        row_scores.sort(key=lambda x: x[1], reverse=True)
+        return row_scores[:top_k]
+
+    # ------------------------------------------------------------ persistence
+    def save(self, directory: str | Path) -> None:
+        """Lưu index ra đĩa (Mục 5.3 sharding/rebuild). Faiss index lưu riêng."""
+        import faiss
+
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        if self._clip_index is not None:
+            faiss.write_index(self._clip_index, str(directory / "clip.hnsw"))
+        if self._siglip_index is not None:
+            faiss.write_index(self._siglip_index, str(directory / "siglip.hnsw"))
+        payload = {
+            "ids": self.ids,
+            "video_ids": self.video_ids,
+            "timestamps": self.timestamps,
+            "objects": self.objects,
+            "config": self.config,
+            "clip_matrix": self._clip_matrix,
+            "siglip_matrix": self._siglip_matrix,
+            "bm25": self._bm25,
+        }
+        with (directory / "meta.pkl").open("wb") as fh:
+            pickle.dump(payload, fh)
+
+    @classmethod
+    def load(cls, directory: str | Path) -> "KeyframeIndex":
+        import faiss
+
+        directory = Path(directory)
+        with (directory / "meta.pkl").open("rb") as fh:
+            payload = pickle.load(fh)
+        idx = cls(
+            ids=payload["ids"],
+            video_ids=payload["video_ids"],
+            timestamps=payload["timestamps"],
+            objects=payload["objects"],
+            config=payload["config"],
+        )
+        idx._clip_matrix = payload["clip_matrix"]
+        idx._siglip_matrix = payload["siglip_matrix"]
+        idx._bm25 = payload["bm25"]
+        clip_path = directory / "clip.hnsw"
+        sig_path = directory / "siglip.hnsw"
+        if clip_path.exists():
+            idx._clip_index = faiss.read_index(str(clip_path))
+        if sig_path.exists():
+            idx._siglip_index = faiss.read_index(str(sig_path))
+        return idx
