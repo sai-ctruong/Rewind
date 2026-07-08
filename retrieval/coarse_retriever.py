@@ -30,9 +30,7 @@ from typing import Any, Optional
 import numpy as np
 
 from ingestion.build_index import EncoderName, KeyframeIndex
-
-# Hằng số RRF chuẩn (Mục 4.3, [FIXED] trong settings.yaml -> fusion.rrf_k).
-DEFAULT_RRF_K = 60
+from retrieval.fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 
 
 @dataclass
@@ -45,24 +43,6 @@ class Candidate:
     video_id: str
     timestamp: float
     source_ranks: dict[str, int]       # {"clip": rank, "siglip": rank, "bm25": rank}
-
-
-def reciprocal_rank_fusion(
-    ranked_lists: dict[str, list[int]], k: int = DEFAULT_RRF_K
-) -> dict[int, tuple[float, dict[str, int]]]:
-    """RRF: score(d) = Σ_i 1/(k + rank_i(d)). Trả {row: (score, {source: rank})}.
-
-    rank tính từ 1. Không cần chuẩn hoá thang điểm giữa các nguồn — đó chính là ưu
-    điểm của RRF khi gộp dense (cosine) với sparse (BM25) vốn khác đơn vị đo.
-    """
-    fused: dict[int, tuple[float, dict[str, int]]] = {}
-    for source, rows in ranked_lists.items():
-        for rank, row in enumerate(rows, start=1):
-            score, ranks = fused.get(row, (0.0, {}))
-            score += 1.0 / (k + rank)
-            ranks = {**ranks, source: rank}
-            fused[row] = (score, ranks)
-    return fused
 
 
 class CoarseRetriever:
