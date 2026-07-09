@@ -15,6 +15,9 @@ numpy>=1.26        # thao tác embedding + cosine similarity (KeyframeRecord.cli
 faiss-cpu>=1.8     # vector index HNSW (Mục 2.2). Đổi faiss-gpu nếu có CUDA.
 rank-bm25>=0.2     # sparse retrieval BM25 trên OCR/ASR/objects/caption (Mục 3 bước [2])
 
+# --- Phase 10: web UI ---
+Flask>=3.0         # backend demo nối pipeline thật (ui/app.py)
+
 # --- Phase 2+ real / các Phase sau (bổ sung khi tới): ---
 # faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
 # torch            # backend cho SigLIP encoder

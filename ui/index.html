@@ -1,0 +1,598 @@
+<!--
+  UI Phase 10 — Trợ lý Truy xuất Đa phương tiện AIC 2026.
+  File này là NỘI DUNG TRANG (không có <html>/<head>/<body>) để:
+    - Flask (ui/app.py) bọc vào skeleton rồi phục vụ (dùng API thật).
+    - Publish trực tiếp làm Artifact (harness tự bọc; chạy bản mô phỏng JS).
+  Tự phát hiện backend qua /api/health -> có thì gọi API thật, không thì mô phỏng.
+-->
+<style>
+  :root {
+    /* --- Palette: "bàn điều khiển tìm kiếm ban đêm", accent hổ phách (spotlight) --- */
+    --bg: #f6f4ef; --surface: #ffffff; --surface-2: #efece4; --border: #e2ddd2;
+    --ink: #1b202a; --muted: #5c6675; --faint: #8a93a2;
+    --accent: #c07a10; --accent-soft: #f3e6cf; --indigo: #3f56c9;
+    --good: #2f9e6f; --warn: #c8951a; --crit: #d8543f;
+    --shadow: 0 1px 2px rgba(24,28,36,.06), 0 8px 24px -12px rgba(24,28,36,.18);
+    --radius: 14px; --radius-sm: 9px;
+    --font: ui-sans-serif, "Segoe UI", Roboto, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --surface: #161c26; --surface-2: #1d2531; --border: #29323f;
+      --ink: #e8ecf3; --muted: #97a1b2; --faint: #6c7686;
+      --accent: #f5a623; --accent-soft: #33291a; --indigo: #7d94ff;
+      --good: #46c08a; --warn: #e9b949; --crit: #f2705a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -20px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f4ef; --surface: #ffffff; --surface-2: #efece4; --border: #e2ddd2;
+    --ink: #1b202a; --muted: #5c6675; --faint: #8a93a2; --accent: #c07a10;
+    --accent-soft: #f3e6cf; --indigo: #3f56c9; --good: #2f9e6f; --warn: #c8951a;
+    --crit: #d8543f; --shadow: 0 1px 2px rgba(24,28,36,.06), 0 8px 24px -12px rgba(24,28,36,.18);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --surface: #161c26; --surface-2: #1d2531; --border: #29323f;
+    --ink: #e8ecf3; --muted: #97a1b2; --faint: #6c7686; --accent: #f5a623;
+    --accent-soft: #33291a; --indigo: #7d94ff; --good: #46c08a; --warn: #e9b949;
+    --crit: #f2705a; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -20px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  .aic-root {
+    font-family: var(--font); color: var(--ink); background: var(--bg);
+    min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+  }
+  .aic-root ::selection { background: var(--accent); color: #fff; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---------------- Header ---------------- */
+  header.app {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+  }
+  .bar { display: flex; align-items: center; gap: 18px; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 650; letter-spacing: -0.02em; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 9px; flex: none; position: relative;
+    background: radial-gradient(120% 120% at 30% 20%, var(--accent), #7a3d00);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,.4), var(--shadow);
+  }
+  .brand .mark::after {
+    content: ""; position: absolute; inset: 0; border-radius: 9px;
+    background: radial-gradient(50% 50% at 50% 45%, rgba(255,255,255,.9), transparent 60%);
+    opacity: .55;
+  }
+  .brand small { display: block; font-weight: 450; font-size: 11px; color: var(--faint);
+    letter-spacing: .04em; text-transform: uppercase; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; background: var(--surface-2);
+    padding: 4px; border-radius: 11px; border: 1px solid var(--border); }
+  .tabs button {
+    font: inherit; font-size: 13.5px; font-weight: 550; color: var(--muted);
+    background: none; border: 0; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .util { display: flex; align-items: center; gap: 10px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 550;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--muted);
+  }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pill.live .dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+  .pill.sim .dot { background: var(--warn); }
+  .icon-btn {
+    width: 36px; height: 36px; display: grid; place-items: center; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--muted); font-size: 15px;
+  }
+  .icon-btn:hover { color: var(--ink); }
+  button:focus-visible, input:focus-visible, .icon-btn:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  /* ---------------- Hero line ---------------- */
+  .hero { padding: 30px 0 8px; }
+  .hero h1 { margin: 0; font-size: clamp(26px, 4vw, 40px); font-weight: 680;
+    letter-spacing: -0.03em; text-wrap: balance; line-height: 1.08; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p { margin: 12px 0 0; color: var(--muted); max-width: 60ch; font-size: 15.5px; }
+
+  /* ---------------- Views ---------------- */
+  .view { display: none; padding: 22px 0 60px; }
+  .view.active { display: block; animation: fade .3s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .grid-kisc { display: grid; grid-template-columns: 1fr 380px; gap: 20px; align-items: start; }
+  @media (max-width: 880px) { .grid-kisc { grid-template-columns: 1fr; } }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); }
+  .card .hd { padding: 15px 18px; border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; gap: 10px; }
+  .card .hd h2 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -0.01em; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--faint); }
+
+  /* ---------------- Conversation ---------------- */
+  .convo { display: flex; flex-direction: column; min-height: 440px; }
+  .thread { flex: 1; padding: 20px 18px; display: flex; flex-direction: column; gap: 14px;
+    max-height: 52vh; overflow-y: auto; }
+  .msg { display: flex; gap: 10px; max-width: 88%; animation: pop .28s ease; }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .msg .av { width: 28px; height: 28px; border-radius: 8px; flex: none; display: grid;
+    place-items: center; font-size: 13px; font-weight: 700; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.user .av { background: var(--accent-soft); color: var(--accent); }
+  .msg.bot .av { background: var(--surface-2); color: var(--indigo); border: 1px solid var(--border); }
+  .bubble { padding: 11px 14px; border-radius: 14px; background: var(--surface-2);
+    border: 1px solid var(--border); border-bottom-left-radius: 4px; font-size: 14.5px; }
+  .msg.bot .bubble { white-space: pre-wrap; }
+  .typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: bounce 1s infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%,80%,100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
+
+  .composer { display: flex; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--border); }
+  .composer input, .search-bar input { flex: 1; font: inherit; font-size: 15px; padding: 11px 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 11px; color: var(--ink); }
+  .composer input::placeholder { color: var(--faint); }
+  .btn { font: inherit; font-weight: 600; font-size: 14px; padding: 11px 18px; border-radius: 11px;
+    border: 1px solid transparent; cursor: pointer; background: var(--accent); color: #fff;
+    box-shadow: var(--shadow); white-space: nowrap; transition: filter .15s, transform .05s; }
+  .btn:hover { filter: brightness(1.06); } .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: var(--surface); color: var(--ink); border-color: var(--border); box-shadow: none; }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+  /* ---------------- Narrowing panel ---------------- */
+  .panel { position: sticky; top: 82px; display: flex; flex-direction: column; gap: 16px; }
+  .counter { padding: 20px 18px; text-align: left; }
+  .counter .num { font-size: 54px; font-weight: 300; letter-spacing: -0.04em; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--ink); }
+  .counter .num.solved { color: var(--good); }
+  .counter .lab { margin-top: 6px; color: var(--muted); font-size: 13.5px; }
+  .track { height: 6px; border-radius: 6px; background: var(--surface-2); margin-top: 14px; overflow: hidden; }
+  .track > i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--accent), #ffcf82);
+    width: 100%; transition: width .6s cubic-bezier(.2,.7,.2,1); }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 18px 18px; }
+  .chip { font-size: 12px; font-weight: 550; padding: 5px 10px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
+    display: inline-flex; gap: 6px; align-items: center; animation: pop .25s ease; }
+  .chip b { color: var(--accent); font-weight: 650; }
+  .chip .k { color: var(--faint); font-weight: 500; }
+  .cands { padding: 6px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .cand { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--surface); }
+  .cand.win { border-color: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 16%, transparent); }
+  .cand .id { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+  .cand .meta { font-size: 11.5px; color: var(--muted); }
+  .cand .sc { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--faint);
+    font-variant-numeric: tabular-nums; }
+  .empty { padding: 24px 18px; color: var(--faint); font-size: 13.5px; text-align: center; }
+
+  /* ---------------- Search ---------------- */
+  .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+  .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+  .rc { padding: 14px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--surface); box-shadow: var(--shadow); animation: fade .3s ease; }
+  .rc .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .rc .id { font-family: var(--mono); font-size: 12.5px; font-weight: 650; }
+  .rc .rank { font-size: 11px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .rc .cap { margin: 9px 0 11px; font-size: 13.5px; color: var(--ink); }
+  .rc .attrs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--surface-2);
+    border: 1px solid var(--border); color: var(--muted); }
+  .tag b { color: var(--ink); font-weight: 600; }
+
+  /* ---------------- VQA ---------------- */
+  .vqa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 760px) { .vqa-grid { grid-template-columns: 1fr; } }
+  .ans { padding: 22px; text-align: center; }
+  .ans .big { font-size: 40px; font-weight: 300; letter-spacing: -0.03em; color: var(--accent);
+    font-variant-numeric: tabular-nums; text-wrap: balance; }
+  .ans .why { margin-top: 12px; color: var(--muted); font-size: 13.5px; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .suggest button { font: inherit; font-size: 12.5px; color: var(--muted); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+  .suggest button:hover { color: var(--ink); border-color: var(--accent); }
+  .film { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
+  .frame { display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-radius: 9px;
+    border: 1px solid var(--border); font-size: 13px; }
+  .frame .t { font-family: var(--mono); font-size: 11.5px; color: var(--faint); flex: none; width: 42px; }
+  .frame.used { border-color: var(--accent); background: var(--accent-soft); }
+
+  .foot { color: var(--faint); font-size: 12.5px; padding: 30px 0 40px; border-top: 1px solid var(--border);
+    margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+  .foot code { font-family: var(--mono); color: var(--muted); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="aic-root">
+  <header class="app">
+    <div class="wrap bar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <span>Trợ lý Truy xuất Đa phương tiện<small>AIC 2026 · KIS · AVS · VQA · KISC</small></span>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Chế độ">
+        <button role="tab" aria-selected="true" data-view="kisc">Hội thoại KISC</button>
+        <button role="tab" aria-selected="false" data-view="search">Tìm kiếm</button>
+        <button role="tab" aria-selected="false" data-view="vqa">Hỏi–đáp VQA</button>
+      </nav>
+      <div class="util">
+        <span class="pill" id="status"><span class="dot"></span><span id="status-text">Đang kiểm tra…</span></span>
+        <button class="icon-btn" id="theme" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện">◐</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- ================= KISC ================= -->
+    <section class="view active" id="view-kisc" role="tabpanel">
+      <div class="hero">
+        <h1>Trợ lý <em>chủ động hỏi lại</em> để tìm đúng khoảnh khắc</h1>
+        <p>Mô tả điều bạn nhớ. Khi còn mơ hồ, trợ lý đặt câu hỏi thu hẹp dần —
+           theo dõi số ứng viên giảm ở bảng bên phải cho tới khi tìm ra.</p>
+      </div>
+      <div class="grid-kisc">
+        <div class="card convo">
+          <div class="thread" id="thread"></div>
+          <form class="composer" id="kisc-form">
+            <input id="kisc-input" autocomplete="off"
+              placeholder="VD: Tôi gặp một người bạn cũ vào tuần trước…" />
+            <button class="btn" type="submit" id="kisc-send">Gửi</button>
+          </form>
+        </div>
+        <aside class="panel">
+          <div class="card">
+            <div class="counter">
+              <div class="eyebrow">Ứng viên còn lại</div>
+              <div class="num" id="count">—</div>
+              <div class="lab" id="count-lab">Bắt đầu bằng một mô tả</div>
+              <div class="track"><i id="track"></i></div>
+            </div>
+            <div class="chips" id="chips"></div>
+          </div>
+          <div class="card">
+            <div class="hd"><span class="eyebrow">Ứng viên hàng đầu</span></div>
+            <div class="cands" id="cands"><div class="empty">Chưa có dữ liệu</div></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= SEARCH ================= -->
+    <section class="view" id="view-search" role="tabpanel">
+      <div class="hero">
+        <h1>Tìm kiếm <em>KIS / AVS</em></h1>
+        <p>Truy vấn bằng ngôn ngữ tự nhiên. Hệ thống lọc thô recall-first
+           (BM25 + metadata) rồi xếp hạng kết quả.</p>
+      </div>
+      <form class="search-bar" id="search-form">
+        <input id="search-input" autocomplete="off"
+          placeholder="VD: người đàn ông áo xanh dương ở quán cà phê ngoài trời" />
+        <button class="btn" type="submit">Tìm</button>
+      </form>
+      <div class="results" id="results"></div>
+    </section>
+
+    <!-- ================= VQA ================= -->
+    <section class="view" id="view-vqa" role="tabpanel">
+      <div class="hero">
+        <h1>Hỏi–đáp trên video <em>VQA</em></h1>
+        <p>Đặt câu hỏi có suy luận (đếm số lượng, xác định ai làm gì). Trợ lý đọc
+           cửa sổ keyframe liên quan để trả lời.</p>
+      </div>
+      <div class="vqa-grid">
+        <div>
+          <form class="search-bar" id="vqa-form">
+            <input id="vqa-input" autocomplete="off" placeholder="VD: Có bao nhiêu ngọn nến trên bánh?" />
+            <button class="btn" type="submit">Hỏi</button>
+          </form>
+          <div class="suggest" id="vqa-suggest"></div>
+          <div class="card ans" id="vqa-ans" style="margin-top:16px">
+            <div class="big" id="vqa-big">—</div>
+            <div class="why" id="vqa-why">Chọn một câu hỏi gợi ý hoặc tự nhập.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd"><span class="eyebrow">Cửa sổ keyframe (video sinh nhật)</span></div>
+          <div class="film" id="vqa-film"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="foot">
+      <span>Pipeline: Query Understanding → Coarse (CLIP+SigLIP+BM25) → RRF → LVLM rerank → Temporal check.</span>
+      <span id="mode-note"><code>—</code></span>
+    </div>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (s, r = document) => r.querySelector(s);
+  const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- Theme toggle ---------- */
+  const root = document.documentElement;
+  $("#theme").addEventListener("click", () => {
+    const cur = root.getAttribute("data-theme")
+      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    root.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+  });
+
+  /* ---------- Tabs ---------- */
+  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", "false"));
+    b.setAttribute("aria-selected", "true");
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    $("#view-" + b.dataset.view).classList.add("active");
+  }));
+
+  /* =====================================================================
+     Backend detection: dùng API thật nếu có, ngược lại mô phỏng (Artifact).
+     ===================================================================== */
+  let LIVE = false;
+  async function detect() {
+    try {
+      const r = await fetch("/api/health", { method: "GET" });
+      if (r.ok) { const j = await r.json(); LIVE = !!j.ok; return j.dataset_size; }
+    } catch (e) { /* fall back */ }
+    return null;
+  }
+
+  /* =====================================================================
+     BẢN MÔ PHỎNG (khi không có backend) — port gọn logic KISC/search/VQA.
+     ===================================================================== */
+  const SPACE = {
+    location_type: ["indoor", "outdoor"],
+    location_desc: ["coffee_shop", "restaurant", "park", "home", "office", "street", "mall"],
+    gender: ["male", "female"],
+    clothing_color: ["blue", "red", "white", "black", "green", "yellow"],
+    activity: ["talking", "walking", "eating", "sitting", "shopping"],
+    time_period: ["last_week", "yesterday", "this_month", "two_weeks_ago"],
+  };
+  const CAND_ATTRS = ["time_period", "location_type", "location_desc", "gender", "clothing_color", "activity"];
+  const TARGET = { location_type: "outdoor", location_desc: "coffee_shop", gender: "male",
+    clothing_color: "blue", activity: "talking", time_period: "last_week" };
+  const VI = {
+    location_type: { outdoor: "ngoài trời", indoor: "trong nhà" },
+    location_desc: { coffee_shop: "quán cà phê", restaurant: "nhà hàng", park: "công viên",
+      home: "ở nhà", office: "văn phòng", street: "trên đường", mall: "trung tâm thương mại" },
+    gender: { male: "người đàn ông", female: "người phụ nữ" },
+    clothing_color: { blue: "áo xanh dương", red: "áo đỏ", white: "áo trắng", black: "áo đen",
+      green: "áo xanh lá", yellow: "áo vàng" },
+    activity: { talking: "nói chuyện", walking: "đi bộ", eating: "đang ăn", sitting: "ngồi", shopping: "mua sắm" },
+    time_period: { last_week: "tuần trước", yesterday: "hôm qua", this_month: "tháng này", two_weeks_ago: "hai tuần trước" },
+  };
+  const KEYWORDS = {
+    location_type: { "ngoài trời": "outdoor", "trong nhà": "indoor" },
+    location_desc: { "cà phê": "coffee_shop", "nhà hàng": "restaurant", "công viên": "park",
+      "văn phòng": "office", "đường": "street", "trung tâm thương mại": "mall", "nhà": "home" },
+    gender: { "anh ấy": "male", " nam ": "male", "cô ấy": "female", " nữ ": "female" },
+    clothing_color: { "xanh dương": "blue", "xanh biển": "blue", "đỏ": "red", "trắng": "white",
+      "đen": "black", "xanh lá": "green", "vàng": "yellow" },
+    activity: { "nói chuyện": "talking", "trò chuyện": "talking", "đi bộ": "walking", "ăn": "eating",
+      "ngồi": "sitting", "mua sắm": "shopping" },
+    time_period: { "tuần trước": "last_week", "hôm qua": "yesterday", "hai tuần trước": "two_weeks_ago",
+      "tháng này": "this_month" },
+  };
+  const QTPL = {
+    location_type: "Khoảnh khắc đó diễn ra trong nhà hay ngoài trời?",
+    location_desc: "Bạn có nhớ địa điểm cụ thể là ở đâu không (quán cà phê, công viên, nhà hàng...)?",
+    gender: "Người đó là nam hay nữ?",
+    clothing_color: "Người đó mặc trang phục màu gì?",
+    activity: "Lúc đó mọi người đang làm gì (nói chuyện, ăn uống, đi bộ...)?",
+    time_period: "Sự việc đó xảy ra khi nào (tuần trước, hôm qua, tháng này...)?",
+  };
+  function mulberry32(a) { return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const DATA = (function () {
+    const rng = mulberry32(42); const rows = [];
+    const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+    for (let i = 0; i < 200; i++) {
+      rows.push({ id: "kf_" + String(i).padStart(4, "0"), video: "video_" + String((i / 5) | 0).padStart(4, "0"),
+        t: Math.floor(rng() * 3600), a: {
+          location_type: pick(SPACE.location_type), location_desc: pick(SPACE.location_desc),
+          gender: pick(SPACE.gender), clothing_color: pick(SPACE.clothing_color),
+          activity: pick(SPACE.activity), time_period: pick(SPACE.time_period) } });
+    }
+    rows[0].a = Object.assign({}, TARGET);
+    rows.forEach(r => { r.cap = CAND_ATTRS.map(k => (VI[k][r.a[k]] || r.a[k])).join(" "); });
+    return rows;
+  })();
+  function extractSlots(text) {
+    const low = " " + text.toLowerCase() + " "; const out = {};
+    for (const attr in KEYWORDS) for (const kw in KEYWORDS[attr])
+      if (low.includes(kw)) { out[attr] = KEYWORDS[attr][kw]; break; }
+    return out;
+  }
+  function entropy(cands, attr) {
+    const c = {}; cands.forEach(x => { const v = x.a[attr]; c[v] = (c[v] || 0) + 1; });
+    const n = cands.length; let h = 0; for (const k in c) { const p = c[k] / n; h -= p * Math.log2(p); }
+    return h;
+  }
+  function bestAttr(cands, asked) {
+    let best = null, be = 0;
+    for (const a of CAND_ATTRS) { if (asked.includes(a)) continue; const e = entropy(cands, a);
+      if (e > be) { be = e; best = a; } }
+    return best;
+  }
+  function simSession() {
+    const st = { filters: {}, asked: [], turn: 0, finished: false };
+    return {
+      step(text) {
+        const nf = extractSlots(text); Object.assign(st.filters, nf);
+        let cands = DATA.filter(r => Object.entries(st.filters).every(([k, v]) => r.a[k] === v));
+        const gap = cands.length >= 2;
+        let response, done = false;
+        if (cands.length === 0) { response = "Không tìm thấy khoảnh khắc nào khớp. Bạn mô tả lại chi tiết vừa nêu nhé?"; }
+        else if (cands.length <= 5 || st.turn >= 4) { done = true;
+          response = "Đã thu hẹp còn " + cands.length + " ứng viên. Đây là kết quả khớp nhất."; }
+        else { const a = bestAttr(cands, st.asked); if (!a) { done = true; response = "Đã thu hẹp còn " + cands.length + " ứng viên."; }
+          else { st.asked.push(a); response = QTPL[a]; } }
+        st.turn++; st.finished = done;
+        cands.sort(() => 0); // giữ thứ tự
+        const top = cands.slice(0, 5).map((r, i) => ({ id: r.id, video_id: r.video, timestamp: r.t,
+          score: (cands.length <= 5 ? 5 - i * .01 : 1 + Math.random() * .05), attributes: r.a }));
+        return { response, count: cands.length, finished: done, filters: Object.assign({}, st.filters), top };
+      }
+    };
+  }
+  function simSearch(query) {
+    const q = query.toLowerCase();
+    const scored = DATA.map(r => { let s = 0; for (const w of q.split(/\s+/)) if (w && r.cap.includes(w)) s++; return { r, s }; })
+      .filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 24);
+    return { results: scored.map(x => ({ id: x.r.id, video_id: x.r.video, timestamp: x.r.t,
+      score: x.s, attributes: x.r.a, caption: x.r.cap })) };
+  }
+  const VQA_FRAMES = [
+    { id: "p/0", t: 0, cap: "Mọi người quây quần quanh bàn tiệc sinh nhật." },
+    { id: "p/1", t: 5, cap: "Một chiếc bánh sinh nhật với 5 ngọn nến đang cháy." },
+    { id: "p/2", t: 12, cap: "Người đàn ông áo xanh đang tặng quà cho cô gái." },
+    { id: "p/3", t: 18, cap: "Cô gái mở hộp quà và mỉm cười." },
+  ];
+  function simVqa(q) {
+    const low = q.toLowerCase();
+    if (low.includes("bao nhiêu") || low.includes("đếm") || low.includes("mấy")) {
+      for (const f of VQA_FRAMES) { const m = f.cap.match(/(\d+)\s+ngọn nến/); if (m && low.includes("nến"))
+        return { answer: m[1], value: +m[1], reasoning: "Đếm từ mô tả: “" + f.cap + "”", used_frame_ids: [f.id] }; }
+    }
+    if (low.startsWith("ai") || low.includes("người nào")) {
+      for (const f of VQA_FRAMES) { const m = f.cap.match(/(.*?)\s+đang tặng/); if (m)
+        return { answer: m[1], reasoning: "Chủ ngữ trước hành động 'tặng' trong: “" + f.cap + "”", used_frame_ids: [f.id] }; }
+    }
+    return { answer: VQA_FRAMES.map(f => f.cap).slice(0, 2).join(" "), reasoning: "Tổng hợp mô tả cửa sổ.", used_frame_ids: VQA_FRAMES.map(f => f.id) };
+  }
+
+  /* ---------- API layer: chọn real vs sim ---------- */
+  const api = {
+    async kiscStart(query) { if (LIVE) return (await fetch("/api/kisc/start",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) })).json();
+      SESSION = simSession(); return SESSION.step(query); },
+    async kiscRespond(answer) { if (LIVE) return (await fetch("/api/kisc/respond",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer }) })).json();
+      return SESSION.step(answer); },
+    async search(query) { if (LIVE) return (await fetch("/api/search",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) })).json();
+      return simSearch(query); },
+    async vqa(question) { if (LIVE) return (await fetch("/api/vqa",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) })).json();
+      return simVqa(question); },
+  };
+  let SESSION = null;
+
+  /* ===================== KISC UI ===================== */
+  const thread = $("#thread");
+  let prevCount = null;
+  function bubble(who, text) {
+    const m = el("div", "msg " + who); const av = el("div", "av"); av.textContent = who === "user" ? "B" : "AI";
+    const b = el("div", "bubble"); b.textContent = text; m.append(av, b); thread.append(m);
+    thread.scrollTop = thread.scrollHeight; return m;
+  }
+  function typing() {
+    const m = el("div", "msg bot"); const av = el("div", "av"); av.textContent = "AI";
+    const b = el("div", "bubble"); const t = el("span", "typing"); t.innerHTML = "<i></i><i></i><i></i>";
+    b.append(t); m.append(av, b); thread.append(m); thread.scrollTop = thread.scrollHeight; return m;
+  }
+  function animateCount(to) {
+    const node = $("#count"); const from = prevCount == null ? to : prevCount; prevCount = to;
+    if (reduce || from === to) { node.textContent = to; return; }
+    const t0 = performance.now(); const dur = 600;
+    (function tick(now) { const p = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3); node.textContent = Math.round(from + (to - from) * e);
+      if (p < 1) requestAnimationFrame(tick); else node.textContent = to; })(t0);
+  }
+  function renderState(s) {
+    const solved = s.finished; const node = $("#count"); node.classList.toggle("solved", solved && s.count <= 5);
+    animateCount(s.count);
+    $("#count-lab").textContent = solved ? (s.count <= 5 ? "Đã đủ tự tin — khoá kết quả" : "Kết thúc phiên")
+      : "Trợ lý sẽ hỏi thêm để thu hẹp";
+    const total = 200; $("#track").style.width = Math.max(2, Math.min(100, (s.count / total) * 100)) + "%";
+    const chips = $("#chips"); chips.innerHTML = "";
+    Object.entries(s.filters || {}).forEach(([k, v]) => { const c = el("span", "chip");
+      c.innerHTML = "<span class='k'>" + labelVi(k) + "</span> <b>" + (VI[k] && VI[k][v] || v) + "</b>"; chips.append(c); });
+    const cands = $("#cands"); cands.innerHTML = "";
+    if (!s.top || !s.top.length) { cands.innerHTML = "<div class='empty'>Chưa có ứng viên</div>"; return; }
+    s.top.forEach((c, i) => { const d = el("div", "cand" + (solved && i === 0 && s.count <= 5 ? " win" : ""));
+      d.innerHTML = "<div><div class='id'>" + c.id + (solved && i === 0 && s.count <= 5 ? " ✓" : "") +
+        "</div><div class='meta'>" + c.video_id + " · " + c.timestamp + "s</div></div>" +
+        "<span class='sc'>" + (typeof c.score === "number" ? c.score.toFixed(2) : c.score) + "</span>";
+      cands.append(d); });
+  }
+  function labelVi(k) { return ({ location_type: "Nơi chốn", location_desc: "Địa điểm", gender: "Giới tính",
+    clothing_color: "Màu áo", activity: "Hoạt động", time_period: "Thời điểm" })[k] || k; }
+
+  async function kiscSend(text, isStart) {
+    bubble("user", text); const t = typing(); $("#kisc-send").disabled = true;
+    if (!reduce) await sleep(420);
+    const s = isStart ? await api.kiscStart(text) : await api.kiscRespond(text);
+    t.remove(); bubble("bot", s.response); renderState(s);
+    $("#kisc-send").disabled = false;
+    STARTED = true; if (s.finished) STARTED = "done";
+  }
+  let STARTED = false;
+  $("#kisc-form").addEventListener("submit", async (e) => {
+    e.preventDefault(); const inp = $("#kisc-input"); const v = inp.value.trim(); if (!v) return;
+    inp.value = ""; const first = !STARTED || STARTED === "done";
+    if (STARTED === "done") { thread.innerHTML = ""; prevCount = null; }
+    await kiscSend(v, first);
+  });
+
+  /* ===================== SEARCH UI ===================== */
+  $("#search-form").addEventListener("submit", async (e) => {
+    e.preventDefault(); const v = $("#search-input").value.trim(); if (!v) return;
+    const box = $("#results"); box.innerHTML = "<div class='empty'>Đang tìm…</div>";
+    const s = await api.search(v); box.innerHTML = "";
+    if (!s.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả khớp.</div>"; return; }
+    s.results.forEach((r, i) => { const c = el("div", "rc");
+      const attrs = Object.entries(r.attributes || {}).slice(0, 4).map(([k, v]) =>
+        "<span class='tag'><b>" + (VI[k] && VI[k][v] || v) + "</b></span>").join("");
+      c.innerHTML = "<div class='top'><span class='id'>" + r.id + "</span><span class='rank'>#" + (i + 1) + "</span></div>" +
+        "<div class='cap'>" + (r.caption || "—") + "</div><div class='attrs'>" + attrs + "</div>";
+      box.append(c); });
+  });
+
+  /* ===================== VQA UI ===================== */
+  const SUGG = ["Có bao nhiêu ngọn nến trên bánh?", "Ai là người tặng quà?", "Chuyện gì đang diễn ra?"];
+  const sg = $("#vqa-suggest");
+  SUGG.forEach(q => { const b = el("button"); b.textContent = q;
+    b.onclick = () => { $("#vqa-input").value = q; $("#vqa-form").requestSubmit(); }; sg.append(b); });
+  function renderFilm(used) {
+    const f = $("#vqa-film"); f.innerHTML = "";
+    VQA_FRAMES.forEach(fr => { const d = el("div", "frame" + (used && used.includes(fr.id) ? " used" : ""));
+      d.innerHTML = "<span class='t'>" + fr.t + "s</span><span>" + fr.cap + "</span>"; f.append(d); });
+  }
+  renderFilm([]);
+  $("#vqa-form").addEventListener("submit", async (e) => {
+    e.preventDefault(); const v = $("#vqa-input").value.trim(); if (!v) return;
+    $("#vqa-big").textContent = "…"; $("#vqa-why").textContent = "";
+    const a = await api.vqa(v);
+    $("#vqa-big").textContent = a.value != null ? a.value : a.answer;
+    $("#vqa-why").textContent = a.reasoning || ""; renderFilm(a.used_frame_ids || []);
+  });
+
+  /* ---------- Boot ---------- */
+  (async function boot() {
+    const size = await detect();
+    const pill = $("#status");
+    if (LIVE) { pill.classList.add("live"); $("#status-text").textContent = "Backend thật · " + size + " keyframe";
+      $("#mode-note").innerHTML = "<code>Chế độ: API thật (Flask + pipeline)</code>"; }
+    else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
+      $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }
+    bubble("bot", "Chào bạn! Hãy mô tả khoảnh khắc bạn muốn tìm. Nếu còn mơ hồ, mình sẽ hỏi thêm để thu hẹp dần.");
+  })();
+})();
+</script>
