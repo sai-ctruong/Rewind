@@ -18,3 +18,6 @@ evaluation/benchmarks/*.csv
 
 # --- Dữ liệu BTC cấp (nặng, không commit) ---
 data/
+
+# Blueprint noi bo — khong push len GitHub
+CLAUDE.md
