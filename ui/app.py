@@ -212,13 +212,14 @@ def create_app() -> Flask:
             return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
         if not query:
             return jsonify(error="Nhập câu mô tả cần tìm."), 400
-        cands = video_state["engine"].search(entry, query,
-                                             top_k=int(data.get("topk", 6)))
+        rerank = bool(data.get("rerank", False))
+        cands = video_state["engine"].search(
+            entry, query, top_k=int(data.get("topk", 6)), rerank=rerank)
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
                     "score": round(float(c.score), 3),
-                    "sources": c.source_ranks,
+                    "explanation": getattr(c, "explanation", None),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
-        return jsonify(video=vid, query=query, results=results)
+        return jsonify(video=vid, query=query, reranked=rerank, results=results)
 
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):

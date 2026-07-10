@@ -31,6 +31,7 @@ from ingestion.dedup import deduplicate_keyframes
 from ingestion.schemas import KeyframeRecord, RawKeyframe
 from ingestion.video_ingest import extract_keyframes
 from retrieval.coarse_retriever import Candidate, CoarseRetriever
+from retrieval.fine_rerank import FineReranker, RerankConfig, Reranker
 
 # Cặp encoder mặc định cho ensemble (Mục 2.1). Cả hai đều đa ngôn ngữ:
 #   - SigLIP2: bản kế nhiệm, retrieval tốt hơn SigLIP1 trên benchmark.
@@ -73,13 +74,18 @@ class VideoSearchEngine:
         max_frames: int = 120,                  # [PROVISIONAL] trần frame lấy mẫu
         dedup_threshold: float = 0.97,          # [PROVISIONAL] khớp settings.yaml
         query_templates: Sequence[str] = QUERY_TEMPLATES,
+        rerank_model: str = "Qwen/Qwen2-VL-2B-Instruct",
+        rerank_pool: int = 8,                   # [PROVISIONAL] số ứng viên coarse đưa vào VLM
     ):
         self.encoder_names = list(encoder_names)[:2]  # KeyframeIndex có đúng 2 slot dense
         self.sample_every_s = sample_every_s
         self.max_frames = max_frames
         self.dedup_threshold = dedup_threshold
         self.query_templates = list(query_templates)
+        self.rerank_model = rerank_model
+        self.rerank_pool = rerank_pool
         self._encoders: Optional[list] = None   # nạp lười
+        self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
 
     # ------------------------------------------------------------- encoders
     def _load_encoders(self) -> list:
@@ -93,6 +99,25 @@ class VideoSearchEngine:
         """Bơm encoder ngoài (mock trong test / model tuỳ chọn). Mỗi encoder cần
         `.embed(raw) -> vec` và `.encode_text(str) -> vec`."""
         self._encoders = list(encoders)[:2]
+
+    # ------------------------------------------------------------- reranker
+    def _get_reranker(self) -> FineReranker:
+        if self._reranker is None:
+            from retrieval.vlm_rerank import Qwen2VLReranker
+
+            self._reranker = FineReranker(
+                Qwen2VLReranker(model_name=self.rerank_model),
+                # Pool nhỏ + budget rộng (VLM CPU chậm); không early-stop để chấm hết pool.
+                RerankConfig(max_candidates=self.rerank_pool, early_stop=False,
+                             time_budget_s=3600.0),
+            )
+        return self._reranker
+
+    def set_reranker(self, reranker: Reranker) -> None:
+        """Bơm reranker ngoài (mock trong test). Bọc trong FineReranker."""
+        self._reranker = FineReranker(
+            reranker, RerankConfig(max_candidates=self.rerank_pool,
+                                   early_stop=False, time_budget_s=3600.0))
 
     # -------------------------------------------------------------- indexing
     def index_video(
@@ -151,13 +176,34 @@ class VideoSearchEngine:
         return out
 
     def search(
-        self, entry: VideoIndexEntry, query: str, top_k: int = 8,
-    ) -> list[Candidate]:
-        """Search ensemble: mỗi encoder 1 ranked list -> RRF fuse (CoarseRetriever)."""
+        self, entry: VideoIndexEntry, query: str, top_k: int = 8, rerank: bool = False,
+    ) -> list:
+        """Search 2 tầng.
+
+        Tầng COARSE (luôn chạy): ensemble SigLIP -> RRF fuse -> ranked list nhanh.
+        Tầng RERANK (nếu rerank=True): đưa top `rerank_pool` ứng viên coarse cho VLM
+        chấm lại theo hiểu-ngôn-ngữ-thật -> trả top_k đã rerank. Chậm hơn nhiều (CPU)
+        nhưng chính xác về tổ hợp từ/ngữ cảnh.
+        """
         qvecs = self.encode_query(query)
         retriever = CoarseRetriever(entry.index)
-        return retriever.search(
+        pool = max(top_k, self.rerank_pool) if rerank else top_k
+        coarse = retriever.search(
             query_clip_vec=qvecs[0],
             query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
-            top_k=top_k,
+            top_k=pool,
         )
+        if not rerank or not coarse:
+            return coarse[:top_k]
+
+        # VLM rerank: context = đường dẫn ảnh keyframe (VLM cần "nhìn" ảnh thật).
+        context = {c.keyframe_id: entry.raws[c.keyframe_id].image_path
+                   for c in coarse if c.keyframe_id in entry.raws}
+        try:
+            reranked = self._get_reranker().rerank(query, coarse, context)
+            return reranked[:top_k]
+        except Exception as e:  # pragma: no cover - fallback khi VLM lỗi/thiếu model
+            # VLM lỗi (chưa tải xong model, thiếu RAM...) -> KHÔNG làm vỡ tìm kiếm,
+            # trả kết quả coarse SigLIP (vẫn tốt). Log để người dùng biết.
+            print(f"[video_engine] VLM rerank lỗi ({e!r}); dùng kết quả coarse.")
+            return coarse[:top_k]

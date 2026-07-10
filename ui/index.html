@@ -217,6 +217,10 @@
   .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
   select.vsel { font: inherit; font-size: 14px; padding: 10px 12px; border-radius: 11px;
     background: var(--bg); border: 1px solid var(--border); color: var(--ink); }
+  .rerank-tog { display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
+    color: var(--muted); cursor: pointer; user-select: none; }
+  .rerank-tog input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+  .vcard .why { padding: 0 11px 10px; font-size: 11.5px; color: var(--faint); }
   .vstatus { font-size: 13px; color: var(--muted); }
   .vstatus.busy { color: var(--accent); }
   .video-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
@@ -305,6 +309,7 @@
         <div class="controls">
           <select class="vsel" id="kis-select"><option>Đang tải…</option></select>
           <button class="btn ghost" id="kis-load">Nạp video</button>
+          <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="kis-rerank"> Rerank VLM</label>
           <span class="vstatus" id="kis-status"></span>
         </div>
         <form class="search-bar" id="kis-form">
@@ -330,6 +335,7 @@
         <div class="controls">
           <select class="vsel" id="avs-select"><option>Đang tải…</option></select>
           <button class="btn ghost" id="avs-load">Nạp video</button>
+          <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="avs-rerank"> Rerank VLM</label>
           <span class="vstatus" id="avs-status"></span>
         </div>
         <form class="search-bar" id="avs-form">
@@ -381,6 +387,7 @@
         <div class="controls">
           <select class="vsel" id="video-select"><option>Đang tải danh sách…</option></select>
           <button class="btn ghost" id="video-load">Nạp video</button>
+          <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="video-rerank"> Rerank VLM</label>
           <span class="vstatus" id="video-status"></span>
         </div>
         <form class="search-bar" id="video-form">
@@ -715,21 +722,28 @@
       const query = q("query").value.trim(); if (!query) return;
       const name = q("select").value, vid = name ? stem(name) : "";
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const rerankEl = $("#" + cfg.key + "-rerank");
+      const rerank = !!(rerankEl && rerankEl.checked);
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
-      box.innerHTML = "<div class='empty'>Đang tìm…</div>"; if (countEl) countEl.textContent = "";
+      box.innerHTML = "<div class='empty'>" +
+        (rerank ? "Đang rerank bằng VLM (đọc từng ảnh + hiểu câu — chậm trên CPU, chờ chút)…"
+                : "Đang tìm…") + "</div>";
+      if (countEl) countEl.textContent = "";
       try {
         const j = await (await fetch("/api/video/search", { method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video: vid, query, topk: cfg.topk }) })).json();
+          body: JSON.stringify({ video: vid, query, topk: cfg.topk, rerank }) })).json();
         box.innerHTML = "";
         if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
-        if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length);
+        if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length) +
+          (j.reranked ? " · <b>VLM rerank</b>" : "");
         j.results.forEach((r, i) => { const win = cfg.highlightTop && i === 0;
           const c = el("div", "vcard" + (win ? " win" : ""));
+          const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
           c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
             "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
-            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>";
+            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" + why;
           box.append(c); });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
     });
