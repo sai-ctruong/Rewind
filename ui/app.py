@@ -144,10 +144,13 @@ def create_app() -> Flask:
 
     @app.post("/api/search")
     def search():
-        query = (request.json or {}).get("query", "").strip()
+        data = request.json or {}
+        query = data.get("query", "").strip()
         if not query:
             return jsonify(error="Nhập truy vấn tìm kiếm."), 400
-        cands = coarse.search(query_text=query, top_k=24)
+        # KIS lấy Top-5 (đúng 1 khoảnh khắc); AVS lấy nhiều (tất cả đoạn khớp).
+        top_k = max(1, min(60, int(data.get("top_k", 24))))
+        cands = coarse.search(query_text=query, top_k=top_k)
         results = []
         for c in cands:
             rec = records_by_id.get(c.keyframe_id)

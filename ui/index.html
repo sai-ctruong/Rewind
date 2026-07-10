@@ -191,6 +191,10 @@
   .tag { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--surface-2);
     border: 1px solid var(--border); color: var(--muted); }
   .tag b { color: var(--ink); font-weight: 600; }
+  .rescount { color: var(--muted); font-size: 13.5px; margin-bottom: 14px; }
+  .rescount b { color: var(--ink); }
+  .rc.win { border-color: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 14%, transparent); }
+  .rc .rank.top1 { color: var(--good); }
 
   /* ---------------- VQA ---------------- */
   .vqa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -242,10 +246,11 @@
         <span>Trợ lý Truy xuất Đa phương tiện<small>AIC 2026 · KIS · AVS · VQA · KISC</small></span>
       </div>
       <nav class="tabs" role="tablist" aria-label="Chế độ">
-        <button role="tab" aria-selected="true" data-view="kisc">Hội thoại KISC</button>
-        <button role="tab" aria-selected="false" data-view="search">Tìm kiếm</button>
-        <button role="tab" aria-selected="false" data-view="vqa">Hỏi–đáp VQA</button>
-        <button role="tab" aria-selected="false" data-view="video">🎥 Video thật</button>
+        <button role="tab" aria-selected="true" data-view="kisc">KISC</button>
+        <button role="tab" aria-selected="false" data-view="kis">KIS</button>
+        <button role="tab" aria-selected="false" data-view="avs">AVS</button>
+        <button role="tab" aria-selected="false" data-view="vqa">VQA</button>
+        <button role="tab" aria-selected="false" data-view="video">🎥 Video</button>
       </nav>
       <div class="util">
         <span class="pill" id="status"><span class="dot"></span><span id="status-text">Đang kiểm tra…</span></span>
@@ -289,19 +294,36 @@
       </div>
     </section>
 
-    <!-- ================= SEARCH ================= -->
-    <section class="view" id="view-search" role="tabpanel">
+    <!-- ================= KIS ================= -->
+    <section class="view" id="view-kis" role="tabpanel">
       <div class="hero">
-        <h1>Tìm kiếm <em>KIS / AVS</em></h1>
-        <p>Truy vấn bằng ngôn ngữ tự nhiên. Hệ thống lọc thô recall-first
-           (BM25 + metadata) rồi xếp hạng kết quả.</p>
+        <h1>Known-Item Search — tìm đúng <em>một khoảnh khắc</em></h1>
+        <p>Mô tả chính xác thứ cần tìm. Hệ thống trả về <b>Top-5</b>, nhấn mạnh
+           kết quả #1 — đúng tinh thần KIS (Top-1/Top-5 chính xác tuyệt đối).</p>
       </div>
-      <form class="search-bar" id="search-form">
-        <input id="search-input" autocomplete="off"
+      <form class="search-bar" id="kis-form">
+        <input id="kis-input" autocomplete="off"
           placeholder="VD: người đàn ông áo xanh dương ở quán cà phê ngoài trời" />
-        <button class="btn" type="submit">Tìm</button>
+        <button class="btn" type="submit">Tìm Top-5</button>
       </form>
-      <div class="results" id="results"></div>
+      <div class="rescount" id="kis-count"></div>
+      <div class="results" id="kis-results"></div>
+    </section>
+
+    <!-- ================= AVS ================= -->
+    <section class="view" id="view-avs" role="tabpanel">
+      <div class="hero">
+        <h1>Ad-hoc Video Search — <em>tất cả</em> đoạn khớp</h1>
+        <p>Mô tả tổng quát. Hệ thống trả về <b>toàn bộ</b> đoạn phù hợp, xếp hạng
+           theo độ tương đồng — không cắt Top-K nhỏ (đúng tinh thần AVS).</p>
+      </div>
+      <form class="search-bar" id="avs-form">
+        <input id="avs-input" autocomplete="off"
+          placeholder="VD: cảnh ngoài trời có người mặc áo đỏ" />
+        <button class="btn" type="submit">Tìm tất cả</button>
+      </form>
+      <div class="rescount" id="avs-count"></div>
+      <div class="results" id="avs-results"></div>
     </section>
 
     <!-- ================= VQA ================= -->
@@ -500,10 +522,10 @@
       }
     };
   }
-  function simSearch(query) {
+  function simSearch(query, topk = 24) {
     const q = query.toLowerCase();
     const scored = DATA.map(r => { let s = 0; for (const w of q.split(/\s+/)) if (w && r.cap.includes(w)) s++; return { r, s }; })
-      .filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 24);
+      .filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, topk);
     return { results: scored.map(x => ({ id: x.r.id, video_id: x.r.video, timestamp: x.r.t,
       score: x.s, attributes: x.r.a, caption: x.r.cap })) };
   }
@@ -534,9 +556,10 @@
     async kiscRespond(answer) { if (LIVE) return (await fetch("/api/kisc/respond",
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer }) })).json();
       return SESSION.step(answer); },
-    async search(query) { if (LIVE) return (await fetch("/api/search",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) })).json();
-      return simSearch(query); },
+    async search(query, topk = 24) { if (LIVE) return (await fetch("/api/search",
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, top_k: topk }) })).json();
+      return simSearch(query, topk); },
     async vqa(question) { if (LIVE) return (await fetch("/api/vqa",
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) })).json();
       return simVqa(question); },
@@ -600,18 +623,39 @@
     await kiscSend(v, first);
   });
 
-  /* ===================== SEARCH UI ===================== */
-  $("#search-form").addEventListener("submit", async (e) => {
-    e.preventDefault(); const v = $("#search-input").value.trim(); if (!v) return;
-    const box = $("#results"); box.innerHTML = "<div class='empty'>Đang tìm…</div>";
-    const s = await api.search(v); box.innerHTML = "";
-    if (!s.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả khớp.</div>"; return; }
-    s.results.forEach((r, i) => { const c = el("div", "rc");
+  /* ===================== KIS / AVS UI ===================== */
+  function renderCards(box, results, highlightTop) {
+    box.innerHTML = "";
+    results.forEach((r, i) => {
+      const win = highlightTop && i === 0;
+      const c = el("div", "rc" + (win ? " win" : ""));
       const attrs = Object.entries(r.attributes || {}).slice(0, 4).map(([k, v]) =>
         "<span class='tag'><b>" + (VI[k] && VI[k][v] || v) + "</b></span>").join("");
-      c.innerHTML = "<div class='top'><span class='id'>" + r.id + "</span><span class='rank'>#" + (i + 1) + "</span></div>" +
+      const rlabel = win ? "★ TOP-1" : "#" + (i + 1);
+      c.innerHTML = "<div class='top'><span class='id'>" + r.id + "</span>" +
+        "<span class='rank" + (win ? " top1" : "") + "'>" + rlabel + "</span></div>" +
         "<div class='cap'>" + (r.caption || "—") + "</div><div class='attrs'>" + attrs + "</div>";
-      box.append(c); });
+      box.append(c);
+    });
+  }
+  async function runSearch(query, topk, box, countEl, highlightTop, countMsg) {
+    box.innerHTML = "<div class='empty'>Đang tìm…</div>"; countEl.textContent = "";
+    const s = await api.search(query, topk);
+    if (!s.results || !s.results.length) {
+      box.innerHTML = "<div class='empty'>Không có kết quả khớp.</div>"; return;
+    }
+    countEl.innerHTML = countMsg(s.results.length);
+    renderCards(box, s.results, highlightTop);
+  }
+  $("#kis-form").addEventListener("submit", (e) => {
+    e.preventDefault(); const v = $("#kis-input").value.trim(); if (!v) return;
+    runSearch(v, 5, $("#kis-results"), $("#kis-count"), true,
+      (n) => "Kết quả chính xác nhất — <b>Top " + n + "</b>");
+  });
+  $("#avs-form").addEventListener("submit", (e) => {
+    e.preventDefault(); const v = $("#avs-input").value.trim(); if (!v) return;
+    runSearch(v, 30, $("#avs-results"), $("#avs-count"), false,
+      (n) => "Tìm thấy <b>" + n + "</b> đoạn khớp (xếp theo độ tương đồng)");
   });
 
   /* ===================== VQA UI ===================== */
