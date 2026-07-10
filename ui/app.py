@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 
 from ingestion.build_index import KeyframeIndex
 from ingestion.schemas import KeyframeRecord
@@ -37,6 +37,12 @@ from retrieval.kisc_adapter import (
 from retrieval.vqa_module import VqaModule
 
 _UI_DIR = Path(__file__).resolve().parent
+_ROOT = _UI_DIR.parent
+VIDEO_DIR = _ROOT / "data" / "videos"          # nơi bỏ file video của người dùng
+FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
+# SigLIP ĐA NGÔN NGỮ: hỗ trợ query tiếng Việt (100+ ngôn ngữ). Đổi sang bản
+# "google/siglip-base-patch16-224" nếu chỉ cần tiếng Anh (nhẹ hơn chút).
+VIDEO_MODEL = "google/siglip-base-patch16-256-multilingual"
 
 
 def build_dataset(n: int = 200, seed: int = 42) -> list[KeyframeRecord]:
@@ -163,6 +169,67 @@ def create_app() -> Flask:
             answer=ans.answer, value=ans.value, reasoning=ans.reasoning,
             used_frame_ids=ans.used_frame_ids,
         )
+
+    # ===================== TÌM KIẾM TRÊN VIDEO THẬT (SigLIP) ==================
+    # State riêng: encoder nạp LƯỜI (chỉ khi dùng tab video -> không làm chậm khởi
+    # động server); mỗi video index xong được cache để khỏi embed lại.
+    video_state: dict = {"encoder": None, "videos": {}}
+
+    def _encoder():
+        if video_state["encoder"] is None:
+            from ingestion.embed_siglip import SiglipEncoder
+            video_state["encoder"] = SiglipEncoder(model_name=VIDEO_MODEL)
+        return video_state["encoder"]
+
+    @app.get("/api/video/list")
+    def video_list():
+        vids = (sorted(p.name for p in VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists()
+                else [])
+        return jsonify(videos=vids, indexed=sorted(video_state["videos"].keys()),
+                       folder=str(VIDEO_DIR))
+
+    @app.post("/api/video/index")
+    def video_index():
+        name = (request.json or {}).get("video", "")
+        path = VIDEO_DIR / name
+        if not name or not path.exists():
+            return jsonify(error=f"Không thấy video: {name}"), 404
+        from ingestion.video_ingest import extract_keyframes
+        raws = extract_keyframes(path, FRAMES_DIR, sample_every_s=1.0, max_frames=60)
+        if not raws:
+            return jsonify(error="Không trích được keyframe nào."), 400
+        enc = _encoder()
+        records = [KeyframeRecord(id=r.id, video_id=r.video_id, timestamp=r.timestamp,
+                                  clip_embedding=enc.embed(r)) for r in raws]
+        index = KeyframeIndex.build(records)
+        video_state["videos"][path.stem] = {"index": index,
+                                             "raws": {r.id: r for r in raws}}
+        return jsonify(video=path.stem, frames=len(raws))
+
+    @app.post("/api/video/search")
+    def video_search():
+        data = request.json or {}
+        vid, query = data.get("video", ""), (data.get("query", "") or "").strip()
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        if not query:
+            return jsonify(error="Nhập câu mô tả cần tìm."), 400
+        qvec = _encoder().encode_text(query)
+        cands = CoarseRetriever(entry["index"]).search(
+            query_clip_vec=qvec, top_k=int(data.get("topk", 6)))
+        results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
+                    "score": round(float(c.score), 3),
+                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
+        return jsonify(video=vid, query=query, results=results)
+
+    @app.get("/api/video/frame/<path:frame_id>")
+    def video_frame(frame_id: str):
+        for entry in video_state["videos"].values():
+            raw = entry["raws"].get(frame_id)
+            if raw and raw.image_path and Path(raw.image_path).exists():
+                return send_file(raw.image_path, mimetype="image/jpeg")
+        return jsonify(error="Không thấy keyframe."), 404
 
     return app
 

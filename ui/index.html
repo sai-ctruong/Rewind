@@ -40,6 +40,8 @@
   }
 
   * { box-sizing: border-box; }
+  /* Reset body: bỏ margin mặc định 8px + nền trắng lộ ra quanh viền (theo theme). */
+  html, body { margin: 0; padding: 0; background: var(--bg); }
   .aic-root {
     font-family: var(--font); color: var(--ink); background: var(--bg);
     min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
@@ -207,6 +209,24 @@
   .frame .t { font-family: var(--mono); font-size: 11.5px; color: var(--faint); flex: none; width: 42px; }
   .frame.used { border-color: var(--accent); background: var(--accent-soft); }
 
+  /* ---------------- Video thật ---------------- */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  select.vsel { font: inherit; font-size: 14px; padding: 10px 12px; border-radius: 11px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--ink); }
+  .vstatus { font-size: 13px; color: var(--muted); }
+  .vstatus.busy { color: var(--accent); }
+  .video-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .vcard { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+    background: var(--surface); box-shadow: var(--shadow); animation: fade .3s ease; }
+  .vcard.win { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  .vcard img { width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block; background: var(--surface-2); }
+  .vcard .cap { padding: 9px 11px; display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; }
+  .vcard .rank { color: var(--accent); font-weight: 700; }
+  .vcard .t { font-family: var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notice { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius);
+    color: var(--muted); font-size: 14px; background: var(--surface-2); }
+  .notice code { font-family: var(--mono); color: var(--ink); }
+
   .foot { color: var(--faint); font-size: 12.5px; padding: 30px 0 40px; border-top: 1px solid var(--border);
     margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
   .foot code { font-family: var(--mono); color: var(--muted); }
@@ -225,6 +245,7 @@
         <button role="tab" aria-selected="true" data-view="kisc">Hội thoại KISC</button>
         <button role="tab" aria-selected="false" data-view="search">Tìm kiếm</button>
         <button role="tab" aria-selected="false" data-view="vqa">Hỏi–đáp VQA</button>
+        <button role="tab" aria-selected="false" data-view="video">🎥 Video thật</button>
       </nav>
       <div class="util">
         <span class="pill" id="status"><span class="dot"></span><span id="status-text">Đang kiểm tra…</span></span>
@@ -306,6 +327,34 @@
           <div class="hd"><span class="eyebrow">Cửa sổ keyframe (video sinh nhật)</span></div>
           <div class="film" id="vqa-film"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ================= VIDEO THẬT ================= -->
+    <section class="view" id="view-video" role="tabpanel">
+      <div class="hero">
+        <h1>Tìm kiếm trên <em>video thật</em> bằng SigLIP</h1>
+        <p>Chọn video trong <code>data/videos/</code>, nạp một lần (cắt keyframe + embed),
+           rồi tìm khung hình bằng câu mô tả — truy xuất cross-modal, không cần API key.</p>
+      </div>
+      <div id="video-live">
+        <div class="controls">
+          <select class="vsel" id="video-select"><option>Đang tải danh sách…</option></select>
+          <button class="btn ghost" id="video-load">Nạp video</button>
+          <span class="vstatus" id="video-status"></span>
+        </div>
+        <form class="search-bar" id="video-form">
+          <input id="video-query" autocomplete="off"
+            placeholder="VD: a person walking on the street" />
+          <button class="btn" type="submit">Tìm trong video</button>
+        </form>
+        <div class="video-results" id="video-results"></div>
+      </div>
+      <div class="notice" id="video-offline" style="display:none">
+        Tính năng tìm trên video thật cần <b>backend</b>. Hãy chạy
+        <code>python -m ui.app</code> rồi mở <code>http://127.0.0.1:5000</code>,
+        bỏ file <code>.mp4</code> vào thư mục <code>data/videos/</code>.
+        <br>(Bản Artifact này chạy mô phỏng nên không nạp được model SigLIP.)
       </div>
     </section>
 
@@ -584,6 +633,72 @@
     $("#vqa-why").textContent = a.reasoning || ""; renderFilm(a.used_frame_ids || []);
   });
 
+  /* ===================== VIDEO THẬT UI ===================== */
+  let VIDEO_READY = null;          // video_id đã nạp/sẵn sàng để tìm
+  let INDEXED = new Set();         // các video đã index sẵn phía server
+  function stem(name) { return name.replace(/\.mp4$/i, ""); }
+
+  async function initVideo() {
+    const live = $("#video-live"), offline = $("#video-offline");
+    if (!LIVE) { live.style.display = "none"; offline.style.display = "block"; return; }
+    try {
+      const j = await (await fetch("/api/video/list")).json();
+      INDEXED = new Set(j.indexed || []);
+      const sel = $("#video-select"); sel.innerHTML = "";
+      if (!j.videos || !j.videos.length) {
+        sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
+        $("#video-status").textContent = "Bỏ file video vào thư mục data/videos/ rồi tải lại trang.";
+        return;
+      }
+      j.videos.forEach(v => { const o = el("option"); o.value = v;
+        o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+      syncReady();
+    } catch (e) { $("#video-status").textContent = "Không tải được danh sách video."; }
+  }
+  function syncReady() {
+    const name = $("#video-select").value;
+    if (name && INDEXED.has(stem(name))) {
+      VIDEO_READY = stem(name); $("#video-status").textContent = "✓ Sẵn sàng — nhập câu để tìm.";
+    } else { VIDEO_READY = null; $("#video-status").textContent = ""; }
+  }
+  $("#video-select") && $("#video-select").addEventListener("change", syncReady);
+
+  $("#video-load") && $("#video-load").addEventListener("click", async () => {
+    const name = $("#video-select").value; if (!name) return;
+    const st = $("#video-status"); st.className = "vstatus busy";
+    st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model ~370MB, có thể vài phút)…";
+    $("#video-load").disabled = true;
+    try {
+      const j = await (await fetch("/api/video/index", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name }) })).json();
+      st.className = "vstatus";
+      if (j.error) { st.textContent = "Lỗi: " + j.error; }
+      else { VIDEO_READY = j.video; INDEXED.add(j.video);
+        st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”. Nhập câu để tìm.`; }
+    } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
+    $("#video-load").disabled = false;
+  });
+
+  $("#video-form") && $("#video-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = $("#video-query").value.trim(); if (!q) return;
+    if (!VIDEO_READY) { $("#video-status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+    const box = $("#video-results"); box.innerHTML = "<div class='empty'>Đang tìm…</div>";
+    try {
+      const j = await (await fetch("/api/video/search", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video: VIDEO_READY, query: q, topk: 8 }) })).json();
+      box.innerHTML = "";
+      if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
+      if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
+      j.results.forEach((r, i) => { const c = el("div", "vcard" + (i === 0 ? " win" : ""));
+        c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
+          "<div class='cap'><span class='rank'>#" + (i + 1) + "</span>" +
+          "<span class='t'>t=" + r.timestamp + "s</span></div>";
+        box.append(c); });
+    } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
+  });
+
   /* ---------- Boot ---------- */
   (async function boot() {
     const size = await detect();
@@ -593,6 +708,7 @@
     else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
       $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }
     bubble("bot", "Chào bạn! Hãy mô tả khoảnh khắc bạn muốn tìm. Nếu còn mơ hồ, mình sẽ hỏi thêm để thu hẹp dần.");
+    initVideo();
   })();
 })();
 </script>

@@ -94,10 +94,35 @@ def test_vqa_identifies_gift_giver(client) -> None:
     assert "người đàn ông" in r.get_json()["answer"].lower()
 
 
+# ------------------------------- Video (thật) --------------------------------
+def test_video_list_endpoint(client) -> None:
+    r = client.get("/api/video/list")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert "videos" in body and "indexed" in body and "folder" in body
+    assert isinstance(body["videos"], list)
+
+
+def test_video_index_missing_file_errors(client) -> None:
+    r = client.post("/api/video/index", json={"video": "khong_ton_tai.mp4"})
+    assert r.status_code == 404
+
+
+def test_video_search_without_index_errors(client) -> None:
+    r = client.post("/api/video/search", json={"video": "chua_nap", "query": "test"})
+    assert r.status_code == 400
+
+
+def test_video_frame_missing_errors(client) -> None:
+    r = client.get("/api/video/frame/khong/co")
+    assert r.status_code == 404
+
+
 # ------------------------------- Frontend asset ------------------------------
 def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-    for hook in ("/api/health", "/api/kisc/start", "/api/search", "/api/vqa"):
+    for hook in ("/api/health", "/api/kisc/start", "/api/search", "/api/vqa",
+                 "/api/video/list", "/api/video/search"):
         assert hook in html
     # Có bản mô phỏng dự phòng cho chế độ Artifact (không backend).
     assert "simSession" in html and "data-theme" in html

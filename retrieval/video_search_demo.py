@@ -25,8 +25,9 @@ from ingestion.schemas import KeyframeRecord, RawKeyframe
 from ingestion.video_ingest import extract_keyframes
 from retrieval.coarse_retriever import CoarseRetriever
 
-# SigLIP base: nhẹ/nhanh hơn large, hợp cho demo CPU. Đổi sang large để chính xác hơn.
-DEMO_MODEL = "google/siglip-base-patch16-224"
+# SigLIP ĐA NGÔN NGỮ: query tiếng Việt lẫn tiếng Anh đều được (100+ ngôn ngữ). Đổi
+# sang "google/siglip-base-patch16-224" nếu chỉ cần tiếng Anh (nhẹ/nhanh hơn chút).
+DEMO_MODEL = "google/siglip-base-patch16-256-multilingual"
 
 
 def build_index_from_video(

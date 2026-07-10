@@ -158,6 +158,12 @@ def test_claude_captioner_without_dep_or_key_raises() -> None:
 
 
 def test_siglip_encoder_without_torch_raises() -> None:
+    """Guard chỉ áp dụng khi CHƯA cài torch. Nếu torch đã có (bật tính năng video
+    thật), bỏ qua vì không thể kích hoạt nhánh ImportError mà không tải model nặng."""
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is not None:
+        pytest.skip("torch đã được cài — guard lazy-import không áp dụng")
     from ingestion.embed_siglip import SiglipEncoder
 
     with pytest.raises(ImportError, match="torch"):
