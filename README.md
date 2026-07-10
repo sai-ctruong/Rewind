@@ -177,6 +177,8 @@ python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên ph
 
 > ✅ Đã kiểm chứng: trên clip 3 cảnh (CAT/DOG/CAR), truy vấn *"a photo of a car"* → trả về đúng khung hình CAR. `ingestion/video_ingest.py` (cv2) cắt keyframe + bỏ frame trùng; `SiglipEncoder.encode_text()` mã hoá query cùng không gian ảnh.
 
+**Độ chính xác nâng cao** (`retrieval/video_engine.py`): ensemble **SigLIP2 + SigLIP-multilingual** fuse bằng RRF (Mục 2.1) · **query prompt ensemble** — trung bình embedding nhiều biến thể câu (Mục 4.2) · lấy mẫu dày 0.5s + **dedup ngữ nghĩa** (Mục 5.1). Hỗ trợ **tiếng Việt lẫn tiếng Anh**. Benchmark trước/sau: `python -m evaluation.bench_video_engine` (Mục 11.3).
+
 ### 🔌 Cắm dữ liệu thật (khi có tài nguyên)
 
 1. Chuẩn bị **video + CLIP feature BTC** và đặt `ANTHROPIC_API_KEY`.

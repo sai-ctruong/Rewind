@@ -40,9 +40,6 @@ _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
 VIDEO_DIR = _ROOT / "data" / "videos"          # nơi bỏ file video của người dùng
 FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
-# SigLIP ĐA NGÔN NGỮ: hỗ trợ query tiếng Việt (100+ ngôn ngữ). Đổi sang bản
-# "google/siglip-base-patch16-224" nếu chỉ cần tiếng Anh (nhẹ hơn chút).
-VIDEO_MODEL = "google/siglip-base-patch16-256-multilingual"
 
 
 def build_dataset(n: int = 200, seed: int = 42) -> list[KeyframeRecord]:
@@ -174,15 +171,12 @@ def create_app() -> Flask:
         )
 
     # ===================== TÌM KIẾM TRÊN VIDEO THẬT (SigLIP) ==================
-    # State riêng: encoder nạp LƯỜI (chỉ khi dùng tab video -> không làm chậm khởi
-    # động server); mỗi video index xong được cache để khỏi embed lại.
-    video_state: dict = {"encoder": None, "videos": {}}
+    # VideoSearchEngine (retrieval/video_engine.py): ensemble SigLIP2 + SigLIP
+    # multilingual, query prompt ensemble, lấy mẫu dày + dedup ngữ nghĩa.
+    # Model nạp LƯỜI (lần index đầu); mỗi video index xong được cache.
+    from retrieval.video_engine import VideoSearchEngine
 
-    def _encoder():
-        if video_state["encoder"] is None:
-            from ingestion.embed_siglip import SiglipEncoder
-            video_state["encoder"] = SiglipEncoder(model_name=VIDEO_MODEL)
-        return video_state["encoder"]
+    video_state: dict = {"engine": VideoSearchEngine(), "videos": {}}
 
     @app.get("/api/video/list")
     def video_list():
@@ -199,19 +193,15 @@ def create_app() -> Flask:
             return jsonify(error=f"Không thấy video: {name}"), 404
         # Đã index rồi -> trả cache ngay (dùng lại giữa các tab KIS/AVS/Video).
         if path.stem in video_state["videos"]:
-            return jsonify(video=path.stem, cached=True,
-                           frames=len(video_state["videos"][path.stem]["raws"]))
-        from ingestion.video_ingest import extract_keyframes
-        raws = extract_keyframes(path, FRAMES_DIR, sample_every_s=1.0, max_frames=60)
-        if not raws:
-            return jsonify(error="Không trích được keyframe nào."), 400
-        enc = _encoder()
-        records = [KeyframeRecord(id=r.id, video_id=r.video_id, timestamp=r.timestamp,
-                                  clip_embedding=enc.embed(r)) for r in raws]
-        index = KeyframeIndex.build(records)
-        video_state["videos"][path.stem] = {"index": index,
-                                             "raws": {r.id: r for r in raws}}
-        return jsonify(video=path.stem, frames=len(raws))
+            entry = video_state["videos"][path.stem]
+            return jsonify(video=path.stem, cached=True, frames=entry.num_indexed)
+        try:
+            entry = video_state["engine"].index_video(path, FRAMES_DIR)
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        video_state["videos"][entry.video_id] = entry
+        return jsonify(video=entry.video_id, frames=entry.num_indexed,
+                       sampled=entry.num_sampled)
 
     @app.post("/api/video/search")
     def video_search():
@@ -222,18 +212,18 @@ def create_app() -> Flask:
             return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
         if not query:
             return jsonify(error="Nhập câu mô tả cần tìm."), 400
-        qvec = _encoder().encode_text(query)
-        cands = CoarseRetriever(entry["index"]).search(
-            query_clip_vec=qvec, top_k=int(data.get("topk", 6)))
+        cands = video_state["engine"].search(entry, query,
+                                             top_k=int(data.get("topk", 6)))
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
                     "score": round(float(c.score), 3),
+                    "sources": c.source_ranks,
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, results=results)
 
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
         for entry in video_state["videos"].values():
-            raw = entry["raws"].get(frame_id)
+            raw = entry.raws.get(frame_id)
             if raw and raw.image_path and Path(raw.image_path).exists():
                 return send_file(raw.image_path, mimetype="image/jpeg")
         return jsonify(error="Không thấy keyframe."), 404

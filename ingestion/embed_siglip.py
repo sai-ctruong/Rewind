@@ -104,8 +104,11 @@ class SiglipEncoder(SiglipEmbeddingProvider):
         là mắt xích cho phép SEARCH BẰNG CHỮ trên video thật (không cần caption/API).
         SigLIP yêu cầu padding='max_length' cho nhánh text."""
         torch = self._torch
+        # max_length=64: SigLIP/SigLIP2 huấn luyện text tối đa 64 token; truyền tường
+        # minh để nhất quán giữa các đời model (SigLIP2 dùng tokenizer Gemma cần rõ).
         inputs = self._processor(
-            text=[text], padding="max_length", return_tensors="pt"
+            text=[text], padding="max_length", max_length=64, truncation=True,
+            return_tensors="pt",
         ).to(self.device)
         with torch.no_grad():
             feats = self._model.get_text_features(**inputs)
