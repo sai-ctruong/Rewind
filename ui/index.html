@@ -294,36 +294,54 @@
       </div>
     </section>
 
-    <!-- ================= KIS ================= -->
+    <!-- ================= KIS (trên video thật) ================= -->
     <section class="view" id="view-kis" role="tabpanel">
       <div class="hero">
-        <h1>Known-Item Search — tìm đúng <em>một khoảnh khắc</em></h1>
-        <p>Mô tả chính xác thứ cần tìm. Hệ thống trả về <b>Top-5</b>, nhấn mạnh
-           kết quả #1 — đúng tinh thần KIS (Top-1/Top-5 chính xác tuyệt đối).</p>
+        <h1>KIS — tìm đúng <em>một khung hình</em> trong video</h1>
+        <p>Chọn video, nạp một lần, rồi mô tả cảnh cần tìm. Trả về <b>Top-5</b>,
+           nhấn mạnh khung #1 — đúng tinh thần Known-Item Search.</p>
       </div>
-      <form class="search-bar" id="kis-form">
-        <input id="kis-input" autocomplete="off"
-          placeholder="VD: người đàn ông áo xanh dương ở quán cà phê ngoài trời" />
-        <button class="btn" type="submit">Tìm Top-5</button>
-      </form>
-      <div class="rescount" id="kis-count"></div>
-      <div class="results" id="kis-results"></div>
+      <div id="kis-live">
+        <div class="controls">
+          <select class="vsel" id="kis-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="kis-load">Nạp video</button>
+          <span class="vstatus" id="kis-status"></span>
+        </div>
+        <form class="search-bar" id="kis-form">
+          <input id="kis-query" autocomplete="off" placeholder="VD: một chiếc xe hơi trên đường" />
+          <button class="btn" type="submit">Tìm Top-5</button>
+        </form>
+        <div class="rescount" id="kis-count"></div>
+        <div class="video-results" id="kis-results"></div>
+      </div>
+      <div class="notice" id="kis-offline" style="display:none">
+        KIS trên video thật cần <b>backend</b>. Chạy <code>python -m ui.app</code>.
+      </div>
     </section>
 
-    <!-- ================= AVS ================= -->
+    <!-- ================= AVS (trên video thật) ================= -->
     <section class="view" id="view-avs" role="tabpanel">
       <div class="hero">
-        <h1>Ad-hoc Video Search — <em>tất cả</em> đoạn khớp</h1>
-        <p>Mô tả tổng quát. Hệ thống trả về <b>toàn bộ</b> đoạn phù hợp, xếp hạng
-           theo độ tương đồng — không cắt Top-K nhỏ (đúng tinh thần AVS).</p>
+        <h1>AVS — <em>tất cả</em> khung hình khớp trong video</h1>
+        <p>Mô tả tổng quát. Trả về <b>toàn bộ</b> khung hình phù hợp trong video,
+           xếp hạng theo độ tương đồng — đúng tinh thần Ad-hoc Video Search.</p>
       </div>
-      <form class="search-bar" id="avs-form">
-        <input id="avs-input" autocomplete="off"
-          placeholder="VD: cảnh ngoài trời có người mặc áo đỏ" />
-        <button class="btn" type="submit">Tìm tất cả</button>
-      </form>
-      <div class="rescount" id="avs-count"></div>
-      <div class="results" id="avs-results"></div>
+      <div id="avs-live">
+        <div class="controls">
+          <select class="vsel" id="avs-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="avs-load">Nạp video</button>
+          <span class="vstatus" id="avs-status"></span>
+        </div>
+        <form class="search-bar" id="avs-form">
+          <input id="avs-query" autocomplete="off" placeholder="VD: cảnh đường phố có xe cộ" />
+          <button class="btn" type="submit">Tìm tất cả</button>
+        </form>
+        <div class="rescount" id="avs-count"></div>
+        <div class="video-results" id="avs-results"></div>
+      </div>
+      <div class="notice" id="avs-offline" style="display:none">
+        AVS trên video thật cần <b>backend</b>. Chạy <code>python -m ui.app</code>.
+      </div>
     </section>
 
     <!-- ================= VQA ================= -->
@@ -409,6 +427,8 @@
     b.setAttribute("aria-selected", "true");
     document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
     $("#view-" + b.dataset.view).classList.add("active");
+    // Đồng bộ danh sách/trạng thái video khi mở tab video/kis/avs (chia sẻ cache).
+    if (typeof VTABS !== "undefined" && VTABS[b.dataset.view]) VTABS[b.dataset.view].refresh();
   }));
 
   /* =====================================================================
@@ -623,40 +643,7 @@
     await kiscSend(v, first);
   });
 
-  /* ===================== KIS / AVS UI ===================== */
-  function renderCards(box, results, highlightTop) {
-    box.innerHTML = "";
-    results.forEach((r, i) => {
-      const win = highlightTop && i === 0;
-      const c = el("div", "rc" + (win ? " win" : ""));
-      const attrs = Object.entries(r.attributes || {}).slice(0, 4).map(([k, v]) =>
-        "<span class='tag'><b>" + (VI[k] && VI[k][v] || v) + "</b></span>").join("");
-      const rlabel = win ? "★ TOP-1" : "#" + (i + 1);
-      c.innerHTML = "<div class='top'><span class='id'>" + r.id + "</span>" +
-        "<span class='rank" + (win ? " top1" : "") + "'>" + rlabel + "</span></div>" +
-        "<div class='cap'>" + (r.caption || "—") + "</div><div class='attrs'>" + attrs + "</div>";
-      box.append(c);
-    });
-  }
-  async function runSearch(query, topk, box, countEl, highlightTop, countMsg) {
-    box.innerHTML = "<div class='empty'>Đang tìm…</div>"; countEl.textContent = "";
-    const s = await api.search(query, topk);
-    if (!s.results || !s.results.length) {
-      box.innerHTML = "<div class='empty'>Không có kết quả khớp.</div>"; return;
-    }
-    countEl.innerHTML = countMsg(s.results.length);
-    renderCards(box, s.results, highlightTop);
-  }
-  $("#kis-form").addEventListener("submit", (e) => {
-    e.preventDefault(); const v = $("#kis-input").value.trim(); if (!v) return;
-    runSearch(v, 5, $("#kis-results"), $("#kis-count"), true,
-      (n) => "Kết quả chính xác nhất — <b>Top " + n + "</b>");
-  });
-  $("#avs-form").addEventListener("submit", (e) => {
-    e.preventDefault(); const v = $("#avs-input").value.trim(); if (!v) return;
-    runSearch(v, 30, $("#avs-results"), $("#avs-count"), false,
-      (n) => "Tìm thấy <b>" + n + "</b> đoạn khớp (xếp theo độ tương đồng)");
-  });
+  /* KIS/AVS giờ tìm trên VIDEO THẬT — xử lý chung ở setupVideoTab bên dưới. */
 
   /* ===================== VQA UI ===================== */
   const SUGG = ["Có bao nhiêu ngọn nến trên bánh?", "Ai là người tặng quà?", "Chuyện gì đang diễn ra?"];
@@ -677,71 +664,80 @@
     $("#vqa-why").textContent = a.reasoning || ""; renderFilm(a.used_frame_ids || []);
   });
 
-  /* ===================== VIDEO THẬT UI ===================== */
-  let VIDEO_READY = null;          // video_id đã nạp/sẵn sàng để tìm
-  let INDEXED = new Set();         // các video đã index sẵn phía server
+  /* ============ VIDEO THẬT — dùng chung cho tab Video / KIS / AVS ============ */
+  const INDEXED = new Set();        // các video đã index sẵn phía server (chia sẻ)
   function stem(name) { return name.replace(/\.mp4$/i, ""); }
+  const VTABS = {};                 // key -> instance (để refresh khi đổi tab)
 
-  async function initVideo() {
-    const live = $("#video-live"), offline = $("#video-offline");
-    if (!LIVE) { live.style.display = "none"; offline.style.display = "block"; return; }
-    try {
-      const j = await (await fetch("/api/video/list")).json();
-      INDEXED = new Set(j.indexed || []);
-      const sel = $("#video-select"); sel.innerHTML = "";
-      if (!j.videos || !j.videos.length) {
-        sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
-        $("#video-status").textContent = "Bỏ file video vào thư mục data/videos/ rồi tải lại trang.";
-        return;
-      }
-      j.videos.forEach(v => { const o = el("option"); o.value = v;
-        o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
-      syncReady();
-    } catch (e) { $("#video-status").textContent = "Không tải được danh sách video."; }
+  function setupVideoTab(cfg) {
+    const q = (s) => $("#" + cfg.key + "-" + s);
+    const live = q("live"), offline = q("offline");
+    if (!LIVE) { if (live) live.style.display = "none"; if (offline) offline.style.display = "block"; return; }
+
+    const sync = () => {
+      const name = q("select").value;
+      q("status").textContent = (name && INDEXED.has(stem(name))) ? "✓ Sẵn sàng — nhập câu để tìm." : "";
+    };
+    const refresh = async () => {
+      try {
+        const j = await (await fetch("/api/video/list")).json();
+        (j.indexed || []).forEach(v => INDEXED.add(v));
+        const sel = q("select"), cur = sel.value; sel.innerHTML = "";
+        if (!j.videos || !j.videos.length) {
+          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
+          q("status").textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
+        }
+        j.videos.forEach(v => { const o = el("option"); o.value = v;
+          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+        if (cur) sel.value = cur;
+        sync();
+      } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
+    };
+
+    q("select").addEventListener("change", sync);
+    q("load").addEventListener("click", async () => {
+      const name = q("select").value; if (!name) return;
+      const st = q("status"); st.className = "vstatus busy";
+      st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model, có thể vài phút)…";
+      q("load").disabled = true;
+      try {
+        const j = await (await fetch("/api/video/index", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name }) })).json();
+        st.className = "vstatus";
+        if (j.error) st.textContent = "Lỗi: " + j.error;
+        else { INDEXED.add(j.video);
+          st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”.`; }
+      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
+      q("load").disabled = false;
+    });
+    q("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const query = q("query").value.trim(); if (!query) return;
+      const name = q("select").value, vid = name ? stem(name) : "";
+      if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const box = q("results"), countEl = $("#" + cfg.key + "-count");
+      box.innerHTML = "<div class='empty'>Đang tìm…</div>"; if (countEl) countEl.textContent = "";
+      try {
+        const j = await (await fetch("/api/video/search", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video: vid, query, topk: cfg.topk }) })).json();
+        box.innerHTML = "";
+        if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
+        if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
+        if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length);
+        j.results.forEach((r, i) => { const win = cfg.highlightTop && i === 0;
+          const c = el("div", "vcard" + (win ? " win" : ""));
+          c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
+            "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
+            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>";
+          box.append(c); });
+      } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
+    });
+
+    const inst = { refresh };
+    VTABS[cfg.key] = inst;
+    return inst;
   }
-  function syncReady() {
-    const name = $("#video-select").value;
-    if (name && INDEXED.has(stem(name))) {
-      VIDEO_READY = stem(name); $("#video-status").textContent = "✓ Sẵn sàng — nhập câu để tìm.";
-    } else { VIDEO_READY = null; $("#video-status").textContent = ""; }
-  }
-  $("#video-select") && $("#video-select").addEventListener("change", syncReady);
-
-  $("#video-load") && $("#video-load").addEventListener("click", async () => {
-    const name = $("#video-select").value; if (!name) return;
-    const st = $("#video-status"); st.className = "vstatus busy";
-    st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model ~370MB, có thể vài phút)…";
-    $("#video-load").disabled = true;
-    try {
-      const j = await (await fetch("/api/video/index", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name }) })).json();
-      st.className = "vstatus";
-      if (j.error) { st.textContent = "Lỗi: " + j.error; }
-      else { VIDEO_READY = j.video; INDEXED.add(j.video);
-        st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”. Nhập câu để tìm.`; }
-    } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
-    $("#video-load").disabled = false;
-  });
-
-  $("#video-form") && $("#video-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const q = $("#video-query").value.trim(); if (!q) return;
-    if (!VIDEO_READY) { $("#video-status").textContent = "Hãy bấm “Nạp video” trước."; return; }
-    const box = $("#video-results"); box.innerHTML = "<div class='empty'>Đang tìm…</div>";
-    try {
-      const j = await (await fetch("/api/video/search", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ video: VIDEO_READY, query: q, topk: 8 }) })).json();
-      box.innerHTML = "";
-      if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
-      if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
-      j.results.forEach((r, i) => { const c = el("div", "vcard" + (i === 0 ? " win" : ""));
-        c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
-          "<div class='cap'><span class='rank'>#" + (i + 1) + "</span>" +
-          "<span class='t'>t=" + r.timestamp + "s</span></div>";
-        box.append(c); });
-    } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
-  });
 
   /* ---------- Boot ---------- */
   (async function boot() {
@@ -752,7 +748,13 @@
     else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
       $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }
     bubble("bot", "Chào bạn! Hãy mô tả khoảnh khắc bạn muốn tìm. Nếu còn mơ hồ, mình sẽ hỏi thêm để thu hẹp dần.");
-    initVideo();
+    // Khởi tạo 3 tab tìm-trên-video (chia sẻ cache): Video (tự do), KIS (Top-5), AVS (tất cả).
+    setupVideoTab({ key: "video", topk: 8, highlightTop: false });
+    setupVideoTab({ key: "kis", topk: 5, highlightTop: true,
+      countMsg: (n) => "Top-" + n + " khung khớp nhất" });
+    setupVideoTab({ key: "avs", topk: 30, highlightTop: false,
+      countMsg: (n) => "Tìm thấy <b>" + n + "</b> khung khớp" });
+    ["video", "kis", "avs"].forEach(k => VTABS[k] && VTABS[k].refresh());
   })();
 })();
 </script>

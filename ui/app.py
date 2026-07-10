@@ -197,6 +197,10 @@ def create_app() -> Flask:
         path = VIDEO_DIR / name
         if not name or not path.exists():
             return jsonify(error=f"Không thấy video: {name}"), 404
+        # Đã index rồi -> trả cache ngay (dùng lại giữa các tab KIS/AVS/Video).
+        if path.stem in video_state["videos"]:
+            return jsonify(video=path.stem, cached=True,
+                           frames=len(video_state["videos"][path.stem]["raws"]))
         from ingestion.video_ingest import extract_keyframes
         raws = extract_keyframes(path, FRAMES_DIR, sample_every_s=1.0, max_frames=60)
         if not raws:
