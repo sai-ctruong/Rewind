@@ -18,6 +18,14 @@ rank-bm25>=0.2     # sparse retrieval BM25 trên OCR/ASR/objects/caption (Mục 
 # --- Phase 10: web UI ---
 Flask>=3.0         # backend demo nối pipeline thật (ui/app.py)
 
+# --- Xử lý video thật + SigLIP (không cần API key, chỉ tải model local) ---
+opencv-python-headless>=4.9   # decode video + cắt keyframe (ingestion/video_ingest.py)
+torch>=2.2                    # backend SigLIP
+transformers>=4.40            # load SigLIP (image + text encoder)
+sentencepiece>=0.2            # tokenizer text của SigLIP
+protobuf>=4.0                 # phụ thuộc tokenizer SigLIP
+pillow>=10.0                  # đọc ảnh keyframe cho SigLIP
+
 # --- Phase 2+ real / các Phase sau (bổ sung khi tới): ---
 # faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
 # torch            # backend cho SigLIP encoder

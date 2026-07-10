@@ -94,6 +94,30 @@ class SiglipEncoder(SiglipEmbeddingProvider):
         inputs = self._processor(images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
             feats = self._model.get_image_features(**inputs)
-        vec = feats[0].float().cpu().numpy().astype(np.float32)
+        return self._to_unit(self._pool(feats)[0])
+
+    def encode_text(self, text: str) -> np.ndarray:  # pragma: no cover - bản thật
+        """Mã hoá QUERY TEXT vào CÙNG không gian với embedding ảnh.
+
+        Nhờ SigLIP là mô hình đa phương tiện (image-text), vector text và vector ảnh
+        cùng không gian -> tìm kiếm cross-modal: cosine(text_query, ảnh_keyframe). Đây
+        là mắt xích cho phép SEARCH BẰNG CHỮ trên video thật (không cần caption/API).
+        SigLIP yêu cầu padding='max_length' cho nhánh text."""
+        torch = self._torch
+        inputs = self._processor(
+            text=[text], padding="max_length", return_tensors="pt"
+        ).to(self.device)
+        with torch.no_grad():
+            feats = self._model.get_text_features(**inputs)
+        return self._to_unit(self._pool(feats)[0])
+
+    @staticmethod
+    def _pool(out):
+        """Lấy vector pooled. transformers 5.x trả BaseModelOutputWithPooling (dùng
+        pooler_output); bản cũ trả thẳng tensor -> dùng nguyên."""
+        return out.pooler_output if hasattr(out, "pooler_output") else out
+
+    def _to_unit(self, tensor) -> np.ndarray:
+        vec = tensor.float().cpu().numpy().astype(np.float32)
         norm = np.linalg.norm(vec)
         return vec / norm if norm > 0 else vec

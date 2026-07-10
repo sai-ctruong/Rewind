@@ -161,6 +161,22 @@ Encoder / OCR / ASR / Captioner / Reranker / VQA Answerer / Query Understander
                   └── XxxThật (lazy) → import torch/anthropic/... chỉ khi dùng
 ```
 
+### 🎥 Xử lý video THẬT (SigLIP, không cần API key)
+
+Mắt xích `video.mp4 → keyframe → embedding → tìm kiếm` đã chạy thật bằng model local (miễn phí, chỉ cần tải model lần đầu):
+
+```bash
+pip install opencv-python-headless torch transformers sentencepiece protobuf pillow
+
+# Cắt keyframe từ video
+python -m ingestion.video_ingest phim.mp4 --out artifacts/frames --every 1.0
+
+# Tìm kiếm bằng chữ trên video thật (SigLIP cross-modal, không cần API)
+python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên phố" --topk 5
+```
+
+> ✅ Đã kiểm chứng: trên clip 3 cảnh (CAT/DOG/CAR), truy vấn *"a photo of a car"* → trả về đúng khung hình CAR. `ingestion/video_ingest.py` (cv2) cắt keyframe + bỏ frame trùng; `SiglipEncoder.encode_text()` mã hoá query cùng không gian ảnh.
+
 ### 🔌 Cắm dữ liệu thật (khi có tài nguyên)
 
 1. Chuẩn bị **video + CLIP feature BTC** và đặt `ANTHROPIC_API_KEY`.
