@@ -51,13 +51,21 @@ video gốc rồi encode JPEG. Test `test_save_load_roundtrip`.
 **Còn lại:** khi IVF-PQ (A5) thay HNSW thì đổi định dạng lưu tương ứng.
 **File:** `ingestion/schemas.py`, `ingestion/video_ingest.py`, `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
-### A3. Decode video bằng GPU (NVDEC) + chỉ lấy frame cần
-**Vấn đề:** `cv2.VideoCapture` decode **mọi** frame bằng CPU rồi vứt (chỉ giữ 1/giây)
+### A3. Decode video bằng GPU (NVDEC) + chỉ lấy frame cần  ✅ ĐÃ XONG (2026-07-12)
+**Vấn đề:** `cv2.VideoCapture.read()` decode **mọi** frame bằng CPU rồi vứt (chỉ giữ 1/giây)
 → decode là nút thắt chi phối ở 50.000 giờ.
-**Làm:** thay bằng `decord`/`PyNvVideoCodec` (NVDEC) hoặc ffmpeg `-hwaccel cuda -vf fps=1`
-để chỉ giải mã frame ở mốc lấy mẫu, trên GPU. Giữ `cv2` làm fallback khi không có CUDA.
-**File:** `ingestion/video_ingest.py`
-**Ước tính ăn:** giảm mạnh thời gian decode + giải phóng CPU cho việc khác.
+**Đã làm:** backend decode cắm được trong `extract_keyframes(decode_backend=..., use_gpu=...)`:
+- **decord** (`_decode_samples_decord`): `get_batch(indices)` chỉ decode frame lấy mẫu,
+  `ctx=gpu(0)` dùng **NVDEC**; tự về CPU nếu không có CUDA. Lazy import.
+- **cv2** (`_decode_samples_cv2`): dùng `grab()` bỏ qua frame giữa, `retrieve()` chỉ tại
+  điểm mẫu → tránh giải mã đầy đủ ~(step-1)/step frame. Luôn có, không cần cài thêm.
+- **auto**: ưu tiên decord nếu import được, else cv2. Engine có `decode_backend`/`use_gpu_decode`.
+Test: `test_cv2_backend_only_samples_step_frames`, `test_backend_cv2_matches_auto`,
+`test_decord_backend_missing_raises`.
+**CÒN LẠI:** để có **NVDEC thật** phải `pip install decord` (bản CUDA) trên máy user —
+chưa cài ở env hiện tại (decord/PyNvVideoCodec đều vắng, chỉ có PyAV). Đo tốc độ decode
+thật gộp vào B1.
+**File:** `ingestion/video_ingest.py`, `retrieval/video_engine.py`
 
 ### A4. Song song hoá nhiều worker (decode ‖ embed ‖ ghi index)
 **Vấn đề:** pipeline chạy tuần tự 1 luồng: decode xong mới embed, embed xong mới index.
@@ -152,8 +160,9 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 1. ~~**A1 — Batch embedding**~~ ✅ xong
 2. ~~**A2 — Lưu/nạp index ra đĩa**~~ ✅ xong
 3. ~~**B1 — Harness benchmark**~~ 🟨 xong phần code; còn **tạo nhãn thật + chạy trên GPU** (người làm)
-4. **A3 — NVDEC decode** (gỡ nút thắt CPU) ← kế tiếp (code được)
-5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A3 đã đo được throughput thật)
+4. ~~**A3 — NVDEC decode**~~ ✅ xong (backend cắm được; cần `pip install decord` bản CUDA để có NVDEC thật)
+5. **A4 — Song song hoá** (decode ‖ embed ‖ index) ← kế tiếp (code được)
+6. **A5 — IVF-PQ + sharding** (khi tổng vector > vài triệu; cần đo RAM ở B1 trước)
 
 > Nguyên tắc: **đo trước, tối ưu sau** (blueprint Mục 11.3). Làm A1+A2 xong rồi
 > chạy thử trên ~10–50 video thật để lấy throughput/RAM thực, mới quyết A5.

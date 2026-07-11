@@ -126,6 +126,8 @@ class VideoSearchEngine:
         ocr_langs: tuple[str, ...] = ("vi", "en"),
         bm25_weight: float = 3.0,               # [PROVISIONAL] trọng số OCR/text trong RRF
         embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
+        decode_backend: str = "auto",           # A3: "auto"|"cv2"|"decord" (decord=NVDEC nếu có)
+        use_gpu_decode: bool = True,            # dùng NVDEC khi backend=decord + có CUDA
     ):
         self.encoder_names = list(encoder_names)[:2]  # KeyframeIndex có đúng 2 slot dense
         self.sample_every_s = sample_every_s
@@ -138,6 +140,8 @@ class VideoSearchEngine:
         self.ocr_langs = ocr_langs
         self.bm25_weight = bm25_weight
         self.embed_batch_size = embed_batch_size
+        self.decode_backend = decode_backend
+        self.use_gpu_decode = use_gpu_decode
         self._encoders: Optional[list] = None   # nạp lười
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
         self._ocr = None                        # EasyOCR, nạp lười
@@ -259,6 +263,7 @@ class VideoSearchEngine:
             sample_every_s=sample_every_s or self.sample_every_s,
             # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
             max_frames=self.max_frames if max_frames == -1 else max_frames,
+            decode_backend=self.decode_backend, use_gpu=self.use_gpu_decode,
         )
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
@@ -282,6 +287,7 @@ class VideoSearchEngine:
             all_raws.extend(extract_keyframes(
                 vp, out_dir, sample_every_s=sample_every_s or self.sample_every_s,
                 max_frames=mf,   # None = không giới hạn / video (cả dataset đầy đủ)
+                decode_backend=self.decode_backend, use_gpu=self.use_gpu_decode,
             ))
         if not all_raws:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")

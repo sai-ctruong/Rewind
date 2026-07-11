@@ -12,14 +12,23 @@ CHIẾN LƯỢC CHỌN KEYFRAME:
     frame giống hệt) -> giảm số keyframe mà không mất nội dung. Đây là bước dedup THÔ
     ở mức pixel; dedup tinh hơn ở mức ngữ nghĩa (embedding) làm sau ở ingestion/dedup.py.
 
-Chỉ cần OpenCV (cv2) — KHÔNG cần GPU/API. Chạy:
-    python -m ingestion.video_ingest path/to/video.mp4 --out artifacts/frames --every 1.0
+BACKEND DECODE (A3 — gỡ nút thắt CPU khi quét dataset lớn):
+  - "decord": nếu cài `decord`, decode CHỈ các frame lấy mẫu (get_batch theo index) và
+    có thể chạy trên GPU (NVDEC) -> nhanh gấp nhiều lần cho video dài. Cần build decord
+    có CUDA để dùng GPU; không có CUDA thì decord vẫn decode-theo-index trên CPU (vẫn
+    nhanh hơn đọc tuần tự toàn bộ).
+  - "cv2" (mặc định, luôn có): tối ưu bằng `grab()` để BỎ QUA frame không lấy mẫu và chỉ
+    `retrieve()` (giải mã + copy) tại điểm mẫu -> tránh giải mã đầy đủ mọi frame.
+  - "auto": ưu tiên decord (GPU) nếu import được, ngược lại rơi về cv2.
+Cài GPU decode (tuỳ chọn):  pip install decord   (bản CUDA nếu muốn NVDEC).
+
+Chạy:  python -m ingestion.video_ingest path/to/video.mp4 --out artifacts/frames --every 1.0
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from .schemas import RawKeyframe
 
@@ -34,6 +43,95 @@ def _color_histogram(frame):
     return hist
 
 
+def _probe_fps(video_path: Path) -> float:
+    """Đọc FPS nhanh bằng cv2 (rẻ). Fallback 25.0 khi metadata thiếu."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"OpenCV không mở được video: {video_path}. Kiểm tra codec/đường dẫn."
+        )
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    cap.release()
+    return fps if fps > 0 else 25.0
+
+
+def _decode_samples_cv2(video_path: Path, step: int) -> Iterator[tuple[int, "object"]]:
+    """Yield (frame_idx, frame_BGR) CHỈ tại điểm lấy mẫu.
+
+    Tối ưu quan trọng: dùng `grab()` (chỉ tiến con trỏ, KHÔNG giải mã đầy đủ + copy)
+    cho các frame BỎ QUA, và `retrieve()` (giải mã) chỉ tại mốc lấy mẫu -> tránh chi
+    phí giải mã/màu/copy cho ~(step-1)/step số frame."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"OpenCV không mở được video: {video_path}. Kiểm tra codec/đường dẫn."
+        )
+    frame_idx = 0
+    try:
+        while True:
+            if not cap.grab():          # tiến tới frame kế; hết video -> dừng
+                break
+            if frame_idx % step == 0:
+                ok, frame = cap.retrieve()   # chỉ giải mã tại điểm mẫu
+                if not ok:
+                    break
+                yield frame_idx, frame
+            frame_idx += 1
+    finally:
+        cap.release()
+
+
+def _decode_samples_decord(
+    video_path: Path, step: int, use_gpu: bool,
+) -> Iterator[tuple[int, "object"]]:  # pragma: no cover - cần cài decord + (CUDA)
+    """Yield (frame_idx, frame_BGR) chỉ tại điểm mẫu, dùng decord.
+
+    decord.get_batch(indices) chỉ giải mã ĐÚNG các frame yêu cầu (seek tới keyframe
+    gần nhất rồi decode tới đích) và với ctx=gpu(0) dùng NVDEC. Giải mã theo cụm nhỏ
+    để chặn bộ nhớ. Trả BGR để khớp phần còn lại (histogram/encode dùng cv2 BGR)."""
+    import cv2
+    import decord
+
+    ctx = decord.cpu(0)
+    if use_gpu:
+        try:
+            ctx = decord.gpu(0)
+            decord.VideoReader(str(video_path), ctx=ctx)  # thử mở trên GPU
+        except Exception:
+            ctx = decord.cpu(0)  # không có NVDEC -> vẫn decode-theo-index trên CPU
+    vr = decord.VideoReader(str(video_path), ctx=ctx)
+    indices = list(range(0, len(vr), step))
+    for start in range(0, len(indices), 64):     # cụm 64 để chặn RAM/VRAM
+        chunk = indices[start:start + 64]
+        batch = vr.get_batch(chunk).asnumpy()     # (b,H,W,3) RGB
+        for j, fi in enumerate(chunk):
+            yield fi, cv2.cvtColor(batch[j], cv2.COLOR_RGB2BGR)
+
+
+def _iter_samples(
+    video_path: Path, step: int, backend: str, use_gpu: bool,
+) -> Iterator[tuple[int, "object"]]:
+    """Chọn backend decode và yield (frame_idx, frame_BGR) tại điểm mẫu.
+
+    backend: "cv2" | "decord" | "auto" (ưu tiên decord nếu import được, else cv2)."""
+    if backend in ("auto", "decord"):
+        import importlib.util
+
+        if importlib.util.find_spec("decord") is not None:
+            yield from _decode_samples_decord(video_path, step, use_gpu)
+            return
+        if backend == "decord":
+            raise ImportError(
+                "backend='decord' nhưng chưa cài decord. `pip install decord` "
+                "(bản CUDA nếu muốn NVDEC), hoặc dùng backend='cv2'/'auto'."
+            )
+    yield from _decode_samples_cv2(video_path, step)
+
+
 def extract_keyframes(
     video_path: str | Path,
     out_dir: str | Path,
@@ -43,6 +141,8 @@ def extract_keyframes(
     max_frames: Optional[int] = None,
     jpeg_quality: int = 90,
     save_images: bool = False,
+    decode_backend: str = "auto",
+    use_gpu: bool = True,
 ) -> list[RawKeyframe]:
     """Cắt keyframe đại diện từ 1 video.
 
@@ -51,6 +151,10 @@ def extract_keyframes(
     sinh hàng nghìn frame -> ghi đĩa vừa chậm vừa tốn hàng GB dung lượng; giữ trong RAM
     rồi embed xong là bỏ (engine còn xóa bytes của frame bị dedup loại). Đặt
     save_images=True nếu thực sự cần file ảnh trên đĩa (vd tool CLI debug).
+
+    DECODE (A3): chỉ giải mã các frame LẤY MẪU, không giải mã đầy đủ toàn bộ video.
+    `decode_backend`="auto" ưu tiên decord (GPU/NVDEC nếu có) rồi tới cv2; xem docstring
+    module. `use_gpu` chỉ có tác dụng với decord.
 
     Args:
         video_path: đường dẫn file video (.mp4/.avi/...).
@@ -63,6 +167,8 @@ def extract_keyframes(
         jpeg_quality: chất lượng JPG (áp cho cả bytes trong RAM lẫn file trên đĩa).
         save_images: True = ghi file .jpg ra đĩa (image_path); False = giữ JPEG trong
             RAM (image_bytes), không đụng đĩa.
+        decode_backend: "auto" | "cv2" | "decord" — nguồn giải mã frame (xem module).
+        use_gpu: dùng NVDEC (chỉ áp cho decord; không có CUDA thì tự về CPU).
 
     Returns:
         Danh sách RawKeyframe — sẵn sàng đưa vào pipeline embed SigLIP, OCR/ASR, caption.
@@ -77,61 +183,46 @@ def extract_keyframes(
     if save_images:
         frame_dir.mkdir(parents=True, exist_ok=True)
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(
-            f"OpenCV không mở được video: {video_path}. Kiểm tra codec/đường dẫn."
-        )
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-    if fps <= 0:
-        fps = 25.0  # fallback khi metadata fps thiếu
+    fps = _probe_fps(video_path)
     step = max(1, int(round(fps * sample_every_s)))
+    src = str(video_path)
 
     keyframes: list[RawKeyframe] = []
     last_hist = None
-    frame_idx = 0
     kept = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if frame_idx % step == 0:  # điểm lấy mẫu đều
-                hist = _color_histogram(frame)
-                is_dup = (
-                    last_hist is not None
-                    and float(cv2.compareHist(last_hist, hist, cv2.HISTCMP_CORREL))
-                    >= duplicate_threshold
-                )
-                if not is_dup:
-                    ts = frame_idx / fps
-                    # source_video + frame_idx: cho phép DECODE LẠI frame từ video gốc
-                    # khi index được nạp từ đĩa (A2 — không lưu ảnh nặng theo index).
-                    src = str(video_path)
-                    if save_images:  # ghi file .jpg ra đĩa
-                        img_path = frame_dir / f"{kept:06d}.jpg"
-                        cv2.imwrite(str(img_path), frame,
-                                    [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                        kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
-                                         timestamp=round(ts, 3), image_path=str(img_path),
-                                         source_video=src, frame_idx=frame_idx)
-                    else:  # giữ JPEG trong RAM — KHÔNG chạm đĩa
-                        ok_enc, buf = cv2.imencode(
-                            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                        if not ok_enc:
-                            frame_idx += 1
-                            continue
-                        kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
-                                         timestamp=round(ts, 3), image_bytes=buf.tobytes(),
-                                         source_video=src, frame_idx=frame_idx)
-                    keyframes.append(kf)
-                    last_hist = hist
-                    kept += 1
-                    if max_frames is not None and kept >= max_frames:
-                        break
-            frame_idx += 1
-    finally:
-        cap.release()
+    # Iterator chỉ trả frame TẠI ĐIỂM MẪU (backend tự bỏ qua frame giữa) -> không giải
+    # mã thừa. frame_idx là số thứ tự frame THẬT trong video (để tính timestamp + seek lại).
+    for frame_idx, frame in _iter_samples(video_path, step, decode_backend, use_gpu):
+        hist = _color_histogram(frame)
+        is_dup = (
+            last_hist is not None
+            and float(cv2.compareHist(last_hist, hist, cv2.HISTCMP_CORREL))
+            >= duplicate_threshold
+        )
+        if is_dup:
+            continue
+        ts = frame_idx / fps
+        # source_video + frame_idx: cho phép DECODE LẠI frame từ video gốc khi index
+        # được nạp từ đĩa (A2 — không lưu ảnh nặng theo index).
+        if save_images:  # ghi file .jpg ra đĩa
+            img_path = frame_dir / f"{kept:06d}.jpg"
+            cv2.imwrite(str(img_path), frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+            kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
+                             timestamp=round(ts, 3), image_path=str(img_path),
+                             source_video=src, frame_idx=frame_idx)
+        else:  # giữ JPEG trong RAM — KHÔNG chạm đĩa
+            ok_enc, buf = cv2.imencode(".jpg", frame,
+                                       [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+            if not ok_enc:
+                continue
+            kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
+                             timestamp=round(ts, 3), image_bytes=buf.tobytes(),
+                             source_video=src, frame_idx=frame_idx)
+        keyframes.append(kf)
+        last_hist = hist
+        kept += 1
+        if max_frames is not None and kept >= max_frames:
+            break
     return keyframes
 
 

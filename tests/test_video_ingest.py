@@ -14,7 +14,9 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")  # bỏ qua nếu môi trường chưa cài OpenCV
 
-from ingestion.video_ingest import extract_keyframes  # noqa: E402
+from ingestion.video_ingest import (  # noqa: E402
+    _iter_samples, extract_keyframes,
+)
 from ingestion.schemas import RawKeyframe  # noqa: E402
 
 
@@ -86,6 +88,37 @@ def test_duplicate_dropping(tmp_path) -> None:
 def test_missing_file_raises(tmp_path) -> None:
     with pytest.raises(FileNotFoundError):
         extract_keyframes(tmp_path / "khong_co.mp4", tmp_path / "f")
+
+
+def test_cv2_backend_only_samples_step_frames(tmp_path) -> None:
+    """A3: iterator cv2 chỉ trả frame TẠI ĐIỂM MẪU (0, step, 2*step, …)."""
+    video = tmp_path / "v.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0)], frames_per_color=12, fps=10)
+    step = 5
+    idxs = [fi for fi, _frame in _iter_samples(video, step, "cv2", use_gpu=False)]
+    assert idxs == list(range(0, 24, step))     # 24 frame -> 0,5,10,15,20
+
+
+def test_backend_cv2_matches_auto(tmp_path) -> None:
+    """cv2 và auto (decord vắng -> về cv2) cho cùng keyframe."""
+    video = tmp_path / "v.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10, fps=10)
+    a = extract_keyframes(video, tmp_path / "f", sample_every_s=0.3, decode_backend="auto")
+    b = extract_keyframes(video, tmp_path / "f", sample_every_s=0.3, decode_backend="cv2")
+    assert [k.frame_idx for k in a] == [k.frame_idx for k in b]
+    assert len(a) == len(b) >= 3
+
+
+def test_decord_backend_missing_raises(tmp_path) -> None:
+    """Yêu cầu backend='decord' khi chưa cài -> báo lỗi rõ ràng (không im lặng)."""
+    import importlib.util
+
+    if importlib.util.find_spec("decord") is not None:
+        pytest.skip("decord đã cài — không kiểm nhánh thiếu")
+    video = tmp_path / "v.mp4"
+    _make_video(video, [(0, 0, 255)], frames_per_color=8)
+    with pytest.raises(ImportError):
+        extract_keyframes(video, tmp_path / "f", decode_backend="decord")
 
 
 def test_custom_video_id(tmp_path) -> None:
