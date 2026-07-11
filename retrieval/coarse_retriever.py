@@ -114,8 +114,13 @@ class CoarseRetriever:
         query_text: Optional[str] = None,
         filters: Optional[dict[str, Any]] = None,
         top_k: int = 1000,
+        weights: Optional[dict[str, float]] = None,
     ) -> list[Candidate]:
-        """Trả top-K Candidate đã fusion. Ít nhất một nguồn (vec/text) phải có."""
+        """Trả top-K Candidate đã fusion. Ít nhất một nguồn (vec/text) phải có.
+
+        `weights`: trọng số RRF theo nguồn ({"clip":1,"siglip":1,"bm25":3}...). Tăng
+        weight BM25 giúp khớp CHỮ chính xác (biển hiệu) nổi lên khi dense (2 encoder)
+        vốn áp đảo."""
         if query_clip_vec is None and query_siglip_vec is None and query_text is None:
             raise ValueError(
                 "Cần ít nhất 1 tín hiệu query: clip_vec, siglip_vec, hoặc text."
@@ -141,7 +146,7 @@ class CoarseRetriever:
         if not ranked_lists:
             return []
 
-        fused = reciprocal_rank_fusion(ranked_lists, self.rrf_k)
+        fused = reciprocal_rank_fusion(ranked_lists, self.rrf_k, weights=weights)
         ordered = sorted(fused.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
 
         return [

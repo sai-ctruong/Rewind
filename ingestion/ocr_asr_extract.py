@@ -41,6 +41,42 @@ class MockOcrEngine(OcrEngine):
         return self.canned.get(raw.id)
 
 
+class EasyOcrEngine(OcrEngine):
+    """Bản THẬT: EasyOCR (lazy-import) — đọc chữ trên keyframe (biển hiệu, phụ đề...).
+
+    VÌ SAO EasyOCR (thay vì PaddleOCR): dùng torch nên TỰ chạy GPU (đã có torch CUDA),
+    dễ cài trên Python 3.14, hỗ trợ tiếng Việt + Anh (cùng bảng Latin). Model reader
+    nạp LƯỜI (tải ~100MB lần đầu). Kết quả nối các đoạn text có độ tin cậy >= min_conf
+    thành 1 chuỗi để đưa vào BM25 (tìm chữ/biển hiệu).
+    """
+
+    def __init__(self, langs: tuple[str, ...] = ("vi", "en"), gpu: Optional[bool] = None,
+                 min_conf: float = 0.3):
+        try:
+            import easyocr
+        except ImportError as e:  # pragma: no cover
+            raise ImportError(
+                "EasyOcrEngine cần 'easyocr'. Cài: pip install easyocr. "
+                "(Đang mock-first — dùng MockOcrEngine để test offline.)"
+            ) from e
+        if gpu is None:  # tự bật GPU nếu có CUDA
+            try:
+                import torch
+                gpu = bool(torch.cuda.is_available())
+            except ImportError:
+                gpu = False
+        self.min_conf = min_conf
+        self._reader = easyocr.Reader(list(langs), gpu=gpu)
+
+    def extract(self, raw: RawKeyframe) -> Optional[str]:  # pragma: no cover - bản thật
+        if raw.image_path is None:
+            return None
+        results = self._reader.readtext(raw.image_path)
+        texts = [t for (_box, t, conf) in results if conf >= self.min_conf and t.strip()]
+        text = " ".join(texts).strip()
+        return text or None
+
+
 class PaddleOcrEngine(OcrEngine):
     """Bản THẬT: PaddleOCR (lazy-import). Hỗ trợ tiếng Việt + tiếng Anh."""
 

@@ -59,6 +59,7 @@ class VideoIndexEntry:
     raws: dict[str, RawKeyframe]
     num_sampled: int          # số keyframe sau bước cắt thô (histogram)
     num_indexed: int          # số keyframe sau dedup ngữ nghĩa (vào index)
+    ocr_by_id: dict[str, str] = field(default_factory=dict)  # chữ OCR đọc được / keyframe
 
 
 class VideoSearchEngine:
@@ -76,6 +77,9 @@ class VideoSearchEngine:
         query_templates: Sequence[str] = QUERY_TEMPLATES,
         rerank_model: str = "Qwen/Qwen2-VL-2B-Instruct",
         rerank_pool: int = 8,                   # [PROVISIONAL] số ứng viên coarse đưa vào VLM
+        enable_ocr: bool = True,                # đọc chữ trên keyframe -> tìm biển hiệu/chữ
+        ocr_langs: tuple[str, ...] = ("vi", "en"),
+        bm25_weight: float = 3.0,               # [PROVISIONAL] trọng số OCR/text trong RRF
     ):
         self.encoder_names = list(encoder_names)[:2]  # KeyframeIndex có đúng 2 slot dense
         self.sample_every_s = sample_every_s
@@ -84,8 +88,12 @@ class VideoSearchEngine:
         self.query_templates = list(query_templates)
         self.rerank_model = rerank_model
         self.rerank_pool = rerank_pool
+        self.enable_ocr = enable_ocr
+        self.ocr_langs = ocr_langs
+        self.bm25_weight = bm25_weight
         self._encoders: Optional[list] = None   # nạp lười
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
+        self._ocr = None                        # EasyOCR, nạp lười
 
     # ------------------------------------------------------------- encoders
     def _load_encoders(self) -> list:
@@ -119,10 +127,26 @@ class VideoSearchEngine:
             reranker, RerankConfig(max_candidates=self.rerank_pool,
                                    early_stop=False, time_budget_s=3600.0))
 
+    # ------------------------------------------------------------------- ocr
+    def _get_ocr(self):
+        if self._ocr is None:
+            from ingestion.ocr_asr_extract import EasyOcrEngine
+            self._ocr = EasyOcrEngine(langs=self.ocr_langs)
+        return self._ocr
+
+    def set_ocr(self, ocr) -> None:
+        """Bơm OCR engine ngoài (mock trong test). Bật enable_ocr."""
+        self._ocr = ocr
+        self.enable_ocr = True
+
     # -------------------------------------------------------------- indexing
     def _embed_raws(self, raws: list[RawKeyframe]) -> list[KeyframeRecord]:
-        """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip)."""
+        """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip) + OCR (nếu bật).
+
+        OCR đọc chữ trên khung hình (biển hiệu, phụ đề) -> lưu vào ocr_text để đưa vào
+        BM25 (searchable_text) -> tìm được bằng CHỮ chứ không chỉ hình ảnh."""
         encoders = self._load_encoders()
+        ocr = self._get_ocr() if self.enable_ocr else None
         records: list[KeyframeRecord] = []
         for r in raws:
             rec = KeyframeRecord(
@@ -131,6 +155,8 @@ class VideoSearchEngine:
             )
             if len(encoders) > 1:
                 rec.siglip_embedding = encoders[1].embed(r)
+            if ocr is not None:
+                rec.ocr_text = ocr.extract(r)
             records.append(rec)
         return records
 
@@ -149,6 +175,7 @@ class VideoSearchEngine:
             video_id=video_id, index=KeyframeIndex.build(kept),
             raws={r.id: r for r in raws},
             num_sampled=len(records), num_indexed=len(kept),
+            ocr_by_id={r.id: r.ocr_text for r in records if r.ocr_text},
         )
 
     def index_video(
@@ -216,7 +243,12 @@ class VideoSearchEngine:
         coarse = retriever.search(
             query_clip_vec=qvecs[0],
             query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
+            # query text -> BM25 trên OCR/objects/caption: khớp CHỮ trên biển hiệu.
+            # RRF gộp dense (hình ảnh) + sparse (chữ) -> tìm được cả cảnh lẫn text.
+            query_text=query,
             top_k=pool,
+            # BM25 (OCR/chữ) nặng hơn để khớp biển hiệu nổi lên (dense có 2 encoder).
+            weights={"bm25": self.bm25_weight},
         )
         if not rerank or not coarse:
             return coarse[:top_k]

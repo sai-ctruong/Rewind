@@ -262,6 +262,7 @@ def create_app() -> Flask:
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
                     "score": round(float(c.score), 3), "video_id": c.video_id,
                     "explanation": getattr(c, "explanation", None),
+                    "ocr": entry.ocr_by_id.get(c.keyframe_id),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)
 

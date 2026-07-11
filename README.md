@@ -179,6 +179,8 @@ python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên ph
 
 **Độ chính xác nâng cao** (`retrieval/video_engine.py`): ensemble **SigLIP2 + SigLIP-multilingual** fuse bằng RRF (Mục 2.1) · **query prompt ensemble** — trung bình embedding nhiều biến thể câu (Mục 4.2) · lấy mẫu dày 0.5s + **dedup ngữ nghĩa** (Mục 5.1). Hỗ trợ **tiếng Việt lẫn tiếng Anh**. Benchmark trước/sau: `python -m evaluation.bench_video_engine` (Mục 11.3).
 
+**Tìm bằng CHỮ trên biển hiệu (OCR)** (`ingestion/ocr_asr_extract.py::EasyOcrEngine`): SigLIP hiểu hình ảnh nhưng không đọc chữ cụ thể. EasyOCR (GPU, tiếng Việt+Anh) đọc chữ trên mỗi keyframe → index vào **BM25**; khi truy vấn, RRF gộp dense (SigLIP) + sparse (OCR, trọng số cao hơn) → tìm được cả cảnh lẫn text/biển hiệu (VD "NEW YORK", "SEPHORA"). Bật mặc định (`enable_ocr=True`).
+
 **Rerank bằng VLM local — hiểu từng chữ + ngữ cảnh** (`retrieval/vlm_rerank.py`, Mục 4.4): bật tuỳ chọn (checkbox "Rerank VLM" trên UI, hoặc `search(..., rerank=True)`). SigLIP là dual-encoder (nén cả câu thành 1 vector, yếu về tổ hợp từ); **Qwen2-VL-2B** dùng cross-attention đọc ảnh + *từng token* câu → suy luận đúng quan hệ/thứ tự/số lượng, **đa ngôn ngữ**. Kiến trúc 2 tầng: coarse SigLIP (nhanh, recall) → VLM rerank top-K (chậm trên CPU, chính xác). **Không cần API key** (model chạy local).
 
 ### 🔌 Cắm dữ liệu thật (khi có tài nguyên)

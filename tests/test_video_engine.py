@@ -71,7 +71,7 @@ def engine_and_entry(tmp_path):
     video = tmp_path / "scenes.mp4"
     # 3 cảnh: đỏ, xanh lá, xanh dương — mỗi cảnh 10 frame tĩnh (nhiều bản sao).
     _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
     engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
     entry = engine.index_video(video, tmp_path / "frames")
     return engine, entry
@@ -126,7 +126,7 @@ def test_index_dataset_searches_across_videos(tmp_path) -> None:
     va = tmp_path / "vidA.mp4"; vb = tmp_path / "vidB.mp4"
     _make_video(va, [(0, 0, 255), (0, 255, 0)], frames_per_color=10)
     _make_video(vb, [(255, 0, 0)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
     engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
 
     entry = engine.index_dataset([va, vb], tmp_path / "frames")
@@ -143,10 +143,40 @@ def test_index_dataset_searches_across_videos(tmp_path) -> None:
     assert res2[0].video_id == "vidA"
 
 
+class SignMockOcr:
+    """OCR giả: trả token DUY NHẤT theo màu cảnh (không phải tên màu) -> kiểm BM25
+    trên OCR text hoạt động (dense encoder KHÔNG biết token này)."""
+
+    def extract(self, raw: RawKeyframe):
+        b, g, r = cv2.imread(raw.image_path).reshape(-1, 3).mean(axis=0)  # BGR
+        if r > 150 and g < 100 and b < 100:
+            return "bienbao SPECIALREDSIGN"
+        if g > 150 and r < 100:
+            return "bienbao SPECIALGREENSIGN"
+        if b > 150 and r < 100:
+            return "bienbao SPECIALBLUESIGN"
+        return None
+
+
+def test_ocr_text_search_finds_sign(tmp_path) -> None:
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.set_ocr(SignMockOcr())            # bật OCR (mock)
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    # Tìm bằng CHỮ trên biển — token chỉ có trong OCR, dense không biết.
+    res = engine.search(entry, "SPECIALGREENSIGN", top_k=3)
+    assert res, "phải có kết quả từ BM25 trên OCR"
+    assert 1.0 <= res[0].timestamp < 2.0     # cảnh xanh lá ~[1,2)s
+    assert "bm25" in res[0].source_ranks     # kết quả đến từ BM25 (OCR text)
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=30)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=30, enable_ocr=False)
     engine.set_encoders([ColorMockEncoder()])   # chỉ 1 encoder
     entry = engine.index_video(video, tmp_path / "f")
     results = engine.search(entry, "red", top_k=2)

@@ -26,6 +26,9 @@ sentencepiece>=0.2            # tokenizer text của SigLIP
 protobuf>=4.0                 # phụ thuộc tokenizer SigLIP
 pillow>=10.0                  # đọc ảnh keyframe cho SigLIP
 
+# --- OCR: đọc chữ/biển hiệu trên keyframe -> tìm bằng CHỮ (BM25), Mục 2/3 ---
+easyocr>=1.7                  # OCR tiếng Việt+Anh, tự chạy GPU qua torch (EasyOcrEngine)
+
 # --- VLM rerank local: hiểu từng chữ + ngữ cảnh (Mục 4.4, không cần API key) ---
 qwen-vl-utils>=0.0.8          # tiện ích xử lý ảnh cho Qwen2-VL
 accelerate>=0.30             # tải/chạy model hiệu quả (Qwen2-VL-2B rerank)

@@ -57,7 +57,7 @@ class ColorMockReranker(Reranker):
 def engine_entry(tmp_path):
     video = tmp_path / "scenes.mp4"
     _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, rerank_pool=6)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, rerank_pool=6, enable_ocr=False)
     engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
     entry = engine.index_video(video, tmp_path / "frames")
     return engine, entry
