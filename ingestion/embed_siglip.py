@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from . import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) trước khi nạp transformers
 from .embed_clip import deterministic_unit_vector
 from .schemas import RawKeyframe
 

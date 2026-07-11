@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 
+from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) trước transformers
 from retrieval.video_engine import DEFAULT_ENCODERS, VideoSearchEngine
 
 

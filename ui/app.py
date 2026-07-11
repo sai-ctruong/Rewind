@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 from flask import Flask, jsonify, request, send_file
 
+from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) sớm nhất
 from ingestion.build_index import KeyframeIndex
 from ingestion.schemas import KeyframeRecord
 from kisc_module.dialogue_manager import KISCDialogueManager

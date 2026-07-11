@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) trước transformers
 from retrieval.fine_rerank import Reranker
 
 # Prompt chấm điểm: ép VLM đọc mô tả + nhìn ảnh rồi cho 1 số 0-10. Song ngữ để ổn định.
