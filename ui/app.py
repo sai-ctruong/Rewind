@@ -179,6 +179,19 @@ def create_app() -> Flask:
 
     video_state: dict = {"engine": VideoSearchEngine(), "videos": {}}
 
+    def _index_opts(data: dict) -> dict:
+        """Tuỳ chọn nạp từ request: lấy mẫu mỗi N giây, trần frame (0=không giới hạn),
+        bật/tắt OCR — cho phép index video DÀI đầy đủ (không bị cắt 120 frame)."""
+        o: dict = {}
+        if data.get("every"):
+            o["sample_every_s"] = float(data["every"])
+        if data.get("max_frames") is not None and str(data.get("max_frames")) != "":
+            mf = int(data["max_frames"])
+            o["max_frames"] = None if mf <= 0 else mf   # <=0 -> không giới hạn
+        if "ocr" in data:
+            o["enable_ocr"] = bool(data["ocr"])
+        return o
+
     @app.get("/api/video/list")
     def video_list():
         vids = (sorted(p.name for p in VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists()
@@ -199,7 +212,8 @@ def create_app() -> Flask:
             if not vids:
                 return jsonify(error="Không có video nào trong data/videos/"), 404
             try:
-                entry = video_state["engine"].index_dataset(vids, FRAMES_DIR)
+                entry = video_state["engine"].index_dataset(
+                    vids, FRAMES_DIR, **_index_opts(request.json or {}))
             except RuntimeError as e:
                 return jsonify(error=str(e)), 400
             video_state["videos"]["__dataset__"] = entry
@@ -214,7 +228,8 @@ def create_app() -> Flask:
             entry = video_state["videos"][path.stem]
             return jsonify(video=path.stem, cached=True, frames=entry.num_indexed)
         try:
-            entry = video_state["engine"].index_video(path, FRAMES_DIR)
+            entry = video_state["engine"].index_video(
+                path, FRAMES_DIR, **_index_opts(request.json or {}))
         except RuntimeError as e:
             return jsonify(error=str(e)), 400
         video_state["videos"][entry.video_id] = entry
@@ -239,7 +254,8 @@ def create_app() -> Flask:
         if not vids:
             return jsonify(error=f"Không tìm thấy video trong: {raw_path}"), 404
         try:
-            entry = video_state["engine"].index_dataset(vids, FRAMES_DIR)
+            entry = video_state["engine"].index_dataset(
+                vids, FRAMES_DIR, **_index_opts(request.json or {}))
         except RuntimeError as e:
             return jsonify(error=str(e)), 400
         video_state["videos"]["__dataset__"] = entry

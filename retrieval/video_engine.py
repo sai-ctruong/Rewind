@@ -71,8 +71,8 @@ class VideoSearchEngine:
     def __init__(
         self,
         encoder_names: Sequence[str] = DEFAULT_ENCODERS,
-        sample_every_s: float = 0.5,           # [PROVISIONAL] dày hơn bản cũ (1.0s)
-        max_frames: int = 120,                  # [PROVISIONAL] trần frame lấy mẫu
+        sample_every_s: float = 1.0,           # [PROVISIONAL] 1 frame/giây
+        max_frames: Optional[int] = None,       # None = KHÔNG giới hạn (index cả video)
         dedup_threshold: float = 0.97,          # [PROVISIONAL] khớp settings.yaml
         query_templates: Sequence[str] = QUERY_TEMPLATES,
         rerank_model: str = "Qwen/Qwen2-VL-2B-Instruct",
@@ -140,13 +140,15 @@ class VideoSearchEngine:
         self.enable_ocr = True
 
     # -------------------------------------------------------------- indexing
-    def _embed_raws(self, raws: list[RawKeyframe]) -> list[KeyframeRecord]:
+    def _embed_raws(self, raws: list[RawKeyframe],
+                    enable_ocr: Optional[bool] = None) -> list[KeyframeRecord]:
         """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip) + OCR (nếu bật).
 
         OCR đọc chữ trên khung hình (biển hiệu, phụ đề) -> lưu vào ocr_text để đưa vào
         BM25 (searchable_text) -> tìm được bằng CHỮ chứ không chỉ hình ảnh."""
         encoders = self._load_encoders()
-        ocr = self._get_ocr() if self.enable_ocr else None
+        use_ocr = self.enable_ocr if enable_ocr is None else enable_ocr
+        ocr = self._get_ocr() if use_ocr else None
         records: list[KeyframeRecord] = []
         for r in raws:
             rec = KeyframeRecord(
@@ -180,35 +182,42 @@ class VideoSearchEngine:
 
     def index_video(
         self, video_path: str | Path, out_dir: str | Path,
-        video_id: Optional[str] = None,
+        video_id: Optional[str] = None, *,
+        sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
+        enable_ocr: Optional[bool] = None,
     ) -> VideoIndexEntry:
         raws = extract_keyframes(
             video_path, out_dir, video_id=video_id,
-            sample_every_s=self.sample_every_s, max_frames=self.max_frames,
+            sample_every_s=sample_every_s or self.sample_every_s,
+            # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
+            max_frames=self.max_frames if max_frames == -1 else max_frames,
         )
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
         vid = raws[0].video_id
-        return self._build_entry(raws, self._embed_raws(raws), video_id=vid)
+        return self._build_entry(raws, self._embed_raws(raws, enable_ocr), video_id=vid)
 
     def index_dataset(
         self, video_paths: Sequence[str | Path], out_dir: str | Path,
-        dataset_id: str = "__dataset__",
+        dataset_id: str = "__dataset__", *,
+        sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
+        enable_ocr: Optional[bool] = None,
     ) -> VideoIndexEntry:
         """Index NHIỀU video vào MỘT index chung -> tìm xuyên suốt cả dataset.
 
         Mỗi keyframe giữ video_id thật nên kết quả biết rõ 'ở video nào, giây mấy'.
         Đây là hướng scale của blueprint (Mục 5): một index cho cả kho, có thể shard
         về sau. Keyframe id dạng '{video_id}/{n}' đã toàn cục duy nhất."""
+        mf = self.max_frames if max_frames == -1 else max_frames
         all_raws: list[RawKeyframe] = []
         for vp in video_paths:
             all_raws.extend(extract_keyframes(
-                vp, out_dir, sample_every_s=self.sample_every_s,
-                max_frames=self.max_frames,
+                vp, out_dir, sample_every_s=sample_every_s or self.sample_every_s,
+                max_frames=mf,   # None = không giới hạn / video (cả dataset đầy đủ)
             ))
         if not all_raws:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")
-        return self._build_entry(all_raws, self._embed_raws(all_raws),
+        return self._build_entry(all_raws, self._embed_raws(all_raws, enable_ocr),
                                  video_id=dataset_id)
 
     # ---------------------------------------------------------------- query
