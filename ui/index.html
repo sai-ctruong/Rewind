@@ -220,6 +220,10 @@
   .rerank-tog { display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
     color: var(--muted); cursor: pointer; user-select: none; }
   .rerank-tog input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+  .folder-in { flex: 1 1 280px; font: inherit; font-size: 13.5px; padding: 9px 12px;
+    border-radius: 10px; background: var(--bg); border: 1px solid var(--border);
+    color: var(--ink); font-family: var(--mono); }
+  .folder-in::placeholder { color: var(--faint); font-family: var(--font); }
   .vcard .why { padding: 0 11px 10px; font-size: 11.5px; color: var(--faint); }
   .vcard .vid { padding: 0 11px 10px; font-size: 11.5px; color: var(--indigo); font-weight: 550;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -313,6 +317,8 @@
           <button class="btn ghost" id="kis-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="kis-rerank"> Rerank VLM</label>
           <span class="vstatus" id="kis-status"></span>
+          <input class="folder-in" id="kis-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
+          <button class="btn ghost" id="kis-folder-btn">Nạp thư mục</button>
         </div>
         <form class="search-bar" id="kis-form">
           <input id="kis-query" autocomplete="off" placeholder="VD: một chiếc xe hơi trên đường" />
@@ -339,6 +345,8 @@
           <button class="btn ghost" id="avs-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="avs-rerank"> Rerank VLM</label>
           <span class="vstatus" id="avs-status"></span>
+          <input class="folder-in" id="avs-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
+          <button class="btn ghost" id="avs-folder-btn">Nạp thư mục</button>
         </div>
         <form class="search-bar" id="avs-form">
           <input id="avs-query" autocomplete="off" placeholder="VD: cảnh đường phố có xe cộ" />
@@ -391,6 +399,8 @@
           <button class="btn ghost" id="video-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="video-rerank"> Rerank VLM</label>
           <span class="vstatus" id="video-status"></span>
+          <input class="folder-in" id="video-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
+          <button class="btn ghost" id="video-folder-btn">Nạp thư mục</button>
         </div>
         <form class="search-bar" id="video-form">
           <input id="video-query" autocomplete="off"
@@ -723,6 +733,28 @@
           st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”.`; }
       } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
       q("load").disabled = false;
+    });
+    // Nạp cả một THƯ MỤC dataset bất kỳ trên máy (không cần chép vào data/videos/).
+    const fbtn = q("folder-btn");
+    if (fbtn) fbtn.addEventListener("click", async () => {
+      const path = q("folder").value.trim();
+      const st = q("status");
+      if (!path) { st.textContent = "Nhập đường dẫn thư mục dataset."; return; }
+      st.className = "vstatus busy";
+      st.textContent = "Đang quét thư mục + cắt keyframe + embed (nhiều video → có thể lâu)…";
+      fbtn.disabled = true;
+      try {
+        const j = await (await fetch("/api/video/index_folder", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) })).json();
+        st.className = "vstatus";
+        if (j.error) { st.textContent = "Lỗi: " + j.error; }
+        else {
+          INDEXED.add("__dataset__"); await refresh();
+          q("select").value = "__dataset__";
+          st.textContent = `✓ Đã nạp ${j.videos} video (${j.frames} keyframe) từ: ${j.folder}. Nhập câu để tìm cả dataset.`;
+        }
+      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp thư mục."; }
+      fbtn.disabled = false;
     });
     q("form").addEventListener("submit", async (e) => {
       e.preventDefault();

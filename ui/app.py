@@ -220,6 +220,32 @@ def create_app() -> Flask:
         return jsonify(video=entry.video_id, frames=entry.num_indexed,
                        sampled=entry.num_sampled)
 
+    # Đuôi file video chấp nhận khi quét thư mục dataset.
+    VIDEO_EXTS = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".m4v", ".mpg", ".mpeg"}
+
+    @app.post("/api/video/index_folder")
+    def video_index_folder():
+        """Index TOÀN BỘ video trong một THƯ MỤC BẤT KỲ trên máy (đệ quy) vào 1 index
+        dataset chung -> tìm xuyên suốt. Không cần chép video vào data/videos/."""
+        raw_path = (request.json or {}).get("path", "").strip().strip('"')
+        if not raw_path:
+            return jsonify(error="Nhập đường dẫn thư mục dataset."), 400
+        folder = Path(raw_path)
+        if not folder.is_dir():
+            return jsonify(error=f"Không phải thư mục hợp lệ: {raw_path}"), 400
+        vids = sorted(p for p in folder.rglob("*")
+                      if p.suffix.lower() in VIDEO_EXTS and p.is_file())
+        if not vids:
+            return jsonify(error=f"Không tìm thấy video trong: {raw_path}"), 404
+        try:
+            entry = video_state["engine"].index_dataset(vids, FRAMES_DIR)
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        video_state["videos"]["__dataset__"] = entry
+        video_state["dataset_folder"] = str(folder)
+        return jsonify(video="__dataset__", frames=entry.num_indexed,
+                       sampled=entry.num_sampled, videos=len(vids), folder=str(folder))
+
     @app.post("/api/video/search")
     def video_search():
         data = request.json or {}

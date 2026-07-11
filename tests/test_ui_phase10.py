@@ -118,11 +118,27 @@ def test_video_frame_missing_errors(client) -> None:
     assert r.status_code == 404
 
 
+def test_index_folder_missing_path_errors(client) -> None:
+    r = client.post("/api/video/index_folder", json={"path": "  "})
+    assert r.status_code == 400
+
+
+def test_index_folder_invalid_dir_errors(client, tmp_path) -> None:
+    r = client.post("/api/video/index_folder",
+                    json={"path": str(tmp_path / "khong_ton_tai")})
+    assert r.status_code == 400
+
+
+def test_index_folder_empty_dir_errors(client, tmp_path) -> None:
+    r = client.post("/api/video/index_folder", json={"path": str(tmp_path)})
+    assert r.status_code == 404   # thư mục hợp lệ nhưng không có video
+
+
 # ------------------------------- Frontend asset ------------------------------
 def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
     for hook in ("/api/health", "/api/kisc/start", "/api/search", "/api/vqa",
-                 "/api/video/list", "/api/video/search"):
+                 "/api/video/list", "/api/video/search", "/api/video/index_folder"):
         assert hook in html
     # Có bản mô phỏng dự phòng cho chế độ Artifact (không backend).
     assert "simSession" in html and "data-theme" in html
