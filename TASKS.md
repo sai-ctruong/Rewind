@@ -83,12 +83,20 @@ song rồi merge. Fine rerank vẫn dùng float32 gốc (two-precision, Mục 11
 
 ## B. 🟡 ĐỘ CHÍNH XÁC — làm hệ thống "trúng" hơn (ưu tiên vừa)
 
-### B1. Benchmark thực nghiệm để chốt tham số [PROVISIONAL]
+### B1. Benchmark thực nghiệm để chốt tham số [PROVISIONAL]  🟨 HARNESS XONG (2026-07-12)
 Blueprint Mục 11.3 **bắt buộc**: đo recall/latency thật rồi mới chốt `sample_every_s`,
-`dedup_threshold`, `efSearch` HNSW, `rerank_pool`, `bm25_weight`. Hiện đang là số đoán.
-**Cần:** một bộ test có nhãn nhỏ (~20–50 cặp query–đáp trên video thật) →
-`evaluation/bench_video_engine.py` mở rộng, vẽ đường cong, chọn điểm "khuỷu tay".
-**Chặn nhiều thứ:** không có nhãn thì mọi tinh chỉnh đều mù.
+`dedup_threshold`, `efSearch` HNSW, `rerank_pool`, `bm25_weight`.
+**Đã làm:** `evaluation/bench_retrieval.py` — (1) `measure_embed_throughput` đo frame/giây
+embed LẺ vs THEO LÔ (lượng hoá A1), (2) `evaluate_labeled` chấm Recall@K/hit@K/MRR trên
+bộ nhãn theo **cửa sổ thời gian** (ổn định qua mọi cấu hình), (3) nạp NHÃN THẬT từ JSON
+(`load_labels`) hoặc tự sinh video ground-truth. Test offline bằng mock (`tests/test_bench_retrieval.py`).
+**CÒN LẠI (cần người + phần cứng, không code thêm được):**
+- Tạo **bộ nhãn thật** ~20–50 cặp (query → cửa sổ thời gian) trên video trong `data/videos/`
+  → `evaluation/labels.json`.
+- Chạy `python -m evaluation.bench_retrieval --labels evaluation/labels.json` **trên RTX 3060**
+  → lấy số throughput A1 thật + Recall/MRR.
+- Quét `sample_every_s` / `efSearch` / `embed_batch_size`, vẽ đường cong, chọn "khuỷu tay",
+  rồi cập nhật `configs/settings.yaml` (bỏ nhãn [PROVISIONAL]).
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
@@ -143,8 +151,8 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 
 1. ~~**A1 — Batch embedding**~~ ✅ xong
 2. ~~**A2 — Lưu/nạp index ra đĩa**~~ ✅ xong
-3. **B1 — Bộ nhãn nhỏ + benchmark** (để đo được, chốt được tham số; gồm cả đo throughput A1) ← kế tiếp
-4. **A3 — NVDEC decode** (gỡ nút thắt CPU)
+3. ~~**B1 — Harness benchmark**~~ 🟨 xong phần code; còn **tạo nhãn thật + chạy trên GPU** (người làm)
+4. **A3 — NVDEC decode** (gỡ nút thắt CPU) ← kế tiếp (code được)
 5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A3 đã đo được throughput thật)
 
 > Nguyên tắc: **đo trước, tối ưu sau** (blueprint Mục 11.3). Làm A1+A2 xong rồi
