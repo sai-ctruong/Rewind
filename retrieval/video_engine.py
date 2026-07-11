@@ -120,6 +120,37 @@ class VideoSearchEngine:
                                    early_stop=False, time_budget_s=3600.0))
 
     # -------------------------------------------------------------- indexing
+    def _embed_raws(self, raws: list[RawKeyframe]) -> list[KeyframeRecord]:
+        """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip)."""
+        encoders = self._load_encoders()
+        records: list[KeyframeRecord] = []
+        for r in raws:
+            rec = KeyframeRecord(
+                id=r.id, video_id=r.video_id, timestamp=r.timestamp,
+                clip_embedding=encoders[0].embed(r),
+            )
+            if len(encoders) > 1:
+                rec.siglip_embedding = encoders[1].embed(r)
+            records.append(rec)
+        return records
+
+    def _build_entry(
+        self, raws: list[RawKeyframe], records: list[KeyframeRecord], video_id: str,
+    ) -> VideoIndexEntry:
+        # Dedup NGỮ NGHĨA (Mục 5.1): gộp frame gần trùng theo embedding chính (slot 1).
+        # deduplicate_keyframes gom theo video_id nên với DATASET nhiều video vẫn dedup
+        # đúng TRONG TỪNG video, không gộp nhầm xuyên video.
+        result = deduplicate_keyframes(
+            records, similarity_threshold=self.dedup_threshold,
+            embedding_attr="clip_embedding",
+        )
+        kept = result.representatives
+        return VideoIndexEntry(
+            video_id=video_id, index=KeyframeIndex.build(kept),
+            raws={r.id: r for r in raws},
+            num_sampled=len(records), num_indexed=len(kept),
+        )
+
     def index_video(
         self, video_path: str | Path, out_dir: str | Path,
         video_id: Optional[str] = None,
@@ -130,34 +161,28 @@ class VideoSearchEngine:
         )
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
-        encoders = self._load_encoders()
+        vid = raws[0].video_id
+        return self._build_entry(raws, self._embed_raws(raws), video_id=vid)
 
-        records: list[KeyframeRecord] = []
-        for r in raws:
-            rec = KeyframeRecord(
-                id=r.id, video_id=r.video_id, timestamp=r.timestamp,
-                clip_embedding=encoders[0].embed(r),
-            )
-            if len(encoders) > 1:
-                rec.siglip_embedding = encoders[1].embed(r)
-            records.append(rec)
+    def index_dataset(
+        self, video_paths: Sequence[str | Path], out_dir: str | Path,
+        dataset_id: str = "__dataset__",
+    ) -> VideoIndexEntry:
+        """Index NHIỀU video vào MỘT index chung -> tìm xuyên suốt cả dataset.
 
-        # Dedup NGỮ NGHĨA (Mục 5.1): gộp frame gần trùng theo embedding chính (slot 1).
-        # An toàn recall: đại diện giữ cluster_span nên khoảng thời gian không mất.
-        num_sampled = len(records)
-        result = deduplicate_keyframes(
-            records, similarity_threshold=self.dedup_threshold,
-            embedding_attr="clip_embedding",
-        )
-        kept = result.representatives
-
-        index = KeyframeIndex.build(kept)
-        vid = kept[0].video_id if kept else (video_id or Path(video_path).stem)
-        return VideoIndexEntry(
-            video_id=vid, index=index,
-            raws={r.id: r for r in raws},
-            num_sampled=num_sampled, num_indexed=len(kept),
-        )
+        Mỗi keyframe giữ video_id thật nên kết quả biết rõ 'ở video nào, giây mấy'.
+        Đây là hướng scale của blueprint (Mục 5): một index cho cả kho, có thể shard
+        về sau. Keyframe id dạng '{video_id}/{n}' đã toàn cục duy nhất."""
+        all_raws: list[RawKeyframe] = []
+        for vp in video_paths:
+            all_raws.extend(extract_keyframes(
+                vp, out_dir, sample_every_s=self.sample_every_s,
+                max_frames=self.max_frames,
+            ))
+        if not all_raws:
+            raise RuntimeError("Không trích được keyframe nào từ dataset.")
+        return self._build_entry(all_raws, self._embed_raws(all_raws),
+                                 video_id=dataset_id)
 
     # ---------------------------------------------------------------- query
     def encode_query(self, query: str) -> list[np.ndarray]:

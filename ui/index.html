@@ -221,6 +221,8 @@
     color: var(--muted); cursor: pointer; user-select: none; }
   .rerank-tog input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
   .vcard .why { padding: 0 11px 10px; font-size: 11.5px; color: var(--faint); }
+  .vcard .vid { padding: 0 11px 10px; font-size: 11.5px; color: var(--indigo); font-weight: 550;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .vstatus { font-size: 13px; color: var(--muted); }
   .vstatus.busy { color: var(--accent); }
   .video-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
@@ -694,6 +696,11 @@
           sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
           q("status").textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
         }
+        // Option đầu: tìm xuyên suốt CẢ dataset (mọi video).
+        const od = el("option"); od.value = "__dataset__";
+        od.textContent = INDEXED.has("__dataset__")
+          ? `🗂️ Toàn bộ dataset (${j.videos.length} video) ✓` : `🗂️ Toàn bộ dataset (${j.videos.length} video)`;
+        sel.append(od);
         j.videos.forEach(v => { const o = el("option"); o.value = v;
           o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
         if (cur) sel.value = cur;
@@ -741,9 +748,11 @@
         j.results.forEach((r, i) => { const win = cfg.highlightTop && i === 0;
           const c = el("div", "vcard" + (win ? " win" : ""));
           const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
+          const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
           c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
             "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
-            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" + why;
+            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
+            vidlbl + why;
           box.append(c); });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
     });

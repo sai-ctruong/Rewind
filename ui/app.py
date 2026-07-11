@@ -188,6 +188,23 @@ def create_app() -> Flask:
     @app.post("/api/video/index")
     def video_index():
         name = (request.json or {}).get("video", "")
+
+        # --- Chế độ TOÀN BỘ DATASET: index mọi .mp4 trong data/videos/ vào 1 index.
+        if name == "__dataset__":
+            if "__dataset__" in video_state["videos"]:
+                entry = video_state["videos"]["__dataset__"]
+                return jsonify(video="__dataset__", cached=True, frames=entry.num_indexed)
+            vids = sorted(VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists() else []
+            if not vids:
+                return jsonify(error="Không có video nào trong data/videos/"), 404
+            try:
+                entry = video_state["engine"].index_dataset(vids, FRAMES_DIR)
+            except RuntimeError as e:
+                return jsonify(error=str(e)), 400
+            video_state["videos"]["__dataset__"] = entry
+            return jsonify(video="__dataset__", frames=entry.num_indexed,
+                           sampled=entry.num_sampled, videos=len(vids))
+
         path = VIDEO_DIR / name
         if not name or not path.exists():
             return jsonify(error=f"Không thấy video: {name}"), 404
@@ -216,7 +233,7 @@ def create_app() -> Flask:
         cands = video_state["engine"].search(
             entry, query, top_k=int(data.get("topk", 6)), rerank=rerank)
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
-                    "score": round(float(c.score), 3),
+                    "score": round(float(c.score), 3), "video_id": c.video_id,
                     "explanation": getattr(c, "explanation", None),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)

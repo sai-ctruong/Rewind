@@ -121,6 +121,28 @@ def test_encode_query_returns_unit_vectors(engine_and_entry) -> None:
         assert np.linalg.norm(v) == pytest.approx(1.0, abs=1e-5)
 
 
+def test_index_dataset_searches_across_videos(tmp_path) -> None:
+    # 2 video khác nhau: video A có cảnh đỏ + xanh lá; video B có cảnh xanh dương.
+    va = tmp_path / "vidA.mp4"; vb = tmp_path / "vidB.mp4"
+    _make_video(va, [(0, 0, 255), (0, 255, 0)], frames_per_color=10)
+    _make_video(vb, [(255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+
+    entry = engine.index_dataset([va, vb], tmp_path / "frames")
+    assert entry.video_id == "__dataset__"
+    # Keyframe từ CẢ 2 video đều có trong raws (id toàn cục '{video}/{n}').
+    vids = {r.video_id for r in entry.raws.values()}
+    assert vids == {"vidA", "vidB"}
+
+    # Query "xanh dương" -> phải trả keyframe từ VIDEO B (chỉ B có cảnh xanh dương).
+    res = engine.search(entry, "xanh dương", top_k=3)
+    assert res[0].video_id == "vidB"
+    # Query "đỏ" -> keyframe từ video A.
+    res2 = engine.search(entry, "màu đỏ", top_k=3)
+    assert res2[0].video_id == "vidA"
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)
