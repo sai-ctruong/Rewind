@@ -181,14 +181,10 @@ def create_app() -> Flask:
     video_state: dict = {"engine": VideoSearchEngine(), "videos": {}}
 
     def _index_opts(data: dict) -> dict:
-        """Tuỳ chọn nạp từ request: lấy mẫu mỗi N giây, trần frame (0=không giới hạn),
-        bật/tắt OCR — cho phép index video DÀI đầy đủ (không bị cắt 120 frame)."""
+        """Tuỳ chọn nạp từ request: chỉ còn bật/tắt OCR. LUÔN quét TOÀN BỘ video —
+        engine dùng mặc định sample_every_s=1s và max_frames=None (không giới hạn),
+        không cho người dùng chọn giây/số frame nữa (sẽ scale lên cả dataset lớn)."""
         o: dict = {}
-        if data.get("every"):
-            o["sample_every_s"] = float(data["every"])
-        if data.get("max_frames") is not None and str(data.get("max_frames")) != "":
-            mf = int(data["max_frames"])
-            o["max_frames"] = None if mf <= 0 else mf   # <=0 -> không giới hạn
         if "ocr" in data:
             o["enable_ocr"] = bool(data["ocr"])
         return o

@@ -325,8 +325,6 @@
           <span class="vstatus" id="kis-status"></span>
           <input class="folder-in" id="kis-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
           <button class="btn ghost" id="kis-folder-btn">Nạp thư mục</button>
-          <label class="idx-opt">Lấy mẫu mỗi <input class="num-in" id="kis-every" type="number" min="0.2" step="0.5" value="1"> giây</label>
-          <label class="idx-opt" title="0 = không giới hạn (index cả video dài)">Tối đa <input class="num-in" id="kis-maxf" type="number" min="0" step="100" value="0"> frame</label>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="kis-ocr" checked> OCR</label>
         </div>
         <form class="search-bar" id="kis-form">
@@ -356,8 +354,6 @@
           <span class="vstatus" id="avs-status"></span>
           <input class="folder-in" id="avs-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
           <button class="btn ghost" id="avs-folder-btn">Nạp thư mục</button>
-          <label class="idx-opt">Lấy mẫu mỗi <input class="num-in" id="avs-every" type="number" min="0.2" step="0.5" value="1"> giây</label>
-          <label class="idx-opt" title="0 = không giới hạn (index cả video dài)">Tối đa <input class="num-in" id="avs-maxf" type="number" min="0" step="100" value="0"> frame</label>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="avs-ocr" checked> OCR</label>
         </div>
         <form class="search-bar" id="avs-form">
@@ -413,8 +409,6 @@
           <span class="vstatus" id="video-status"></span>
           <input class="folder-in" id="video-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
           <button class="btn ghost" id="video-folder-btn">Nạp thư mục</button>
-          <label class="idx-opt">Lấy mẫu mỗi <input class="num-in" id="video-every" type="number" min="0.2" step="0.5" value="1"> giây</label>
-          <label class="idx-opt" title="0 = không giới hạn (index cả video dài)">Tối đa <input class="num-in" id="video-maxf" type="number" min="0" step="100" value="0"> frame</label>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="video-ocr" checked> OCR</label>
         </div>
         <form class="search-bar" id="video-form">
@@ -733,11 +727,10 @@
       } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
     };
 
-    // Tuỳ chọn nạp: lấy mẫu mỗi N giây, trần frame (0=không giới hạn), OCR on/off.
+    // Tuỳ chọn nạp: chỉ còn OCR on/off. Luôn quét TOÀN BỘ video (engine tự lấy
+    // mẫu mỗi 1s, không giới hạn frame) — không cho chọn giây/số frame nữa.
     const idxOpts = () => {
       const o = {};
-      const ev = parseFloat(q("every").value); if (ev > 0) o.every = ev;
-      const mf = parseInt(q("maxf").value); if (!isNaN(mf)) o.max_frames = mf;
       const oc = q("ocr"); if (oc) o.ocr = oc.checked;
       return o;
     };
