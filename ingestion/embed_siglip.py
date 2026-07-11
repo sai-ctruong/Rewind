@@ -59,7 +59,9 @@ class SiglipEncoder(SiglipEmbeddingProvider):
 
     def __init__(
         self,
-        model_name: str = "google/siglip-large-patch16-384",
+        # Mặc định = encoder thật engine dùng (siglip2-base, đa ngôn ngữ, 768-dim).
+        # Đổi sang "google/siglip2-large-patch16-384" nếu cần chính xác hơn (nặng hơn).
+        model_name: str = "google/siglip2-base-patch16-256",
         device: str | None = None,
         precision: str = "fp16",
     ):

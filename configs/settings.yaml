@@ -43,8 +43,11 @@ embedding:
     dim: 768                     # [FIXED] chiều embedding CLIP ViT-L/14
   siglip:
     # SigLIP tự trích xuất (zero-shot tốt hơn CLIP ở benchmark retrieval — Mục 2.1).
-    model_name: "google/siglip-large-patch16-384"
-    dim: 1024                    # [PROVISIONAL] xác nhận lại theo model thực dùng
+    # Engine video (retrieval/video_engine.py) ENSEMBLE 2 encoder: siglip2-base +
+    # siglip-base-multilingual. Đây là encoder chính (siglip2, 768-dim).
+    model_name: "google/siglip2-base-patch16-256"
+    model_name_2: "google/siglip-base-patch16-256-multilingual"  # encoder 2 (ensemble)
+    dim: 768                     # [FIXED] siglip2-base-patch16-256 -> 768
   # [PROVISIONAL] Batch lớn + fp16 để tăng throughput ~40% (Mục 5.2). Điều chỉnh
   # theo VRAM thực tế ở Phase 2.
   batch_size: 256
