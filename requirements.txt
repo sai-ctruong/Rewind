@@ -30,6 +30,12 @@ pillow>=10.0                  # đọc ảnh keyframe cho SigLIP
 qwen-vl-utils>=0.0.8          # tiện ích xử lý ảnh cho Qwen2-VL
 accelerate>=0.30             # tải/chạy model hiệu quả (Qwen2-VL-2B rerank)
 
+# --- GPU (tuỳ chọn, tăng tốc 8-30x) -----------------------------------------
+# Mặc định `pip install torch` -> bản CPU-only. Có GPU NVIDIA thì cài bản CUDA:
+#   pip install "torch==2.13.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+# (cu126 chạy trên driver hỗ trợ CUDA 12.x nhờ minor-version compatibility, r525+).
+# SiglipEncoder + Qwen2VLReranker TỰ dùng GPU (fp16) khi torch.cuda.is_available().
+
 # --- Phase 2+ real / các Phase sau (bổ sung khi tới): ---
 # faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
 # torch            # backend cho SigLIP encoder

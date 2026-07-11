@@ -54,11 +54,14 @@ class Qwen2VLReranker(Reranker):
         self._torch = torch
         self.model_name = model_name
         self.max_new_tokens = max_new_tokens
+        # Dùng GPU (fp16) nếu có CUDA -> nhanh hơn CPU 10-30x; CPU dùng float32.
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
         self._model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_name, torch_dtype=torch.float32
-        )
+            model_name, torch_dtype=dtype
+        ).to(self.device)
         self._model.eval()
-        # Giới hạn max_pixels để tokenizer ảnh sinh ít token thị giác -> nhanh hơn CPU.
+        # Giới hạn max_pixels để tokenizer ảnh sinh ít token thị giác -> nhẹ VRAM/nhanh.
         self._proc = AutoProcessor.from_pretrained(model_name, max_pixels=max_pixels)
 
     def score(self, query_text: str, keyframe_id: str, context: object) -> tuple[float, str]:
@@ -78,7 +81,7 @@ class Qwen2VLReranker(Reranker):
         text = self._proc.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        inputs = self._proc(text=[text], images=[image], return_tensors="pt")
+        inputs = self._proc(text=[text], images=[image], return_tensors="pt").to(self.device)
         torch = self._torch
         with torch.no_grad():
             out = self._model.generate(
