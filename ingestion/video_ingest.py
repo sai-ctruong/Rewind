@@ -105,12 +105,16 @@ def extract_keyframes(
                 )
                 if not is_dup:
                     ts = frame_idx / fps
+                    # source_video + frame_idx: cho phép DECODE LẠI frame từ video gốc
+                    # khi index được nạp từ đĩa (A2 — không lưu ảnh nặng theo index).
+                    src = str(video_path)
                     if save_images:  # ghi file .jpg ra đĩa
                         img_path = frame_dir / f"{kept:06d}.jpg"
                         cv2.imwrite(str(img_path), frame,
                                     [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
                         kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
-                                         timestamp=round(ts, 3), image_path=str(img_path))
+                                         timestamp=round(ts, 3), image_path=str(img_path),
+                                         source_video=src, frame_idx=frame_idx)
                     else:  # giữ JPEG trong RAM — KHÔNG chạm đĩa
                         ok_enc, buf = cv2.imencode(
                             ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
@@ -118,7 +122,8 @@ def extract_keyframes(
                             frame_idx += 1
                             continue
                         kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
-                                         timestamp=round(ts, 3), image_bytes=buf.tobytes())
+                                         timestamp=round(ts, 3), image_bytes=buf.tobytes(),
+                                         source_video=src, frame_idx=frame_idx)
                     keyframes.append(kf)
                     last_hist = hist
                     kept += 1

@@ -42,6 +42,7 @@ _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
 VIDEO_DIR = _ROOT / "data" / "videos"          # nơi bỏ file video của người dùng
 FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
+INDEX_DIR = _ROOT / "artifacts" / "index"      # nơi lưu index (A2 — nạp lại, không embed lại)
 
 
 def build_dataset(n: int = 200, seed: int = 42) -> list[KeyframeRecord]:
@@ -176,9 +177,25 @@ def create_app() -> Flask:
     # VideoSearchEngine (retrieval/video_engine.py): ensemble SigLIP2 + SigLIP
     # multilingual, query prompt ensemble, lấy mẫu dày + dedup ngữ nghĩa.
     # Model nạp LƯỜI (lần index đầu); mỗi video index xong được cache.
-    from retrieval.video_engine import VideoSearchEngine
+    from retrieval.video_engine import VideoIndexEntry, VideoSearchEngine
 
     video_state: dict = {"engine": VideoSearchEngine(), "videos": {}}
+
+    def _safe_name(vid: str) -> str:
+        """Tên thư mục an toàn cho video_id (đề phòng ký tự lạ)."""
+        return "".join(c if c.isalnum() or c in "-_." else "_" for c in vid)
+
+    # Tự NẠP LẠI các index đã lưu ở lần chạy trước (A2) — không phải embed lại.
+    if INDEX_DIR.exists():
+        for d in sorted(INDEX_DIR.iterdir()):
+            if (d / "entry.pkl").exists():
+                try:
+                    entry = VideoIndexEntry.load(d)
+                    video_state["videos"][entry.video_id] = entry
+                    print(f"[ui] Đã nạp index từ đĩa: {entry.video_id} "
+                          f"({entry.num_indexed} keyframe)")
+                except Exception as e:  # pragma: no cover - index hỏng thì bỏ qua
+                    print(f"[ui] Bỏ qua index hỏng {d}: {e!r}")
 
     def _index_opts(data: dict) -> dict:
         """Tuỳ chọn nạp từ request: chỉ còn bật/tắt OCR. LUÔN quét TOÀN BỘ video —
@@ -279,8 +296,23 @@ def create_app() -> Flask:
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)
 
+    @app.post("/api/video/save")
+    def video_save():
+        """Lưu MỌI index đang có ra đĩa (A2) — lần sau mở app tự nạp lại, không embed lại."""
+        saved = []
+        for vid, entry in video_state["videos"].items():
+            try:
+                entry.save(INDEX_DIR / _safe_name(vid))
+                saved.append(vid)
+            except Exception as e:  # pragma: no cover
+                return jsonify(error=f"Lỗi lưu {vid}: {e}"), 500
+        if not saved:
+            return jsonify(error="Chưa có index nào để lưu. Nạp video trước."), 400
+        return jsonify(saved=saved, dir=str(INDEX_DIR))
+
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
+        from ingestion.schemas import load_cv2_image
         for entry in video_state["videos"].values():
             raw = entry.raws.get(frame_id)
             if not raw:
@@ -288,9 +320,16 @@ def create_app() -> Flask:
             # Ảnh giữ trong RAM (mặc định — không ghi đĩa): phục vụ thẳng từ bytes.
             if raw.image_bytes is not None:
                 return send_file(BytesIO(raw.image_bytes), mimetype="image/jpeg")
-            # Tương thích ngược: nếu có file trên đĩa (save_images=True).
-            if raw.image_path and Path(raw.image_path).exists():
-                return send_file(raw.image_path, mimetype="image/jpeg")
+            # Index nạp từ đĩa (không còn bytes) hoặc có file: dựng lại ảnh rồi encode.
+            try:
+                img = load_cv2_image(raw)      # đĩa hoặc decode lại từ video gốc
+            except ValueError:
+                img = None
+            if img is not None:
+                import cv2
+                ok, buf = cv2.imencode(".jpg", img)
+                if ok:
+                    return send_file(BytesIO(buf.tobytes()), mimetype="image/jpeg")
         return jsonify(error="Không thấy keyframe."), 404
 
     return app

@@ -61,6 +61,51 @@ class VideoIndexEntry:
     num_indexed: int          # số keyframe sau dedup ngữ nghĩa (vào index)
     ocr_by_id: dict[str, str] = field(default_factory=dict)  # chữ OCR đọc được / keyframe
 
+    # ------------------------------------------------------------ persistence (A2)
+    def save(self, directory: str | Path) -> None:
+        """Lưu index ra đĩa để KHÔNG phải embed lại (dataset lớn: nạp 1 lần, mở tức thì).
+
+        CỐ Ý KHÔNG lưu image_bytes (ảnh trong RAM ~80KB/frame → hàng TB với triệu
+        frame). Chỉ lưu: Faiss index (embedding) + metadata + source_video/frame_idx
+        để DỰNG LẠI ảnh từ video gốc khi cần hiển thị/rerank. Đây là điều kiện tiên
+        quyết để thử nghiệm scale (blueprint Mục 5.3)."""
+        import pickle
+
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        self.index.save(directory / "index")
+        # raws BỎ image_bytes (nặng) — giữ đủ để decode lại từ source_video.
+        raws_light = {
+            rid: RawKeyframe(
+                id=r.id, video_id=r.video_id, timestamp=r.timestamp,
+                image_path=r.image_path, source_video=r.source_video,
+                frame_idx=r.frame_idx, objects=list(r.objects),
+            )
+            for rid, r in self.raws.items()
+        }
+        payload = {
+            "video_id": self.video_id, "num_sampled": self.num_sampled,
+            "num_indexed": self.num_indexed, "ocr_by_id": self.ocr_by_id,
+            "raws": raws_light,
+        }
+        with (directory / "entry.pkl").open("wb") as fh:
+            pickle.dump(payload, fh)
+
+    @classmethod
+    def load(cls, directory: str | Path) -> "VideoIndexEntry":
+        """Nạp lại entry đã lưu. Ảnh dựng lại lười từ source_video khi truy cập."""
+        import pickle
+
+        directory = Path(directory)
+        index = KeyframeIndex.load(directory / "index")
+        with (directory / "entry.pkl").open("rb") as fh:
+            payload = pickle.load(fh)
+        return cls(
+            video_id=payload["video_id"], index=index, raws=payload["raws"],
+            num_sampled=payload["num_sampled"], num_indexed=payload["num_indexed"],
+            ocr_by_id=payload["ocr_by_id"],
+        )
+
 
 class VideoSearchEngine:
     """Điều phối: cắt keyframe -> embed ensemble -> dedup -> index -> search RRF.

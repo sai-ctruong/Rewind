@@ -202,6 +202,34 @@ def test_embed_batch_path_used_and_consistent(tmp_path) -> None:
     assert res[0].timestamp < 1.0
 
 
+def test_save_load_roundtrip(tmp_path) -> None:
+    """A2: lưu index ra đĩa rồi nạp lại -> search vẫn đúng, KHÔNG cần embed lại.
+    Ảnh không lưu theo index (cố ý) mà decode lại từ video gốc qua source_video."""
+    from retrieval.video_engine import VideoIndexEntry
+
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    save_dir = tmp_path / "idx"
+    entry.save(save_dir)
+    loaded = VideoIndexEntry.load(save_dir)
+    assert loaded.num_indexed == entry.num_indexed
+    assert loaded.video_id == entry.video_id
+
+    # raws sau nạp: KHÔNG còn image_bytes (nhẹ đĩa), nhưng giữ source_video để dựng lại.
+    r = next(iter(loaded.raws.values()))
+    assert r.image_bytes is None and r.source_video is not None
+    img = load_cv2_image(r)                    # decode lại frame từ video gốc
+    assert img is not None and img.ndim == 3
+
+    # Search trên index NẠP TỪ ĐĨA vẫn trả đúng cảnh -> embedding được bảo toàn.
+    res = engine.search(loaded, "màu đỏ", top_k=3)
+    assert res[0].timestamp < 1.0
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

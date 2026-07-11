@@ -40,14 +40,16 @@ tensor, một lượt `get_image_features` (fp16, chia lô tránh tràn VRAM).
 **File:** `ingestion/embed_siglip.py`, `retrieval/video_engine.py`
 **Ước tính ăn:** giảm thời gian embed **~50–100 lần**.
 
-### A2. Lưu / nạp index ra đĩa  ⭐ (bắt buộc để không embed lại)
+### A2. Lưu / nạp index ra đĩa  ✅ ĐÃ XONG (2026-07-12)
 **Vấn đề:** index + `image_bytes` nằm trong RAM; tắt app là mất, phải embed lại từ đầu.
-**Làm:** serialize `VideoIndexEntry` (Faiss `write_index` + metadata/OCR ra parquet/
-npz; **KHÔNG** lưu `image_bytes` vào index — chỉ lưu embedding + timestamp + đường
-dẫn video + frame_idx để trích lại ảnh khi cần hiển thị). API `/api/video/save` &
-tự nạp lại lúc khởi động.
-**File:** `ingestion/build_index.py`, `retrieval/video_engine.py`, `ui/app.py`
-**Chặn:** không có cái này thì mọi test scale đều phải re-embed → không làm nổi.
+**Đã làm:** `VideoIndexEntry.save(dir)`/`.load(dir)` — Faiss index (`KeyframeIndex.save`)
++ metadata/OCR + raws đã **bỏ `image_bytes`** (nặng). Thêm `source_video` + `frame_idx`
+vào `RawKeyframe`; loader `load_pil/cv2_image` **decode lại frame từ video gốc** khi
+thiếu ảnh RAM/đĩa → hiển thị/rerank vẫn chạy sau khi nạp từ đĩa. UI: nút "💾 Lưu index"
+(`/api/video/save`) + **tự nạp lại** index khi khởi động app. Endpoint ảnh dựng lại từ
+video gốc rồi encode JPEG. Test `test_save_load_roundtrip`.
+**Còn lại:** khi IVF-PQ (A5) thay HNSW thì đổi định dạng lưu tương ứng.
+**File:** `ingestion/schemas.py`, `ingestion/video_ingest.py`, `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### A3. Decode video bằng GPU (NVDEC) + chỉ lấy frame cần
 **Vấn đề:** `cv2.VideoCapture` decode **mọi** frame bằng CPU rồi vứt (chỉ giữ 1/giây)
@@ -140,10 +142,10 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 ## 🎯 Đề xuất thứ tự làm 5 việc kế tiếp
 
 1. ~~**A1 — Batch embedding**~~ ✅ xong
-2. **A2 — Lưu/nạp index ra đĩa** (mở khoá mọi thử nghiệm scale) ← kế tiếp
-3. **B1 — Bộ nhãn nhỏ + benchmark** (để đo được, chốt được tham số; gồm cả đo throughput A1)
+2. ~~**A2 — Lưu/nạp index ra đĩa**~~ ✅ xong
+3. **B1 — Bộ nhãn nhỏ + benchmark** (để đo được, chốt được tham số; gồm cả đo throughput A1) ← kế tiếp
 4. **A3 — NVDEC decode** (gỡ nút thắt CPU)
-5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A2–A3 đã đo được throughput thật)
+5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A3 đã đo được throughput thật)
 
 > Nguyên tắc: **đo trước, tối ưu sau** (blueprint Mục 11.3). Làm A1+A2 xong rồi
 > chạy thử trên ~10–50 video thật để lấy throughput/RAM thực, mới quyết A5.

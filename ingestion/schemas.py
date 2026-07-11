@@ -42,6 +42,8 @@ class RawKeyframe:
     image_bytes: Optional[bytes] = None   # ẢNH TRONG RAM (JPEG) — dùng khi KHÔNG ghi ảnh ra đĩa
     audio_path: Optional[str] = None      # đoạn audio quanh timestamp (cho ASR)
     objects: list[str] = field(default_factory=list)  # Open Images 600 categories (BTC cấp)
+    source_video: Optional[str] = None    # đường dẫn VIDEO GỐC -> decode lại frame khi cần
+    frame_idx: Optional[int] = None       # số thứ tự frame trong video (seek chính xác)
 
 
 @dataclass
@@ -77,13 +79,38 @@ class KeyframeRecord:
             self.siglip_embedding = np.asarray(self.siglip_embedding, dtype=np.float32)
 
 
-def load_pil_image(raw: "RawKeyframe"):
-    """Trả PIL.Image RGB của keyframe, ưu tiên ảnh TRONG RAM (image_bytes) rồi mới
-    tới file trên đĩa (image_path).
+def _decode_from_source(raw: "RawKeyframe"):
+    """Decode LẠI frame gốc từ file video (BGR numpy) theo frame_idx/timestamp.
 
-    VÌ SAO: pipeline mới xử lý frame TRONG RAM (không ghi từng frame ra đĩa — quá
-    nhiều file với video dài). SigLIP/VLM đọc ảnh qua helper này để dùng được cả 2
-    nguồn mà không phải đổi logic ở nhiều nơi.
+    VÌ SAO CẦN: khi index được NẠP LẠI TỪ ĐĨA (A2), ta CỐ Ý không lưu ảnh (image_bytes
+    quá nặng cho triệu frame). Ảnh chỉ dựng lại KHI CẦN (hiển thị/rerank) bằng cách
+    seek đúng frame trong video gốc — đổi chút thời gian decode lấy dung lượng đĩa.
+    """
+    if raw.source_video is None:
+        return None
+    import cv2
+
+    cap = cv2.VideoCapture(raw.source_video)
+    if not cap.isOpened():
+        return None
+    try:
+        if raw.frame_idx is not None:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, raw.frame_idx)   # seek chính xác theo frame
+        else:
+            cap.set(cv2.CAP_PROP_POS_MSEC, raw.timestamp * 1000.0)
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    return frame if ok else None
+
+
+def load_pil_image(raw: "RawKeyframe"):
+    """Trả PIL.Image RGB của keyframe: ưu tiên ảnh TRONG RAM (image_bytes) → file trên
+    đĩa (image_path) → decode lại từ VIDEO GỐC (source_video, khi nạp index từ đĩa).
+
+    VÌ SAO: pipeline xử lý frame TRONG RAM (không ghi từng frame ra đĩa — quá nhiều
+    file với video dài). SigLIP/VLM đọc ảnh qua helper này để dùng được mọi nguồn mà
+    không phải đổi logic ở nhiều nơi.
     """
     from io import BytesIO
 
@@ -93,11 +120,17 @@ def load_pil_image(raw: "RawKeyframe"):
         return Image.open(BytesIO(raw.image_bytes)).convert("RGB")
     if raw.image_path is not None:
         return Image.open(raw.image_path).convert("RGB")
-    raise ValueError(f"Keyframe {raw.id!r} không có ảnh (thiếu cả image_bytes lẫn image_path).")
+    frame = _decode_from_source(raw)
+    if frame is not None:
+        import cv2
+        return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    raise ValueError(
+        f"Keyframe {raw.id!r} không có ảnh (thiếu image_bytes, image_path lẫn source_video)."
+    )
 
 
 def load_cv2_image(raw: "RawKeyframe"):
-    """Trả ảnh dạng numpy BGR (cv2) của keyframe — ưu tiên RAM rồi tới đĩa.
+    """Trả ảnh dạng numpy BGR (cv2): ưu tiên RAM → đĩa → decode lại từ video gốc.
 
     Dùng cho EasyOCR (readtext nhận numpy array). Tránh phải ghi ảnh ra đĩa chỉ để
     OCR đọc lại.
@@ -111,7 +144,12 @@ def load_cv2_image(raw: "RawKeyframe"):
     if raw.image_path is not None:
         import cv2
         return cv2.imread(raw.image_path)
-    raise ValueError(f"Keyframe {raw.id!r} không có ảnh (thiếu cả image_bytes lẫn image_path).")
+    frame = _decode_from_source(raw)
+    if frame is not None:
+        return frame
+    raise ValueError(
+        f"Keyframe {raw.id!r} không có ảnh (thiếu image_bytes, image_path lẫn source_video)."
+    )
 
 
 # Các loại bài toán hợp lệ cho query_type (Mục 0 + Mục 7).
