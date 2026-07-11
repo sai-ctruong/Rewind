@@ -173,6 +173,35 @@ def test_ocr_text_search_finds_sign(tmp_path) -> None:
     assert "bm25" in res[0].source_ranks     # kết quả đến từ BM25 (OCR text)
 
 
+class BatchMockEncoder(ColorMockEncoder):
+    """Mock có `embed_batch` -> kiểm engine đi đường LÔ (A1), và lô == lẻ về kết quả."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.batch_calls = 0
+        self.batch_sizes: list[int] = []
+
+    def embed_batch(self, raws, batch_size=256):
+        self.batch_calls += 1
+        self.batch_sizes.append(len(raws))
+        return [self.embed(r) for r in raws]   # cùng nội dung với đường lẻ
+
+
+def test_embed_batch_path_used_and_consistent(tmp_path) -> None:
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    enc0, enc1 = BatchMockEncoder(salt=0.0), BatchMockEncoder(salt=0.3)
+    engine.set_encoders([enc0, enc1])
+    entry = engine.index_video(video, tmp_path / "frames")
+    # Engine phải gọi embed_batch (1 lần/encoder cho toàn bộ raws), KHÔNG lặp embed lẻ.
+    assert enc0.batch_calls == 1 and enc1.batch_calls == 1
+    assert enc0.batch_sizes[0] == entry.num_sampled   # cả loạt raws vào 1 lô
+    # Kết quả search vẫn đúng cảnh -> embed lô không làm sai thứ tự/nội dung.
+    res = engine.search(entry, "màu đỏ", top_k=3)
+    assert res[0].timestamp < 1.0
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

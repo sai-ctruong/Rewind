@@ -95,6 +95,35 @@ class SiglipEncoder(SiglipEmbeddingProvider):
             feats = self._model.get_image_features(**inputs)
         return self._to_unit(self._pool(feats)[0])
 
+    def embed_batch(
+        self, raws: list[RawKeyframe], batch_size: int = 256,
+    ) -> list[np.ndarray]:  # pragma: no cover - bản thật (cần GPU/model)
+        """Embed NHIỀU keyframe theo LÔ — mấu chốt để GPU chạy hết công suất.
+
+        VÌ SAO QUAN TRỌNG: `embed()` xử lý 1 ảnh/lần khiến GPU chỉ dùng ~2-5% năng
+        lực (nạp/tính lẻ, overhead mỗi lần gọi lớn hơn phép tính). Gom `batch_size`
+        ảnh thành MỘT tensor rồi một lượt `get_image_features` cho phép GPU song song
+        hoá — throughput tăng hàng chục lần trên cùng phần cứng (blueprint Mục 5.2).
+        Chia theo lô để không tràn VRAM với dataset lớn; fp16 (đã bật) giảm nửa bộ nhớ.
+
+        Trả về danh sách vector đơn vị ĐÚNG THỨ TỰ `raws` (khớp 1-1 để ráp record).
+        """
+        from .schemas import load_pil_image
+
+        torch = self._torch
+        out: list[np.ndarray] = []
+        for start in range(0, len(raws), batch_size):
+            chunk = raws[start:start + batch_size]
+            images = [load_pil_image(r) for r in chunk]
+            inputs = self._processor(images=images, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                feats = self._model.get_image_features(**inputs)
+            mat = self._pool(feats).float().cpu().numpy().astype(np.float32)
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # tránh chia 0 với vector suy biến
+            out.extend(mat / norms)
+        return out
+
     def encode_text(self, text: str) -> np.ndarray:  # pragma: no cover - bản thật
         """Mã hoá QUERY TEXT vào CÙNG không gian với embedding ảnh.
 

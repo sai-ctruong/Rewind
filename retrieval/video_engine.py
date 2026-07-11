@@ -80,6 +80,7 @@ class VideoSearchEngine:
         enable_ocr: bool = True,                # đọc chữ trên keyframe -> tìm biển hiệu/chữ
         ocr_langs: tuple[str, ...] = ("vi", "en"),
         bm25_weight: float = 3.0,               # [PROVISIONAL] trọng số OCR/text trong RRF
+        embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
     ):
         self.encoder_names = list(encoder_names)[:2]  # KeyframeIndex có đúng 2 slot dense
         self.sample_every_s = sample_every_s
@@ -91,6 +92,7 @@ class VideoSearchEngine:
         self.enable_ocr = enable_ocr
         self.ocr_langs = ocr_langs
         self.bm25_weight = bm25_weight
+        self.embed_batch_size = embed_batch_size
         self._encoders: Optional[list] = None   # nạp lười
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
         self._ocr = None                        # EasyOCR, nạp lười
@@ -140,23 +142,37 @@ class VideoSearchEngine:
         self.enable_ocr = True
 
     # -------------------------------------------------------------- indexing
+    def _embed_all(self, encoder, raws: list[RawKeyframe]) -> list[np.ndarray]:
+        """Embed toàn bộ `raws` bằng 1 encoder — ưu tiên THEO LÔ (GPU chạy hết công suất).
+
+        Nếu encoder có `embed_batch` (bản SigLIP thật) thì gom lô -> nhanh gấp hàng
+        chục lần; nếu không (mock trong test) thì lặp `embed()` từng ảnh. Nhờ vậy cùng
+        một code chạy được cả bản thật lẫn mock (mock-first, Mục 5)."""
+        batch_fn = getattr(encoder, "embed_batch", None)
+        if callable(batch_fn):
+            return list(batch_fn(raws, self.embed_batch_size))
+        return [encoder.embed(r) for r in raws]
+
     def _embed_raws(self, raws: list[RawKeyframe],
                     enable_ocr: Optional[bool] = None) -> list[KeyframeRecord]:
         """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip) + OCR (nếu bật).
 
-        OCR đọc chữ trên khung hình (biển hiệu, phụ đề) -> lưu vào ocr_text để đưa vào
-        BM25 (searchable_text) -> tìm được bằng CHỮ chứ không chỉ hình ảnh."""
+        Embed THEO LÔ cho từng encoder (A1) thay vì lẻ từng ảnh: gom hết raws -> một
+        loạt tensor trên GPU. OCR đọc chữ trên khung hình (biển hiệu, phụ đề) -> lưu
+        ocr_text để đưa vào BM25 -> tìm được bằng CHỮ chứ không chỉ hình ảnh."""
         encoders = self._load_encoders()
         use_ocr = self.enable_ocr if enable_ocr is None else enable_ocr
         ocr = self._get_ocr() if use_ocr else None
+        emb0 = self._embed_all(encoders[0], raws)
+        emb1 = self._embed_all(encoders[1], raws) if len(encoders) > 1 else None
         records: list[KeyframeRecord] = []
-        for r in raws:
+        for i, r in enumerate(raws):
             rec = KeyframeRecord(
                 id=r.id, video_id=r.video_id, timestamp=r.timestamp,
-                clip_embedding=encoders[0].embed(r),
+                clip_embedding=emb0[i],
             )
-            if len(encoders) > 1:
-                rec.siglip_embedding = encoders[1].embed(r)
+            if emb1 is not None:
+                rec.siglip_embedding = emb1[i]
             if ocr is not None:
                 rec.ocr_text = ocr.extract(r)
             records.append(rec)

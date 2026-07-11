@@ -29,12 +29,14 @@ cao nhất vì nó quyết định hệ thống có dùng được ở đề th�
 
 Xếp theo **tác động / độ dễ**:
 
-### A1. Batch embedding trên GPU  ⭐ (dễ nhất, ăn nhất — ×50–100)
+### A1. Batch embedding trên GPU  ✅ ĐÃ XONG (2026-07-12)
 **Vấn đề:** `SiglipEncoder.embed()` xử lý **1 ảnh/lần** → GPU chạy ~2–5% công suất.
-**Làm:** thêm `embed_batch(raws, batch_size=256)` gom nhiều ảnh thành 1 tensor, một
-lượt `get_image_features`. Sửa `VideoSearchEngine._embed_raws` gọi theo lô thay vì
-vòng lặp từng `raw`. Giữ fp16 (đã có).
-**Đo:** throughput ảnh/giây trước/sau trên RTX 3060.
+**Đã làm:** thêm `SiglipEncoder.embed_batch(raws, batch_size=256)` gom ảnh thành 1
+tensor, một lượt `get_image_features` (fp16, chia lô tránh tràn VRAM).
+`VideoSearchEngine._embed_all` ưu tiên `embed_batch`, fallback `.embed()` cho mock.
+`_embed_raws` embed cả loạt raws/encoder thay vì vòng lặp lẻ. Có test
+`test_embed_batch_path_used_and_consistent` (lô == lẻ về kết quả).
+**Còn lại:** đo throughput thật ảnh/giây trước/sau trên RTX 3060 (gộp vào B1 benchmark).
 **File:** `ingestion/embed_siglip.py`, `retrieval/video_engine.py`
 **Ước tính ăn:** giảm thời gian embed **~50–100 lần**.
 
@@ -137,11 +139,11 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 
 ## 🎯 Đề xuất thứ tự làm 5 việc kế tiếp
 
-1. **A1 — Batch embedding** (dễ nhất, ăn ×50, không đụng phần khác)
-2. **A2 — Lưu/nạp index ra đĩa** (mở khoá mọi thử nghiệm scale)
-3. **B1 — Bộ nhãn nhỏ + benchmark** (để đo được, chốt được tham số)
+1. ~~**A1 — Batch embedding**~~ ✅ xong
+2. **A2 — Lưu/nạp index ra đĩa** (mở khoá mọi thử nghiệm scale) ← kế tiếp
+3. **B1 — Bộ nhãn nhỏ + benchmark** (để đo được, chốt được tham số; gồm cả đo throughput A1)
 4. **A3 — NVDEC decode** (gỡ nút thắt CPU)
-5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A1–A3 đã đo được throughput thật)
+5. **A4/A5 — Song song hoá + IVF-PQ/shard** (khi A2–A3 đã đo được throughput thật)
 
 > Nguyên tắc: **đo trước, tối ưu sau** (blueprint Mục 11.3). Làm A1+A2 xong rồi
 > chạy thử trên ~10–50 video thật để lấy throughput/RAM thực, mới quyết A5.
