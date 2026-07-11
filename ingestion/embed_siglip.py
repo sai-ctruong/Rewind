@@ -86,14 +86,10 @@ class SiglipEncoder(SiglipEmbeddingProvider):
         self._model.eval()
 
     def embed(self, raw: RawKeyframe) -> np.ndarray:  # pragma: no cover - bản thật
-        if raw.image_path is None:
-            raise ValueError(
-                f"Keyframe {raw.id!r} thiếu image_path — SigLIP cần ảnh gốc."
-            )
-        from PIL import Image
+        from .schemas import load_pil_image
 
         torch = self._torch
-        image = Image.open(raw.image_path).convert("RGB")
+        image = load_pil_image(raw)  # ưu tiên ảnh trong RAM (image_bytes), fallback đĩa
         inputs = self._processor(images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
             feats = self._model.get_image_features(**inputs)

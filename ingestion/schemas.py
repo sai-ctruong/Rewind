@@ -39,6 +39,7 @@ class RawKeyframe:
     video_id: str
     timestamp: float
     image_path: Optional[str] = None      # đường dẫn ảnh keyframe gốc (cho SigLIP/OCR/caption)
+    image_bytes: Optional[bytes] = None   # ẢNH TRONG RAM (JPEG) — dùng khi KHÔNG ghi ảnh ra đĩa
     audio_path: Optional[str] = None      # đoạn audio quanh timestamp (cho ASR)
     objects: list[str] = field(default_factory=list)  # Open Images 600 categories (BTC cấp)
 
@@ -74,6 +75,43 @@ class KeyframeRecord:
             self.siglip_embedding, np.ndarray
         ):
             self.siglip_embedding = np.asarray(self.siglip_embedding, dtype=np.float32)
+
+
+def load_pil_image(raw: "RawKeyframe"):
+    """Trả PIL.Image RGB của keyframe, ưu tiên ảnh TRONG RAM (image_bytes) rồi mới
+    tới file trên đĩa (image_path).
+
+    VÌ SAO: pipeline mới xử lý frame TRONG RAM (không ghi từng frame ra đĩa — quá
+    nhiều file với video dài). SigLIP/VLM đọc ảnh qua helper này để dùng được cả 2
+    nguồn mà không phải đổi logic ở nhiều nơi.
+    """
+    from io import BytesIO
+
+    from PIL import Image
+
+    if raw.image_bytes is not None:
+        return Image.open(BytesIO(raw.image_bytes)).convert("RGB")
+    if raw.image_path is not None:
+        return Image.open(raw.image_path).convert("RGB")
+    raise ValueError(f"Keyframe {raw.id!r} không có ảnh (thiếu cả image_bytes lẫn image_path).")
+
+
+def load_cv2_image(raw: "RawKeyframe"):
+    """Trả ảnh dạng numpy BGR (cv2) của keyframe — ưu tiên RAM rồi tới đĩa.
+
+    Dùng cho EasyOCR (readtext nhận numpy array). Tránh phải ghi ảnh ra đĩa chỉ để
+    OCR đọc lại.
+    """
+    import numpy as _np
+
+    if raw.image_bytes is not None:
+        import cv2
+        arr = _np.frombuffer(raw.image_bytes, dtype=_np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if raw.image_path is not None:
+        import cv2
+        return cv2.imread(raw.image_path)
+    raise ValueError(f"Keyframe {raw.id!r} không có ảnh (thiếu cả image_bytes lẫn image_path).")
 
 
 # Các loại bài toán hợp lệ cho query_type (Mục 0 + Mục 7).

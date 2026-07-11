@@ -42,22 +42,30 @@ def extract_keyframes(
     duplicate_threshold: float = 0.985,
     max_frames: Optional[int] = None,
     jpeg_quality: int = 90,
+    save_images: bool = False,
 ) -> list[RawKeyframe]:
-    """Cắt keyframe đại diện từ 1 video và lưu ảnh ra đĩa.
+    """Cắt keyframe đại diện từ 1 video.
+
+    MẶC ĐỊNH XỬ LÝ TRONG RAM (save_images=False): mỗi keyframe được nén JPEG và giữ ở
+    `image_bytes` (~vài chục KB/frame) thay vì ghi từng file .jpg ra đĩa. Video dài
+    sinh hàng nghìn frame -> ghi đĩa vừa chậm vừa tốn hàng GB dung lượng; giữ trong RAM
+    rồi embed xong là bỏ (engine còn xóa bytes của frame bị dedup loại). Đặt
+    save_images=True nếu thực sự cần file ảnh trên đĩa (vd tool CLI debug).
 
     Args:
         video_path: đường dẫn file video (.mp4/.avi/...).
-        out_dir: thư mục gốc để lưu ảnh keyframe (tạo subfolder theo video_id).
+        out_dir: thư mục gốc để lưu ảnh keyframe (chỉ dùng khi save_images=True).
         video_id: định danh video (mặc định = tên file không đuôi).
         sample_every_s: khoảng thời gian giữa 2 lần lấy mẫu (giây).
         duplicate_threshold: tương quan histogram (0..1); >= ngưỡng này so với keyframe
             giữ gần nhất thì coi là gần trùng -> BỎ (cảnh tĩnh). 1.0 = giống hệt.
         max_frames: trần số keyframe (None = không giới hạn).
-        jpeg_quality: chất lượng JPG lưu ra.
+        jpeg_quality: chất lượng JPG (áp cho cả bytes trong RAM lẫn file trên đĩa).
+        save_images: True = ghi file .jpg ra đĩa (image_path); False = giữ JPEG trong
+            RAM (image_bytes), không đụng đĩa.
 
     Returns:
-        Danh sách RawKeyframe (id, video_id, timestamp, image_path) — sẵn sàng đưa vào
-        IngestionPipeline (embed SigLIP, OCR/ASR, caption...).
+        Danh sách RawKeyframe — sẵn sàng đưa vào pipeline embed SigLIP, OCR/ASR, caption.
     """
     import cv2
 
@@ -66,7 +74,8 @@ def extract_keyframes(
         raise FileNotFoundError(f"Không thấy file video: {video_path}")
     video_id = video_id or video_path.stem
     frame_dir = Path(out_dir) / video_id
-    frame_dir.mkdir(parents=True, exist_ok=True)
+    if save_images:
+        frame_dir.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -96,13 +105,21 @@ def extract_keyframes(
                 )
                 if not is_dup:
                     ts = frame_idx / fps
-                    img_path = frame_dir / f"{kept:06d}.jpg"
-                    cv2.imwrite(str(img_path), frame,
-                                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                    keyframes.append(RawKeyframe(
-                        id=f"{video_id}/{kept}", video_id=video_id,
-                        timestamp=round(ts, 3), image_path=str(img_path),
-                    ))
+                    if save_images:  # ghi file .jpg ra đĩa
+                        img_path = frame_dir / f"{kept:06d}.jpg"
+                        cv2.imwrite(str(img_path), frame,
+                                    [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                        kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
+                                         timestamp=round(ts, 3), image_path=str(img_path))
+                    else:  # giữ JPEG trong RAM — KHÔNG chạm đĩa
+                        ok_enc, buf = cv2.imencode(
+                            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                        if not ok_enc:
+                            frame_idx += 1
+                            continue
+                        kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
+                                         timestamp=round(ts, 3), image_bytes=buf.tobytes())
+                    keyframes.append(kf)
                     last_hist = hist
                     kept += 1
                     if max_frames is not None and kept >= max_frames:
@@ -124,7 +141,7 @@ def _cli(argv: list[str]) -> None:
     args = p.parse_args(argv)
 
     frames = extract_keyframes(args.video, args.out, sample_every_s=args.every,
-                               max_frames=args.max)
+                               max_frames=args.max, save_images=True)
     print(f"Đã trích {len(frames)} keyframe -> {args.out}")
     for kf in frames[:10]:
         print(f"  {kf.id}  t={kf.timestamp}s  {kf.image_path}")

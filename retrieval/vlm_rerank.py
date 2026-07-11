@@ -65,12 +65,9 @@ class Qwen2VLReranker(Reranker):
         self._proc = AutoProcessor.from_pretrained(model_name, max_pixels=max_pixels)
 
     def score(self, query_text: str, keyframe_id: str, context: object) -> tuple[float, str]:
-        from PIL import Image
-
-        image_path = str(context)
-        if not image_path or not Path(image_path).exists():
+        image = _load_image(context)
+        if image is None:
             return 0.0, "thiếu ảnh keyframe"
-        image = Image.open(image_path).convert("RGB")
         messages = [{
             "role": "user",
             "content": [
@@ -91,6 +88,28 @@ class Qwen2VLReranker(Reranker):
             out[:, inputs.input_ids.shape[1]:], skip_special_tokens=True
         )[0].strip()
         return _parse_score(answer), f"VLM: {answer}"
+
+
+def _load_image(context: object):
+    """Lấy PIL.Image RGB từ context — chấp nhận RawKeyframe (ảnh trong RAM/đĩa) HOẶC
+    một đường dẫn ảnh (str/Path). Trả None nếu không có ảnh.
+
+    Engine mới truyền thẳng RawKeyframe (ảnh giữ trong RAM, không ghi đĩa); vẫn hỗ trợ
+    đường dẫn để tương thích ngược."""
+    from PIL import Image
+
+    # RawKeyframe: dùng helper chung (ưu tiên image_bytes trong RAM).
+    if hasattr(context, "image_bytes") or hasattr(context, "image_path"):
+        from ingestion.schemas import load_pil_image
+        try:
+            return load_pil_image(context)
+        except (ValueError, OSError):
+            return None
+    # Đường dẫn ảnh (tương thích ngược).
+    path = str(context)
+    if not path or not Path(path).exists():
+        return None
+    return Image.open(path).convert("RGB")
 
 
 def _parse_score(answer: str) -> float:

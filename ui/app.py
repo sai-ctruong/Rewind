@@ -12,6 +12,7 @@ Chạy:  python -m ui.app   rồi mở http://127.0.0.1:5000
 """
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -286,7 +287,13 @@ def create_app() -> Flask:
     def video_frame(frame_id: str):
         for entry in video_state["videos"].values():
             raw = entry.raws.get(frame_id)
-            if raw and raw.image_path and Path(raw.image_path).exists():
+            if not raw:
+                continue
+            # Ảnh giữ trong RAM (mặc định — không ghi đĩa): phục vụ thẳng từ bytes.
+            if raw.image_bytes is not None:
+                return send_file(BytesIO(raw.image_bytes), mimetype="image/jpeg")
+            # Tương thích ngược: nếu có file trên đĩa (save_images=True).
+            if raw.image_path and Path(raw.image_path).exists():
                 return send_file(raw.image_path, mimetype="image/jpeg")
         return jsonify(error="Không thấy keyframe."), 404
 

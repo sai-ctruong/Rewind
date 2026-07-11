@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(.venv/Scripts/python.exe -c \"from ingestion import model_cache; import os; print\\('HF_HOME =', os.environ.get\\('HF_HOME'\\)\\)\")",
+      "Bash(mkdir -p /d/hf_cache/hub)",
+      "Read(//d//**)",
+      "Bash(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv)",
+      "Bash(.venv/Scripts/python.exe -c \"import torch; print\\('torch', torch.__version__, '| CUDA build:', torch.version.cuda, '| cuda available:', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pip install --dry-run \"torch==2.13.0\" --index-url https://download.pytorch.org/whl/cu121)",
+      "Bash(.venv/Scripts/python.exe -m pip install --dry-run \"torch==2.13.0\" --index-url https://download.pytorch.org/whl/cu124)"
+    ]
+  }
+}

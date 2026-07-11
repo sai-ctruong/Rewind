@@ -3,7 +3,7 @@
 Không tải VLM thật (nặng ~4GB): bơm MOCK RERANKER "nhìn" màu trung bình ảnh keyframe
 để chấm khớp với từ khoá màu trong câu. Nhờ đó kiểm được: engine.search(rerank=True)
 chạy coarse -> rerank -> trả RerankedCandidate đúng thứ tự, và reranker thực sự được
-gọi với ĐƯỜNG DẪN ẢNH (đúng hợp đồng: VLM cần ảnh thật).
+gọi với RawKeyframe (đúng hợp đồng: VLM cần ẢNH — nay lấy từ RAM, không ghi đĩa).
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from retrieval.vlm_rerank import _parse_score
 
 cv2 = pytest.importorskip("cv2")
 
+from ingestion.schemas import RawKeyframe, load_cv2_image  # noqa: E402
 from retrieval.fine_rerank import RerankedCandidate, Reranker  # noqa: E402
 from retrieval.video_engine import VideoSearchEngine  # noqa: E402
 from tests.test_video_engine import ColorMockEncoder, _make_video  # noqa: E402
@@ -32,15 +33,15 @@ def test_parse_score(ans, expected) -> None:
 
 # --------------------------- mock VLM reranker -------------------------------
 class ColorMockReranker(Reranker):
-    """Chấm điểm = độ giống giữa màu trung bình ảnh (đọc từ context=đường dẫn) và
+    """Chấm điểm = độ giống giữa màu trung bình ảnh (đọc từ context=RawKeyframe) và
     màu trong câu. Mô phỏng VLM 'nhìn ảnh + hiểu chữ' mà không cần model."""
 
     def __init__(self):
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, object]] = []
 
     def score(self, query_text: str, keyframe_id: str, context: object) -> tuple[float, str]:
-        self.calls.append((keyframe_id, str(context)))
-        img = cv2.imread(str(context))
+        self.calls.append((keyframe_id, context))
+        img = load_cv2_image(context) if isinstance(context, RawKeyframe) else None
         if img is None:
             return 0.0, "thiếu ảnh"
         mean = img.reshape(-1, 3).mean(axis=0).astype(np.float32)  # BGR
@@ -71,8 +72,10 @@ def test_rerank_path_returns_reranked_candidates(engine_entry) -> None:
     assert results and isinstance(results[0], RerankedCandidate)
     assert results[0].timestamp < 1.0                 # cảnh đỏ ~[0,1)s -> top-1
     assert results[0].explanation and "mock" in results[0].explanation
-    # Reranker phải nhận ĐƯỜNG DẪN ẢNH (kết thúc .jpg), không phải text.
-    assert mock.calls and mock.calls[0][1].endswith(".jpg")
+    # Reranker phải nhận RawKeyframe mang ẢNH TRONG RAM (image_bytes), không phải text.
+    assert mock.calls
+    ctx = mock.calls[0][1]
+    assert isinstance(ctx, RawKeyframe) and ctx.image_bytes is not None
 
 
 def test_rerank_false_skips_reranker(engine_entry) -> None:

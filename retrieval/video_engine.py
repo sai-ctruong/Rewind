@@ -173,6 +173,13 @@ class VideoSearchEngine:
             embedding_attr="clip_embedding",
         )
         kept = result.representatives
+        # Giải phóng RAM: chỉ giữ ảnh (image_bytes) của frame SỐNG SÓT sau dedup — số
+        # còn lại (đã bị gộp) không bao giờ hiển thị/rerank nên bỏ bytes đi. Vẫn giữ
+        # record raw (timestamp...) để tra cứu, chỉ None hoá phần ảnh nặng.
+        kept_ids = {r.id for r in kept}
+        for r in raws:
+            if r.id not in kept_ids:
+                r.image_bytes = None
         return VideoIndexEntry(
             video_id=video_id, index=KeyframeIndex.build(kept),
             raws={r.id: r for r in raws},
@@ -262,8 +269,8 @@ class VideoSearchEngine:
         if not rerank or not coarse:
             return coarse[:top_k]
 
-        # VLM rerank: context = đường dẫn ảnh keyframe (VLM cần "nhìn" ảnh thật).
-        context = {c.keyframe_id: entry.raws[c.keyframe_id].image_path
+        # VLM rerank: context = RawKeyframe (VLM cần "nhìn" ảnh — lấy từ RAM/đĩa).
+        context = {c.keyframe_id: entry.raws[c.keyframe_id]
                    for c in coarse if c.keyframe_id in entry.raws}
         try:
             reranked = self._get_reranker().rerank(query, coarse, context)

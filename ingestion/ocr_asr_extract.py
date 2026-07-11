@@ -69,9 +69,15 @@ class EasyOcrEngine(OcrEngine):
         self._reader = easyocr.Reader(list(langs), gpu=gpu)
 
     def extract(self, raw: RawKeyframe) -> Optional[str]:  # pragma: no cover - bản thật
-        if raw.image_path is None:
+        from .schemas import load_cv2_image
+
+        if raw.image_bytes is None and raw.image_path is None:
             return None
-        results = self._reader.readtext(raw.image_path)
+        # readtext nhận numpy array -> đọc được ảnh trong RAM, không cần file trên đĩa.
+        image = load_cv2_image(raw)
+        if image is None:
+            return None
+        results = self._reader.readtext(image)
         texts = [t for (_box, t, conf) in results if conf >= self.min_conf and t.strip()]
         text = " ".join(texts).strip()
         return text or None

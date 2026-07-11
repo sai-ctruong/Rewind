@@ -14,7 +14,7 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")
 
-from ingestion.schemas import RawKeyframe  # noqa: E402
+from ingestion.schemas import RawKeyframe, load_cv2_image  # noqa: E402
 from retrieval.video_engine import VideoSearchEngine  # noqa: E402
 
 
@@ -54,7 +54,7 @@ class ColorMockEncoder:
         return v / n if n > 0 else v
 
     def embed(self, raw: RawKeyframe) -> np.ndarray:
-        img = cv2.imread(raw.image_path)
+        img = load_cv2_image(raw)  # ảnh trong RAM (mặc định) hoặc trên đĩa
         return self._vec(img.reshape(-1, 3).mean(axis=0))
 
     def encode_text(self, text: str) -> np.ndarray:
@@ -148,7 +148,7 @@ class SignMockOcr:
     trên OCR text hoạt động (dense encoder KHÔNG biết token này)."""
 
     def extract(self, raw: RawKeyframe):
-        b, g, r = cv2.imread(raw.image_path).reshape(-1, 3).mean(axis=0)  # BGR
+        b, g, r = load_cv2_image(raw).reshape(-1, 3).mean(axis=0)  # BGR
         if r > 150 and g < 100 and b < 100:
             return "bienbao SPECIALREDSIGN"
         if g > 150 and r < 100:

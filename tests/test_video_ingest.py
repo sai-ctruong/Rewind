@@ -31,22 +31,41 @@ def _make_video(path, colors, frames_per_color=8, fps=10, size=64):
     vw.release()
 
 
-def test_extract_representative_keyframes(tmp_path) -> None:
+def test_extract_representative_keyframes_in_memory(tmp_path) -> None:
     video = tmp_path / "clip.mp4"
     # 3 cảnh: đỏ, xanh lá, xanh dương (BGR).
     _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10, fps=10)
 
-    kfs = extract_keyframes(video, tmp_path / "frames", sample_every_s=0.3)
+    frame_dir = tmp_path / "frames"
+    kfs = extract_keyframes(video, frame_dir, sample_every_s=0.3)  # mặc định: RAM
     # Lấy mẫu ~mỗi 3 frame; các frame cùng cảnh gần trùng bị bỏ -> ~1 keyframe/cảnh.
     assert 3 <= len(kfs) <= 5
     assert all(isinstance(k, RawKeyframe) for k in kfs)
-    # Ảnh keyframe thực sự được lưu ra đĩa.
+    # MẶC ĐỊNH: ảnh giữ trong RAM (image_bytes), KHÔNG ghi file ra đĩa.
     for k in kfs:
-        assert k.image_path and __import__("pathlib").Path(k.image_path).is_file()
+        assert k.image_path is None
+        assert k.image_bytes and len(k.image_bytes) > 0
+    # image_bytes là JPEG hợp lệ -> decode lại được thành ảnh.
+    from ingestion.schemas import load_cv2_image
+    img = load_cv2_image(kfs[0])
+    assert img is not None and img.ndim == 3
+    # Không tạo thư mục frame trên đĩa khi không lưu ảnh.
+    assert not frame_dir.exists()
     # Timestamp tăng dần, id đúng định dạng.
     ts = [k.timestamp for k in kfs]
     assert ts == sorted(ts)
     assert kfs[0].id == "clip/0" and kfs[0].video_id == "clip"
+
+
+def test_extract_save_images_writes_disk(tmp_path) -> None:
+    video = tmp_path / "clip.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10, fps=10)
+    kfs = extract_keyframes(video, tmp_path / "frames", sample_every_s=0.3,
+                            save_images=True)
+    from pathlib import Path
+    for k in kfs:
+        assert k.image_bytes is None
+        assert k.image_path and Path(k.image_path).is_file()
 
 
 def test_max_frames_caps(tmp_path) -> None:
