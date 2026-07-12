@@ -101,14 +101,14 @@ Blueprint Mục 11.3 **bắt buộc**: đo recall/latency thật rồi mới ch�
 **Đã làm:** `evaluation/bench_retrieval.py` — (1) `measure_embed_throughput` đo frame/giây
 embed LẺ vs THEO LÔ (lượng hoá A1), (2) `evaluate_labeled` chấm Recall@K/hit@K/MRR trên
 bộ nhãn theo **cửa sổ thời gian** (ổn định qua mọi cấu hình), (3) nạp NHÃN THẬT từ JSON
-(`load_labels`) hoặc tự sinh video ground-truth. Test offline bằng mock (`tests/test_bench_retrieval.py`).
-**CÒN LẠI (cần người + phần cứng, không code thêm được):**
-- Tạo **bộ nhãn thật** ~20–50 cặp (query → cửa sổ thời gian) trên video trong `data/videos/`
-  → `evaluation/labels.json`.
-- Chạy `python -m evaluation.bench_retrieval --labels evaluation/labels.json` **trên RTX 3060**
-  → lấy số throughput A1 thật + Recall/MRR.
-- Quét `sample_every_s` / `efSearch` / `embed_batch_size`, vẽ đường cong, chọn "khuỷu tay",
-  rồi cập nhật `configs/settings.yaml` (bỏ nhãn [PROVISIONAL]).
+(`load_labels`), (4) `sweep_configs` + `--sweep` quét nhiều cấu hình → đường cong recall/latency.
+Test offline bằng mock (`tests/test_bench_retrieval.py`, 6 test). **Bộ nhãn thật đã tạo:**
+`evaluation/labels.json` — 25 cặp trên 3 video thật (Sydney/NYC/Seoul mưa), cửa sổ xác
+minh bằng cách trích frame ra xem (xem `evaluation/labels.README.md`).
+**CÒN LẠI (chỉ chạy trên máy có GPU — việc của user):**
+- Chạy `python -m evaluation.bench_retrieval --labels evaluation/labels.json --sweep`
+  **trên RTX 3060** → lấy số throughput A1 thật + Recall/MRR + đường cong sample_every_s.
+- Đọc đường cong, chọn "khuỷu tay", cập nhật `configs/settings.yaml` (bỏ [PROVISIONAL]).
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
@@ -163,7 +163,7 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 
 1. ~~**A1 — Batch embedding**~~ ✅ xong
 2. ~~**A2 — Lưu/nạp index ra đĩa**~~ ✅ xong
-3. ~~**B1 — Harness benchmark**~~ 🟨 xong phần code; còn **tạo nhãn thật + chạy trên GPU** (người làm)
+3. ~~**B1 — Harness benchmark + nhãn thật**~~ 🟨 code + 25 nhãn xong; chỉ còn **chạy trên GPU** (1 lệnh)
 4. ~~**A3 — NVDEC decode**~~ ✅ xong (backend cắm được; cần `pip install decord` bản CUDA để có NVDEC thật)
 5. ~~**A4 — Song song hoá**~~ ✅ xong (pipeline decode ‖ embed, queue giới hạn)
 6. **A5 — IVF-PQ + sharding** (khi tổng vector > vài triệu; cần đo RAM ở B1 trước) ← kế tiếp

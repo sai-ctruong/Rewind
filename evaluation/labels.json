@@ -1,0 +1,29 @@
+[
+  {"query": "người cầm ván lướt sóng trên bãi biển", "video_id": "beach_walking", "time_window": [0.0, 1.8]},
+  {"query": "nhà hát Opera Sydney", "video_id": "beach_walking", "time_window": [1.5, 5.0]},
+  {"query": "Sydney Opera House by the water", "video_id": "beach_walking", "time_window": [1.5, 5.0]},
+  {"query": "tàu điện màu đỏ trên phố", "video_id": "beach_walking", "time_window": [7.0, 9.5]},
+  {"query": "cầu cảng Sydney Harbour Bridge", "video_id": "beach_walking", "time_window": [9.0, 11.5]},
+  {"query": "hồ bơi nước xanh ngọc", "video_id": "beach_walking", "time_window": [11.0, 13.5]},
+  {"query": "người phụ nữ mặc váy hồng đi bộ", "video_id": "beach_walking", "time_window": [13.0, 15.0]},
+  {"query": "cửa hàng điện máy JB HI-FI", "video_id": "beach_walking", "time_window": [17.0, 19.5]},
+
+  {"query": "nhà hàng Raising Cane's ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 5.0]},
+  {"query": "người đàn ông mặc áo thun màu nâu", "video_id": "walking", "time_window": [3.0, 5.5]},
+  {"query": "taxi màu vàng ở New York", "video_id": "walking", "time_window": [5.5, 10.5]},
+  {"query": "yellow taxi cab in Times Square", "video_id": "walking", "time_window": [5.5, 10.5]},
+  {"query": "biển quảng cáo LANEIGE màu xanh", "video_id": "walking", "time_window": [7.0, 9.5]},
+
+  {"query": "phố Seoul ban đêm biển hiệu neon dưới mưa", "video_id": "walk_rain_seoul", "time_window": [140.0, 165.0]},
+  {"query": "vạch qua đường nhiều người che ô", "video_id": "walk_rain_seoul", "time_window": [440.0, 460.0]},
+  {"query": "người cầm ô trong suốt", "video_id": "walk_rain_seoul", "time_window": [745.0, 758.0]},
+  {"query": "người phụ nữ cầm ô màu đỏ", "video_id": "walk_rain_seoul", "time_window": [1498.0, 1508.0]},
+  {"query": "woman holding a red umbrella in the rain", "video_id": "walk_rain_seoul", "time_window": [1498.0, 1508.0]},
+  {"query": "biển hiệu STREET FOOD trong hẻm", "video_id": "walk_rain_seoul", "time_window": [1795.0, 1808.0]},
+  {"query": "cửa hàng Starbucks bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [2242.0, 2253.0]},
+  {"query": "Starbucks storefront on a rainy street", "video_id": "walk_rain_seoul", "time_window": [2242.0, 2253.0]},
+  {"query": "xe buýt hai tầng màu vàng và xanh lá", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
+  {"query": "yellow double-decker bus at a crosswalk", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
+  {"query": "quán cà phê có mái hiên đỏ và bàn ngoài trời", "video_id": "walk_rain_seoul", "time_window": [2845.0, 2858.0]},
+  {"query": "bảng neon màu hồng có chữ 2021", "video_id": "walk_rain_seoul", "time_window": [3145.0, 3158.0]}
+]

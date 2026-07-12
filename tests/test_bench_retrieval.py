@@ -11,7 +11,7 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 
 from evaluation.bench_retrieval import (  # noqa: E402
-    Label, evaluate_labeled, measure_embed_throughput, relevant_ids,
+    Label, evaluate_labeled, measure_embed_throughput, relevant_ids, sweep_configs,
 )
 from retrieval.video_engine import VideoSearchEngine  # noqa: E402
 from tests.test_video_engine import (  # noqa: E402
@@ -80,3 +80,27 @@ def test_evaluate_labeled_penalizes_wrong(color_entry) -> None:
     bad = [Label("màu đỏ", entry.video_id, (2.0, 3.0))]
     agg = evaluate_labeled(engine, entry, bad, ks=(1,), top_k=5)["aggregate"]
     assert agg["hit@1"] == pytest.approx(0.0)
+
+
+# --------------------------------- sweep -------------------------------------
+def test_sweep_configs_compares_configs(tmp_path) -> None:
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    labels = [
+        Label("màu đỏ", "scenes", (0.0, 1.0)),
+        Label("xanh dương", "scenes", (2.0, 3.0)),
+    ]
+
+    def make(every):
+        def factory():
+            eng = VideoSearchEngine(sample_every_s=every, max_frames=50, enable_ocr=False)
+            eng.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+            return eng
+        return factory
+
+    rows = sweep_configs({"every_0.2": make(0.2), "every_0.5": make(0.5)},
+                         [video], labels, tmp_path / "f", ks=(1,), top_k=5)
+    assert len(rows) == 2
+    for r in rows:
+        assert "hit@1" in r and "index_seconds" in r and r["num_indexed"] >= 1
+    assert {r["config"] for r in rows} == {"every_0.2", "every_0.5"}

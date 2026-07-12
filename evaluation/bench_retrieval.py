@@ -127,6 +127,34 @@ def load_labels(path: str | Path) -> list[Label]:
                   time_window=tuple(d["time_window"])) for d in data]
 
 
+# =============================== quét cấu hình ===============================
+def sweep_configs(
+    config_factories: dict, video_paths: Sequence, labels: Sequence[Label],
+    out_dir: str | Path, ks: Sequence[int] = (1, 5), top_k: int = 10,
+) -> list[dict]:
+    """Index + chấm NHIỀU cấu hình engine trên CÙNG bộ nhãn → so recall/latency.
+
+    Mục đích (blueprint Mục 11.3): quét tham số [PROVISIONAL] (sample_every_s, efSearch,
+    embed_batch_size…) rồi vẽ đường cong recall–latency, chọn điểm "khuỷu tay" — nơi
+    tăng thêm chi phí không còn đáng tăng recall. KHÔNG chốt tham số bằng cảm tính.
+
+    `config_factories`: dict[tên -> hàm() trả về VideoSearchEngine đã set encoder].
+    Mỗi cấu hình được index LẠI (vì lấy mẫu/encoder khác nhau đổi cả index). Trả 1
+    dòng số liệu / cấu hình: thời gian index, số keyframe, và các metric tổng hợp."""
+    results: list[dict] = []
+    for name, factory in config_factories.items():
+        engine = factory()
+        t0 = time.perf_counter()
+        entry = engine.index_dataset(list(video_paths), out_dir)
+        t_index = time.perf_counter() - t0
+        acc = evaluate_labeled(engine, entry, labels, ks=ks, top_k=top_k)
+        results.append({
+            "config": name, "index_seconds": round(t_index, 2),
+            "num_indexed": entry.num_indexed, **acc["aggregate"],
+        })
+    return results
+
+
 # ============================ synthetic ground-truth =========================
 def make_labeled_video(path: Path, video_id: str = "gt_scenes"):
     """Sinh video 3 cảnh có nhãn chữ + trả (video_path, [Label]) — dùng khi CHƯA có
@@ -157,21 +185,24 @@ def make_labeled_video(path: Path, video_id: str = "gt_scenes"):
 
 
 # ================================== main =====================================
-def main(labels_path: Optional[str] = None) -> None:  # pragma: no cover - model thật
+def main(  # pragma: no cover - model thật
+    labels_path: Optional[str] = None, sweep: bool = False,
+) -> None:
     """Chạy benchmark thật (nạp SigLIP). Đo throughput A1 + Recall/MRR, lưu JSON."""
     from retrieval.video_engine import VideoSearchEngine
 
     BENCH_DIR.mkdir(parents=True, exist_ok=True)
+    video_dir = Path("data/videos")
     engine = VideoSearchEngine(enable_ocr=False)
 
     if labels_path:
         labels = load_labels(labels_path)
         vids = sorted({l.video_id for l in labels})
-        video_dir = Path("data/videos")
-        entry = engine.index_dataset([video_dir / f"{v}.mp4" for v in vids],
-                                     BENCH_DIR / "frames")
+        video_paths = [video_dir / f"{v}.mp4" for v in vids]
+        entry = engine.index_dataset(video_paths, BENCH_DIR / "frames")
     else:
         video, labels = make_labeled_video(BENCH_DIR / "gt_scenes.mp4")
+        video_paths = [video]
         entry = engine.index_video(video, BENCH_DIR / "frames")
 
     # 1) Throughput: đo trên chính encoder đầu của engine, dùng raws đã cắt.
@@ -185,6 +216,19 @@ def main(labels_path: Optional[str] = None) -> None:  # pragma: no cover - model
     print(f"[accuracy] {acc['aggregate']}")
 
     report = {"throughput": thr, "accuracy": acc}
+
+    # 3) (tuỳ chọn) Quét sample_every_s để chọn điểm "khuỷu tay" (Mục 11.3).
+    if sweep:
+        factories = {
+            f"every_{s}s": (lambda s=s: VideoSearchEngine(sample_every_s=s, enable_ocr=False))
+            for s in (0.5, 1.0, 2.0)
+        }
+        rows = sweep_configs(factories, video_paths, labels, BENCH_DIR / "sweep_frames")
+        for r in rows:
+            print(f"[sweep] {r['config']}: hit@1={r.get('hit@1')} hit@5={r.get('hit@5')} "
+                  f"mrr={r.get('mrr')} | index {r['index_seconds']}s | {r['num_indexed']} kf")
+        report["sweep_sample_every_s"] = rows
+
     out = BENCH_DIR / "retrieval_benchmark.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[Đã lưu] {out}")
@@ -195,4 +239,6 @@ if __name__ == "__main__":
 
     p = argparse.ArgumentParser(description="Benchmark truy xuất video (throughput + accuracy).")
     p.add_argument("--labels", default=None, help="JSON nhãn thật (mặc định: video tổng hợp).")
-    main(p.parse_args().labels)
+    p.add_argument("--sweep", action="store_true", help="Quét sample_every_s (0.5/1/2s).")
+    args = p.parse_args()
+    main(args.labels, sweep=args.sweep)
