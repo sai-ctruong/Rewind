@@ -121,10 +121,14 @@ Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` 
 đưa vào BM25 cùng OCR → tìm được cảnh theo điều người ta **nói**, không chỉ nhìn thấy.
 **File:** `ingestion/ocr_asr_extract.py`, `retrieval/video_engine.py`
 
-### B4. Temporal search trên video thật ("cảnh A trước cảnh B")
-`temporal_check.py` đã có cho pipeline record; nối vào luồng video: search 2 sự kiện,
-lọc cặp `t_A < t_B` trong cùng video.
-**File:** `retrieval/video_engine.py`, `retrieval/temporal_check.py`
+### B4. Temporal search trên video thật ("cảnh A trước cảnh B")  ✅ ĐÃ XONG (2026-07-12)
+**Đã làm:** `VideoSearchEngine.search_temporal(entry, events)` — mỗi `events[i]` là 1 câu
+mô tả cảnh theo thứ tự; search coarse từng cảnh rồi `temporal_consistency_filter` (đã có)
+lọc CỨNG giữ chuỗi CÙNG video, timestamp tăng dần (Mục 4.5, không gộp vào fusion). Khoá
+theo chỉ số để không đụng khi 2 cảnh trùng chữ. UI: tab "⏱️ Chuỗi" + endpoint
+`/api/video/temporal` (hiển thị chuỗi keyframe A→B→C). Test: `test_search_temporal_respects_order`
+(đúng thứ tự có chuỗi, ngược thứ tự rỗng, 3 cảnh, <2 cảnh báo lỗi) + test UI đường lỗi.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### B5. LLM Auto-Captioning lúc indexing (blueprint Mục 2.4)
 Sinh caption tự nhiên cho mỗi keyframe đại diện (LVLM) → BM25 bắt được **quan hệ

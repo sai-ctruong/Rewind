@@ -267,6 +267,7 @@
         <button role="tab" aria-selected="false" data-view="avs">AVS</button>
         <button role="tab" aria-selected="false" data-view="vqa">VQA</button>
         <button role="tab" aria-selected="false" data-view="video">🎥 Video</button>
+        <button role="tab" aria-selected="false" data-view="temporal">⏱️ Chuỗi</button>
       </nav>
       <div class="util">
         <span class="pill" id="status"><span class="dot"></span><span id="status-text">Đang kiểm tra…</span></span>
@@ -426,6 +427,33 @@
         <code>python -m ui.app</code> rồi mở <code>http://127.0.0.1:5000</code>,
         bỏ file <code>.mp4</code> vào thư mục <code>data/videos/</code>.
         <br>(Bản Artifact này chạy mô phỏng nên không nạp được model SigLIP.)
+      </div>
+    </section>
+
+    <!-- ================= TEMPORAL (chuỗi thời gian) ================= -->
+    <section class="view" id="view-temporal" role="tabpanel">
+      <div class="hero">
+        <h1>Chuỗi <em>thời gian</em> — cảnh A trước cảnh B</h1>
+        <p>Nhập nhiều cảnh (mỗi dòng một cảnh) theo đúng thứ tự. Hệ thống chỉ giữ các
+           tổ hợp keyframe <b>cùng video, thời điểm tăng dần</b> đúng thứ tự — lọc logic
+           cứng, không phải xếp hạng độ tương đồng (thách thức temporal logic).</p>
+      </div>
+      <div id="temporal-live">
+        <div class="controls">
+          <select class="vsel" id="temporal-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="temporal-load">Nạp video</button>
+          <span class="vstatus" id="temporal-status"></span>
+        </div>
+        <form class="search-bar" id="temporal-form" style="align-items:flex-start">
+          <textarea id="temporal-events" rows="3" placeholder="Mỗi dòng 1 cảnh, theo thứ tự. VD:&#10;người cầm ô đỏ&#10;xe buýt hai tầng màu vàng"
+            style="flex:1;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--ink);resize:vertical"></textarea>
+          <button class="btn" type="submit">Tìm chuỗi</button>
+        </form>
+        <div class="rescount" id="temporal-count"></div>
+        <div id="temporal-results"></div>
+      </div>
+      <div class="notice" id="temporal-offline" style="display:none">
+        Tính năng này cần <b>backend</b> (SigLIP). Chạy <code>python -m ui.app</code>.
       </div>
     </section>
 
@@ -829,6 +857,86 @@
     return inst;
   }
 
+  /* ---------- Tab TEMPORAL: chuỗi "cảnh A trước cảnh B" (B4) ---------- */
+  function setupTemporalTab() {
+    const q = (s) => $("#temporal-" + s);
+    const live = q("live"), offline = q("offline");
+    if (!LIVE) { if (live) live.style.display = "none"; if (offline) offline.style.display = "block"; return; }
+
+    const refresh = async () => {
+      try {
+        const j = await (await fetch("/api/video/list")).json();
+        (j.indexed || []).forEach(v => INDEXED.add(v));
+        const sel = q("select"), cur = sel.value; sel.innerHTML = "";
+        if (!j.videos || !j.videos.length) {
+          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>"; return; }
+        const od = el("option"); od.value = "__dataset__";
+        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)" +
+          (INDEXED.has("__dataset__") ? " ✓" : ""); sel.append(od);
+        j.videos.forEach(v => { const o = el("option"); o.value = v;
+          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+        if (cur) sel.value = cur;
+      } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
+    };
+
+    q("load").addEventListener("click", async () => {
+      const name = q("select").value; if (!name) return;
+      const st = q("status"); st.className = "vstatus busy";
+      st.textContent = "Đang cắt keyframe + embed (lần đầu tải model, có thể vài phút)…";
+      q("load").disabled = true;
+      try {
+        const j = await (await fetch("/api/video/index", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name }) })).json();
+        st.className = "vstatus";
+        if (j.error) st.textContent = "Lỗi: " + j.error;
+        else { INDEXED.add(j.video); st.textContent = "✓ Đã nạp " + j.frames + " keyframe.";
+          await refresh(); q("select").value = name; }
+      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
+      q("load").disabled = false;
+    });
+
+    q("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = q("select").value;
+      const vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const events = q("events").value.split("\n").map(s => s.trim()).filter(Boolean);
+      const box = q("results"), countEl = q("count"); countEl.textContent = "";
+      if (events.length < 2) {
+        box.innerHTML = "<div class='empty'>Nhập ít nhất 2 cảnh (mỗi dòng 1 cảnh).</div>"; return; }
+      box.innerHTML = "<div class='empty'>Đang tìm chuỗi đúng thứ tự…</div>";
+      try {
+        const j = await (await fetch("/api/video/temporal", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: vid, events }) })).json();
+        box.innerHTML = "";
+        if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
+        if (!j.matches.length) {
+          box.innerHTML = "<div class='empty'>Không có chuỗi nào thoả đúng thứ tự thời gian.</div>"; return; }
+        countEl.innerHTML = "Tìm thấy <b>" + j.matches.length + "</b> chuỗi đúng thứ tự";
+        j.matches.forEach((m, i) => {
+          const row = el("div");
+          row.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)";
+          const head = el("div");
+          head.style.cssText = "width:100%;font:12px var(--mono);color:var(--muted)";
+          head.innerHTML = "Chuỗi #" + (i + 1) + " · 🎬 " + m.video_id; row.append(head);
+          m.steps.forEach((s, k) => {
+            if (k > 0) { const ar = el("div"); ar.textContent = "→";
+              ar.style.cssText = "font-size:22px;color:var(--accent);font-weight:700"; row.append(ar); }
+            const c = el("div", "vcard"); c.style.width = "190px";
+            c.innerHTML = "<img loading='lazy' src='" + s.image + "' alt='cảnh'>" +
+              "<div class='cap'><span class='rank'>#" + (k + 1) + "</span><span class='t'>t=" + s.timestamp + "s</span></div>" +
+              "<div class='vid'>" + s.event + "</div>";
+            row.append(c);
+          });
+          box.append(row);
+        });
+      } catch (e) { box.innerHTML = "<div class='empty'>Lỗi khi tìm chuỗi.</div>"; }
+    });
+
+    VTABS["temporal"] = { refresh };
+    return { refresh };
+  }
+
   /* ---------- Boot ---------- */
   (async function boot() {
     const size = await detect();
@@ -844,7 +952,8 @@
       countMsg: (n) => "Top-" + n + " khung khớp nhất" });
     setupVideoTab({ key: "avs", topk: 30, highlightTop: false,
       countMsg: (n) => "Tìm thấy <b>" + n + "</b> khung khớp" });
-    ["video", "kis", "avs"].forEach(k => VTABS[k] && VTABS[k].refresh());
+    setupTemporalTab();
+    ["video", "kis", "avs", "temporal"].forEach(k => VTABS[k] && VTABS[k].refresh());
   })();
 })();
 </script>

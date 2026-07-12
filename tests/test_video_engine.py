@@ -230,6 +230,30 @@ def test_save_load_roundtrip(tmp_path) -> None:
     assert res[0].timestamp < 1.0
 
 
+def test_search_temporal_respects_order(engine_and_entry) -> None:
+    """B4: 'cảnh A TRƯỚC cảnh B' — chỉ giữ chuỗi cùng video, timestamp tăng dần.
+    Cảnh: đỏ ~[0,1)s, xanh lá ~[1,2)s, xanh dương ~[2,3)s."""
+    engine, entry = engine_and_entry
+
+    # Đúng thứ tự: đỏ trước xanh dương -> có chuỗi, timestamp tăng dần.
+    m = engine.search_temporal(entry, ["màu đỏ", "xanh dương"], per_event_k=1)
+    assert m, "phải có tổ hợp đỏ->xanh dương"
+    assert m[0].timestamps == sorted(m[0].timestamps)
+    assert m[0].timestamps[0] < 1.0 and m[0].timestamps[1] >= 2.0
+
+    # Ngược thứ tự: xanh dương TRƯỚC đỏ -> KHÔNG tồn tại (xanh dương luôn sau đỏ).
+    assert engine.search_temporal(entry, ["xanh dương", "màu đỏ"], per_event_k=1) == []
+
+    # Ba cảnh đúng thứ tự -> chuỗi 3 mắt xích tăng dần.
+    m3 = engine.search_temporal(entry, ["màu đỏ", "xanh lá", "xanh dương"], per_event_k=1)
+    assert m3 and len(m3[0].steps) == 3
+    assert m3[0].timestamps == sorted(m3[0].timestamps)
+
+    # < 2 cảnh -> lỗi rõ ràng.
+    with pytest.raises(ValueError):
+        engine.search_temporal(entry, ["màu đỏ"])
+
+
 def test_parallel_index_matches_sequential(tmp_path) -> None:
     """A4: pipeline song song (decode‖embed) cho KẾT QUẢ GIỐNG đường tuần tự —
     cùng số keyframe, cùng thứ tự id, cùng kết quả search."""

@@ -296,6 +296,29 @@ def create_app() -> Flask:
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)
 
+    @app.post("/api/video/temporal")
+    def video_temporal():
+        """B4: tìm chuỗi 'cảnh A TRƯỚC cảnh B (…)'. `events` = danh sách câu mô tả cảnh
+        theo thứ tự thời gian. Trả các tổ hợp cùng video, timestamp tăng dần."""
+        data = request.json or {}
+        vid = data.get("video", "")
+        events = [e.strip() for e in (data.get("events") or []) if e and e.strip()]
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        if len(events) < 2:
+            return jsonify(error="Nhập ít nhất 2 cảnh (mỗi dòng 1 cảnh) theo thứ tự."), 400
+        matches = video_state["engine"].search_temporal(
+            entry, events, per_event_k=int(data.get("per_event_k", 20)),
+            max_results=int(data.get("max_results", 20)))
+        out = [{
+            "video_id": m.video_id, "total_score": round(float(m.total_score), 3),
+            "steps": [{"event": events[i], "timestamp": round(s.timestamp, 1),
+                       "image": f"/api/video/frame/{s.keyframe_id}"}
+                      for i, s in enumerate(m.steps)],
+        } for m in matches]
+        return jsonify(video=vid, events=events, count=len(out), matches=out)
+
     @app.post("/api/video/save")
     def video_save():
         """Lưu MỌI index đang có ra đĩa (A2) — lần sau mở app tự nạp lại, không embed lại."""

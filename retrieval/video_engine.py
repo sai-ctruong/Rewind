@@ -32,6 +32,7 @@ from ingestion.schemas import KeyframeRecord, RawKeyframe
 from ingestion.video_ingest import extract_keyframes
 from retrieval.coarse_retriever import Candidate, CoarseRetriever
 from retrieval.fine_rerank import FineReranker, RerankConfig, Reranker
+from retrieval.temporal_check import TemporalMatch, temporal_consistency_filter
 
 # Cặp encoder mặc định cho ensemble (Mục 2.1). Cả hai đều đa ngôn ngữ:
 #   - SigLIP2: bản kế nhiệm, retrieval tốt hơn SigLIP1 trên benchmark.
@@ -435,3 +436,35 @@ class VideoSearchEngine:
             # trả kết quả coarse SigLIP (vẫn tốt). Log để người dùng biết.
             print(f"[video_engine] VLM rerank lỗi ({e!r}); dùng kết quả coarse.")
             return coarse[:top_k]
+
+    def search_temporal(
+        self, entry: VideoIndexEntry, events: Sequence[str], *,
+        per_event_k: int = 20, max_results: int = 50,
+    ) -> list[TemporalMatch]:
+        """Tìm chuỗi sự kiện ĐÚNG THỨ TỰ thời gian: "cảnh A TRƯỚC cảnh B (trước C…)".
+
+        Giải thách thức #3 của đề thi (temporal logic, Mục 4.5): mỗi phần tử `events`
+        là 1 câu mô tả một cảnh, theo THỨ TỰ mong muốn. Ta search coarse từng cảnh để
+        lấy ứng viên keyframe, rồi LỌC CỨNG (hard-constraint) giữ lại các tổ hợp CÙNG
+        video có timestamp tăng dần đúng thứ tự. Đây KHÔNG phải similarity — một tổ
+        hợp sai thứ tự bị loại dứt khoát dù điểm cao (Mục 4.5, không gộp vào fusion).
+
+        Args:
+            events: >=2 câu mô tả cảnh, theo đúng thứ tự thời gian mong muốn.
+            per_event_k: số ứng viên coarse lấy cho MỖI cảnh (rộng hơn -> nhiều tổ hợp).
+            max_results: trần số chuỗi trả về (tránh bùng nổ tổ hợp).
+
+        Returns:
+            list[TemporalMatch] — mỗi cái là chuỗi keyframe cùng video, timestamp tăng
+            dần đúng thứ tự; rỗng nếu không có tổ hợp hợp lệ (đúng cảnh nhưng sai thứ tự).
+        """
+        if len(events) < 2:
+            raise ValueError("search_temporal cần >= 2 cảnh để kiểm thứ tự thời gian.")
+        # Khoá theo CHỈ SỐ để không đụng nhau khi 2 cảnh mô tả trùng chữ.
+        temporal_order = [{"event": f"{i}:{e}", "order": i} for i, e in enumerate(events)]
+        candidates_by_event = {
+            f"{i}:{e}": self.search(entry, e, top_k=per_event_k, rerank=False)
+            for i, e in enumerate(events)
+        }
+        return temporal_consistency_filter(
+            temporal_order, candidates_by_event, max_results=max_results)
