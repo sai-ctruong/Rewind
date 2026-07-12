@@ -132,7 +132,7 @@ def _iter_samples(
     yield from _decode_samples_cv2(video_path, step)
 
 
-def extract_keyframes(
+def iter_keyframes(
     video_path: str | Path,
     out_dir: str | Path,
     video_id: Optional[str] = None,
@@ -143,36 +143,14 @@ def extract_keyframes(
     save_images: bool = False,
     decode_backend: str = "auto",
     use_gpu: bool = True,
-) -> list[RawKeyframe]:
-    """Cắt keyframe đại diện từ 1 video.
+) -> Iterator[RawKeyframe]:
+    """Bản GENERATOR của extract_keyframes: YIELD từng RawKeyframe theo dòng (streaming).
 
-    MẶC ĐỊNH XỬ LÝ TRONG RAM (save_images=False): mỗi keyframe được nén JPEG và giữ ở
-    `image_bytes` (~vài chục KB/frame) thay vì ghi từng file .jpg ra đĩa. Video dài
-    sinh hàng nghìn frame -> ghi đĩa vừa chậm vừa tốn hàng GB dung lượng; giữ trong RAM
-    rồi embed xong là bỏ (engine còn xóa bytes của frame bị dedup loại). Đặt
-    save_images=True nếu thực sự cần file ảnh trên đĩa (vd tool CLI debug).
+    VÌ SAO STREAMING (A4): cho phép PIPELINE decode ‖ embed — consumer bắt đầu embed các
+    keyframe đầu NGAY khi producer còn đang decode phần sau của video, thay vì phải chờ
+    cắt xong CẢ video mới embed. `extract_keyframes` chỉ là `list(iter_keyframes(...))`.
 
-    DECODE (A3): chỉ giải mã các frame LẤY MẪU, không giải mã đầy đủ toàn bộ video.
-    `decode_backend`="auto" ưu tiên decord (GPU/NVDEC nếu có) rồi tới cv2; xem docstring
-    module. `use_gpu` chỉ có tác dụng với decord.
-
-    Args:
-        video_path: đường dẫn file video (.mp4/.avi/...).
-        out_dir: thư mục gốc để lưu ảnh keyframe (chỉ dùng khi save_images=True).
-        video_id: định danh video (mặc định = tên file không đuôi).
-        sample_every_s: khoảng thời gian giữa 2 lần lấy mẫu (giây).
-        duplicate_threshold: tương quan histogram (0..1); >= ngưỡng này so với keyframe
-            giữ gần nhất thì coi là gần trùng -> BỎ (cảnh tĩnh). 1.0 = giống hệt.
-        max_frames: trần số keyframe (None = không giới hạn).
-        jpeg_quality: chất lượng JPG (áp cho cả bytes trong RAM lẫn file trên đĩa).
-        save_images: True = ghi file .jpg ra đĩa (image_path); False = giữ JPEG trong
-            RAM (image_bytes), không đụng đĩa.
-        decode_backend: "auto" | "cv2" | "decord" — nguồn giải mã frame (xem module).
-        use_gpu: dùng NVDEC (chỉ áp cho decord; không có CUDA thì tự về CPU).
-
-    Returns:
-        Danh sách RawKeyframe — sẵn sàng đưa vào pipeline embed SigLIP, OCR/ASR, caption.
-    """
+    Tham số & hành vi giống hệt extract_keyframes (xem đó)."""
     import cv2
 
     video_path = Path(video_path)
@@ -187,7 +165,6 @@ def extract_keyframes(
     step = max(1, int(round(fps * sample_every_s)))
     src = str(video_path)
 
-    keyframes: list[RawKeyframe] = []
     last_hist = None
     kept = 0
     # Iterator chỉ trả frame TẠI ĐIỂM MẪU (backend tự bỏ qua frame giữa) -> không giải
@@ -218,12 +195,59 @@ def extract_keyframes(
             kf = RawKeyframe(id=f"{video_id}/{kept}", video_id=video_id,
                              timestamp=round(ts, 3), image_bytes=buf.tobytes(),
                              source_video=src, frame_idx=frame_idx)
-        keyframes.append(kf)
+        yield kf
         last_hist = hist
         kept += 1
         if max_frames is not None and kept >= max_frames:
-            break
-    return keyframes
+            return
+
+
+def extract_keyframes(
+    video_path: str | Path,
+    out_dir: str | Path,
+    video_id: Optional[str] = None,
+    sample_every_s: float = 1.0,
+    duplicate_threshold: float = 0.985,
+    max_frames: Optional[int] = None,
+    jpeg_quality: int = 90,
+    save_images: bool = False,
+    decode_backend: str = "auto",
+    use_gpu: bool = True,
+) -> list[RawKeyframe]:
+    """Cắt keyframe đại diện từ 1 video (bản thu về LIST — bọc quanh `iter_keyframes`).
+
+    MẶC ĐỊNH XỬ LÝ TRONG RAM (save_images=False): mỗi keyframe được nén JPEG và giữ ở
+    `image_bytes` (~vài chục KB/frame) thay vì ghi từng file .jpg ra đĩa. Video dài
+    sinh hàng nghìn frame -> ghi đĩa vừa chậm vừa tốn hàng GB dung lượng; giữ trong RAM
+    rồi embed xong là bỏ (engine còn xóa bytes của frame bị dedup loại). Đặt
+    save_images=True nếu thực sự cần file ảnh trên đĩa (vd tool CLI debug).
+
+    DECODE (A3): chỉ giải mã các frame LẤY MẪU (xem docstring module). Muốn xử lý theo
+    dòng (pipeline A4) thì dùng `iter_keyframes` trực tiếp.
+
+    Args:
+        video_path: đường dẫn file video (.mp4/.avi/...).
+        out_dir: thư mục gốc để lưu ảnh keyframe (chỉ dùng khi save_images=True).
+        video_id: định danh video (mặc định = tên file không đuôi).
+        sample_every_s: khoảng thời gian giữa 2 lần lấy mẫu (giây).
+        duplicate_threshold: tương quan histogram (0..1); >= ngưỡng này so với keyframe
+            giữ gần nhất thì coi là gần trùng -> BỎ (cảnh tĩnh). 1.0 = giống hệt.
+        max_frames: trần số keyframe (None = không giới hạn).
+        jpeg_quality: chất lượng JPG (áp cho cả bytes trong RAM lẫn file trên đĩa).
+        save_images: True = ghi file .jpg ra đĩa (image_path); False = giữ JPEG trong
+            RAM (image_bytes), không đụng đĩa.
+        decode_backend: "auto" | "cv2" | "decord" — nguồn giải mã frame (xem module).
+        use_gpu: dùng NVDEC (chỉ áp cho decord; không có CUDA thì tự về CPU).
+
+    Returns:
+        Danh sách RawKeyframe — sẵn sàng đưa vào pipeline embed SigLIP, OCR/ASR, caption.
+    """
+    return list(iter_keyframes(
+        video_path, out_dir, video_id=video_id, sample_every_s=sample_every_s,
+        duplicate_threshold=duplicate_threshold, max_frames=max_frames,
+        jpeg_quality=jpeg_quality, save_images=save_images,
+        decode_backend=decode_backend, use_gpu=use_gpu,
+    ))
 
 
 def _cli(argv: list[str]) -> None:

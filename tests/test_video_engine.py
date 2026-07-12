@@ -230,6 +230,29 @@ def test_save_load_roundtrip(tmp_path) -> None:
     assert res[0].timestamp < 1.0
 
 
+def test_parallel_index_matches_sequential(tmp_path) -> None:
+    """A4: pipeline song song (decode‖embed) cho KẾT QUẢ GIỐNG đường tuần tự —
+    cùng số keyframe, cùng thứ tự id, cùng kết quả search."""
+    va = tmp_path / "a.mp4"; vb = tmp_path / "b.mp4"
+    _make_video(va, [(0, 0, 255), (0, 255, 0)], frames_per_color=10)
+    _make_video(vb, [(255, 0, 0)], frames_per_color=10)
+
+    def build(parallel):
+        eng = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False,
+                                embed_batch_size=3, parallel_index=parallel)
+        eng.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+        return eng, eng.index_dataset([va, vb], tmp_path / "f")
+
+    eng_p, entry_p = build(True)
+    _, entry_s = build(False)
+    # Cùng tập keyframe id, cùng số lượng (index song song không làm mất/nhân đôi).
+    assert entry_p.num_indexed == entry_s.num_indexed
+    assert sorted(entry_p.raws) == sorted(entry_s.raws)
+    # Search vẫn định tuyến đúng video theo màu.
+    assert eng_p.search(entry_p, "xanh dương", top_k=3)[0].video_id == "b"
+    assert eng_p.search(entry_p, "màu đỏ", top_k=3)[0].video_id == "a"
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

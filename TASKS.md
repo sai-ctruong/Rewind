@@ -67,12 +67,16 @@ chưa cài ở env hiện tại (decord/PyNvVideoCodec đều vắng, chỉ có 
 thật gộp vào B1.
 **File:** `ingestion/video_ingest.py`, `retrieval/video_engine.py`
 
-### A4. Song song hoá nhiều worker (decode ‖ embed ‖ ghi index)
+### A4. Song song hoá nhiều worker (decode ‖ embed ‖ ghi index)  ✅ ĐÃ XONG (2026-07-12)
 **Vấn đề:** pipeline chạy tuần tự 1 luồng: decode xong mới embed, embed xong mới index.
-**Làm:** hàng đợi sản xuất–tiêu thụ: worker CPU decode → queue → GPU embed theo lô →
-index. Nhiều video decode song song để luôn có ảnh sẵn cho GPU (GPU không chờ CPU).
-**File:** `retrieval/video_engine.py` (thêm lớp điều phối indexing)
-**Phụ thuộc:** nên làm sau A1 (batch) để có gì mà "nuôi" GPU.
+**Đã làm:** `iter_keyframes` (bản GENERATOR của extract_keyframes) stream keyframe theo
+dòng. `VideoSearchEngine._pipeline_records`: 1 luồng PRODUCER decode+stream → `queue.Queue`
+GIỚI HẠN (maxsize=4, chặn phình RAM) → luồng chính CONSUMER embed theo lô GPU + OCR.
+cv2/torch nhả GIL khi chạy C++/CUDA → thread cho song song thật (decode lô kế trong khi
+GPU embed lô hiện tại). Thứ tự FIFO bảo toàn → dedup/index giống hệt tuần tự. Param
+`parallel_index=True` (tắt để debug). Test `test_parallel_index_matches_sequential`.
+**Phụ thuộc:** dựa trên A1 (batch) để "nuôi" GPU — đã có.
+**File:** `ingestion/video_ingest.py`, `retrieval/video_engine.py`
 
 ### A5. Chuyển ANN sang IVF-PQ + sharding khi > vài triệu vector
 **Vấn đề:** HNSW giữ vector float trong RAM → 100M × 768d × 4B ≈ **300 GB RAM** (bất khả thi 1 máy).
@@ -161,8 +165,8 @@ Hiện push thẳng `main`. Khi cả 2 cùng sửa `video_engine.py` → tách n
 2. ~~**A2 — Lưu/nạp index ra đĩa**~~ ✅ xong
 3. ~~**B1 — Harness benchmark**~~ 🟨 xong phần code; còn **tạo nhãn thật + chạy trên GPU** (người làm)
 4. ~~**A3 — NVDEC decode**~~ ✅ xong (backend cắm được; cần `pip install decord` bản CUDA để có NVDEC thật)
-5. **A4 — Song song hoá** (decode ‖ embed ‖ index) ← kế tiếp (code được)
-6. **A5 — IVF-PQ + sharding** (khi tổng vector > vài triệu; cần đo RAM ở B1 trước)
+5. ~~**A4 — Song song hoá**~~ ✅ xong (pipeline decode ‖ embed, queue giới hạn)
+6. **A5 — IVF-PQ + sharding** (khi tổng vector > vài triệu; cần đo RAM ở B1 trước) ← kế tiếp
 
 > Nguyên tắc: **đo trước, tối ưu sau** (blueprint Mục 11.3). Làm A1+A2 xong rồi
 > chạy thử trên ~10–50 video thật để lấy throughput/RAM thực, mới quyết A5.

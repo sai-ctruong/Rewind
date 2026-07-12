@@ -128,6 +128,7 @@ class VideoSearchEngine:
         embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
         decode_backend: str = "auto",           # A3: "auto"|"cv2"|"decord" (decord=NVDEC nếu có)
         use_gpu_decode: bool = True,            # dùng NVDEC khi backend=decord + có CUDA
+        parallel_index: bool = True,            # A4: song song decode ‖ embed (tắt để debug)
     ):
         self.encoder_names = list(encoder_names)[:2]  # KeyframeIndex có đúng 2 slot dense
         self.sample_every_s = sample_every_s
@@ -142,6 +143,7 @@ class VideoSearchEngine:
         self.embed_batch_size = embed_batch_size
         self.decode_backend = decode_backend
         self.use_gpu_decode = use_gpu_decode
+        self.parallel_index = parallel_index
         self._encoders: Optional[list] = None   # nạp lười
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
         self._ocr = None                        # EasyOCR, nạp lười
@@ -252,23 +254,114 @@ class VideoSearchEngine:
             ocr_by_id={r.id: r.ocr_text for r in records if r.ocr_text},
         )
 
+    def _pipeline_records(
+        self, video_specs: list[tuple], out_dir: str | Path, *,
+        sample_every_s: Optional[float], max_frames: Optional[int],
+        enable_ocr: Optional[bool],
+    ) -> tuple[list[RawKeyframe], list[KeyframeRecord]]:
+        """SONG SONG HOÁ decode ‖ embed (A4): 1 luồng PRODUCER stream keyframe (decode
+        CPU/NVDEC), luồng chính CONSUMER embed theo lô trên GPU + OCR.
+
+        VÌ SAO NHANH: decode (CPU/IO) và embed (GPU) chạy CHỒNG nhau — trong lúc GPU
+        embed lô hiện tại, producer đã decode lô kế. cv2/torch đều nhả GIL khi chạy
+        C++/CUDA nên thread cho song song thật. Queue GIỚI HẠN (maxsize) để producer
+        không decode vượt quá xa consumer -> chặn phình RAM với video dài. Thứ tự
+        keyframe được BẢO TOÀN (FIFO) nên dedup/index giống hệt đường tuần tự."""
+        import queue
+        import threading
+
+        from ingestion.video_ingest import iter_keyframes
+
+        encoders = self._load_encoders()
+        use_ocr = self.enable_ocr if enable_ocr is None else enable_ocr
+        ocr = self._get_ocr() if use_ocr else None
+        bs = max(1, self.embed_batch_size)
+
+        q: "queue.Queue" = queue.Queue(maxsize=4)   # tối đa ~4 lô chờ -> chặn RAM
+        DONE = object()
+        err: list[Exception] = []
+
+        def producer() -> None:
+            try:
+                batch: list[RawKeyframe] = []
+                for path, vid in video_specs:
+                    for kf in iter_keyframes(
+                        path, out_dir, video_id=vid,
+                        sample_every_s=sample_every_s or self.sample_every_s,
+                        max_frames=max_frames, decode_backend=self.decode_backend,
+                        use_gpu=self.use_gpu_decode,
+                    ):
+                        batch.append(kf)
+                        if len(batch) >= bs:
+                            q.put(batch)
+                            batch = []
+                if batch:
+                    q.put(batch)
+            except Exception as e:  # chuyển lỗi decode về luồng chính
+                err.append(e)
+            finally:
+                q.put(DONE)
+
+        t = threading.Thread(target=producer, daemon=True)
+        t.start()
+
+        all_raws: list[RawKeyframe] = []
+        all_records: list[KeyframeRecord] = []
+        while True:
+            item = q.get()
+            if item is DONE:
+                break
+            emb0 = self._embed_all(encoders[0], item)
+            emb1 = self._embed_all(encoders[1], item) if len(encoders) > 1 else None
+            for i, r in enumerate(item):
+                rec = KeyframeRecord(id=r.id, video_id=r.video_id,
+                                     timestamp=r.timestamp, clip_embedding=emb0[i])
+                if emb1 is not None:
+                    rec.siglip_embedding = emb1[i]
+                if ocr is not None:
+                    rec.ocr_text = ocr.extract(r)
+                all_records.append(rec)
+                all_raws.append(r)
+        t.join()
+        if err:
+            raise err[0]
+        return all_raws, all_records
+
+    def _collect_records(
+        self, video_specs: list[tuple], out_dir: str | Path, *,
+        sample_every_s: Optional[float], max_frames: Optional[int],
+        enable_ocr: Optional[bool],
+    ) -> tuple[list[RawKeyframe], list[KeyframeRecord]]:
+        """Cắt + embed keyframe cho các video. Dùng pipeline song song (A4) nếu
+        `parallel_index`, ngược lại chạy tuần tự (dễ debug/tất định). Hai đường cho
+        KẾT QUẢ GIỐNG NHAU (cùng thứ tự)."""
+        if self.parallel_index:
+            return self._pipeline_records(
+                video_specs, out_dir, sample_every_s=sample_every_s,
+                max_frames=max_frames, enable_ocr=enable_ocr)
+        all_raws: list[RawKeyframe] = []
+        for path, vid in video_specs:
+            all_raws.extend(extract_keyframes(
+                path, out_dir, video_id=vid,
+                sample_every_s=sample_every_s or self.sample_every_s,
+                max_frames=max_frames, decode_backend=self.decode_backend,
+                use_gpu=self.use_gpu_decode))
+        return all_raws, self._embed_raws(all_raws, enable_ocr)
+
     def index_video(
         self, video_path: str | Path, out_dir: str | Path,
         video_id: Optional[str] = None, *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
         enable_ocr: Optional[bool] = None,
     ) -> VideoIndexEntry:
-        raws = extract_keyframes(
-            video_path, out_dir, video_id=video_id,
-            sample_every_s=sample_every_s or self.sample_every_s,
-            # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
-            max_frames=self.max_frames if max_frames == -1 else max_frames,
-            decode_backend=self.decode_backend, use_gpu=self.use_gpu_decode,
-        )
+        # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
+        mf = self.max_frames if max_frames == -1 else max_frames
+        raws, records = self._collect_records(
+            [(video_path, video_id)], out_dir,
+            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
-        vid = raws[0].video_id
-        return self._build_entry(raws, self._embed_raws(raws, enable_ocr), video_id=vid)
+        return self._build_entry(raws, records, video_id=raws[0].video_id)
 
     def index_dataset(
         self, video_paths: Sequence[str | Path], out_dir: str | Path,
@@ -282,17 +375,12 @@ class VideoSearchEngine:
         Đây là hướng scale của blueprint (Mục 5): một index cho cả kho, có thể shard
         về sau. Keyframe id dạng '{video_id}/{n}' đã toàn cục duy nhất."""
         mf = self.max_frames if max_frames == -1 else max_frames
-        all_raws: list[RawKeyframe] = []
-        for vp in video_paths:
-            all_raws.extend(extract_keyframes(
-                vp, out_dir, sample_every_s=sample_every_s or self.sample_every_s,
-                max_frames=mf,   # None = không giới hạn / video (cả dataset đầy đủ)
-                decode_backend=self.decode_backend, use_gpu=self.use_gpu_decode,
-            ))
-        if not all_raws:
+        raws, records = self._collect_records(
+            [(vp, None) for vp in video_paths], out_dir,
+            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
+        if not raws:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")
-        return self._build_entry(all_raws, self._embed_raws(all_raws, enable_ocr),
-                                 video_id=dataset_id)
+        return self._build_entry(raws, records, video_id=dataset_id)
 
     # ---------------------------------------------------------------- query
     def encode_query(self, query: str) -> list[np.ndarray]:
