@@ -36,9 +36,13 @@ tensor, một lượt `get_image_features` (fp16, chia lô tránh tràn VRAM).
 `VideoSearchEngine._embed_all` ưu tiên `embed_batch`, fallback `.embed()` cho mock.
 `_embed_raws` embed cả loạt raws/encoder thay vì vòng lặp lẻ. Có test
 `test_embed_batch_path_used_and_consistent` (lô == lẻ về kết quả).
-**Còn lại:** đo throughput thật ảnh/giây trước/sau trên RTX 3060 (gộp vào B1 benchmark).
 **File:** `ingestion/embed_siglip.py`, `retrieval/video_engine.py`
-**Ước tính ăn:** giảm thời gian embed **~50–100 lần**.
+**ĐÃ ĐO THẬT (2026-07-12, RTX 3060, 41 frame trong RAM):** embed lẻ **34.5 fps** →
+theo lô **58.7 fps** = **×1.7** (KHÔNG phải ×50–100 như ước tính sai ban đầu).
+**Vì sao chỉ ×1.7:** nút thắt là **tiền xử lý CPU** (JPEG decode + resize/normalize của
+processor, chạy tuần tự/ảnh), không phải phép nhân ma trận GPU. Batch chỉ tăng tốc phần
+GPU vốn đã nhỏ. → Muốn nhanh hơn phải tấn công TIỀN XỬ LÝ: NVDEC (A3) cho decode,
+processor nhanh (fast image processor), hoặc nhiều worker preprocessing (mở rộng A4).
 
 ### A2. Lưu / nạp index ra đĩa  ✅ ĐÃ XONG (2026-07-12)
 **Vấn đề:** index + `image_bytes` nằm trong RAM; tắt app là mất, phải embed lại từ đầu.
@@ -105,10 +109,15 @@ bộ nhãn theo **cửa sổ thời gian** (ổn định qua mọi cấu hình),
 Test offline bằng mock (`tests/test_bench_retrieval.py`, 6 test). **Bộ nhãn thật đã tạo:**
 `evaluation/labels.json` — 25 cặp trên 3 video thật (Sydney/NYC/Seoul mưa), cửa sổ xác
 minh bằng cách trích frame ra xem (xem `evaluation/labels.README.md`).
-**CÒN LẠI (chỉ chạy trên máy có GPU — việc của user):**
-- Chạy `python -m evaluation.bench_retrieval --labels evaluation/labels.json --sweep`
-  **trên RTX 3060** → lấy số throughput A1 thật + Recall/MRR + đường cong sample_every_s.
-- Đọc đường cong, chọn "khuỷu tay", cập nhật `configs/settings.yaml` (bỏ [PROVISIONAL]).
+**ĐÃ CHẠY THẬT (2026-07-12, RTX 3060, 3 video, 3196 keyframe, coarse-only KHÔNG OCR/rerank):**
+- Throughput A1: xem mục A1 (×1.7).
+- Accuracy trên 25 nhãn: **hit@1=0.20, hit@5=0.68, MRR=0.40** (recall@1=0.05, recall@5=0.30
+  — recall thấp là do cửa sổ nhãn chứa nhiều frame "đúng" mà chỉ lấy vài kết quả; hit@k
+  là thước đo KIS đáng tin ở đây). Đây là ĐÁY (chưa bật OCR, chưa VLM rerank).
+**CÒN LẠI:**
+- Chạy `--sweep` (quét sample_every_s) để chọn "khuỷu tay" — chưa chạy (index ×3 lâu).
+- Đo lại có bật OCR + VLM rerank để thấy mức nâng so với đáy 0.68.
+- Chốt `configs/settings.yaml` sau khi có đường cong sweep.
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
