@@ -328,6 +328,7 @@
           <button class="btn ghost" id="kis-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="kis-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="kis-ocr" checked> OCR</label>
+          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="kis-asr"> ASR</label>
         </div>
         <form class="search-bar" id="kis-form">
           <input id="kis-query" autocomplete="off" placeholder="VD: một chiếc xe hơi trên đường" />
@@ -358,6 +359,7 @@
           <button class="btn ghost" id="avs-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="avs-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="avs-ocr" checked> OCR</label>
+          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="avs-asr"> ASR</label>
         </div>
         <form class="search-bar" id="avs-form">
           <input id="avs-query" autocomplete="off" placeholder="VD: cảnh đường phố có xe cộ" />
@@ -414,6 +416,7 @@
           <button class="btn ghost" id="video-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="video-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — bỏ tick để nạp nhanh hơn"><input type="checkbox" id="video-ocr" checked> OCR</label>
+          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="video-asr"> ASR</label>
         </div>
         <form class="search-bar" id="video-form">
           <input id="video-query" autocomplete="off"
@@ -763,6 +766,7 @@
     const idxOpts = () => {
       const o = {};
       const oc = q("ocr"); if (oc) o.ocr = oc.checked;
+      const ar = q("asr"); if (ar) o.asr = ar.checked;
       return o;
     };
 
@@ -843,11 +847,12 @@
           const c = el("div", "vcard" + (win ? " win" : ""));
           const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
           const ocr = r.ocr ? "<div class='ocr'>📝 " + r.ocr.slice(0, 80) + "</div>" : "";
+          const asr = r.asr ? "<div class='ocr'>🔊 " + r.asr.slice(0, 80) + "</div>" : "";
           const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
           c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
             "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
             (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
-            vidlbl + ocr + why;
+            vidlbl + ocr + asr + why;
           box.append(c); });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
     });

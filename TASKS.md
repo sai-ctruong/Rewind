@@ -116,10 +116,17 @@ Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` 
 Đã có `retrieval/query_understanding.py` (mock/Claude) nhưng **chưa nối** vào `video_engine`.
 **File:** `retrieval/video_engine.py`, `retrieval/query_understanding.py`
 
-### B3. ASR (Whisper) — tìm theo LỜI NÓI
-`WhisperAsrEngine` đã có nhưng chưa wire. Trích transcript quanh mỗi keyframe →
-đưa vào BM25 cùng OCR → tìm được cảnh theo điều người ta **nói**, không chỉ nhìn thấy.
-**File:** `ingestion/ocr_asr_extract.py`, `retrieval/video_engine.py`
+### B3. ASR (Whisper) — tìm theo LỜI NÓI  ✅ ĐÃ XONG (2026-07-12)
+**Đã làm:** ASR CẤP-VIDEO (đúng cho video, keyframe không có audio riêng): thêm
+`VideoAsrEngine` (ABC) + `MockVideoAsrEngine` + `WhisperVideoAsrEngine` (transcribe cả
+video 1 lần, trả segment có timestamp) + `segment_text_at` (gán đoạn phủ thời điểm
+keyframe, hoặc gần nhất ≤2s). Engine: `enable_asr`/`set_asr`/`_apply_asr` — transcribe
+mỗi video 1 lần (cache theo source_video), điền `record.asr_text` → `searchable_text` →
+BM25 (tín hiệu độc lập với hình ảnh/OCR, cộng qua RRF nên KHÔNG hại tín hiệu cũ). Lỗi
+ASR 1 video không làm vỡ cả mẻ. `VideoIndexEntry.asr_by_id` (lưu/nạp A2). UI: toggle ASR
+(3 tab) + hiển thị 🔊 + endpoint search trả `asr`. Test `test_asr_text_search_finds_spoken_word`.
+**Lưu ý:** cần `pip install openai-whisper` (+ffmpeg) — opt-in, mặc định TẮT (nặng/chậm).
+**File:** `ingestion/ocr_asr_extract.py`, `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### B4. Temporal search trên video thật ("cảnh A trước cảnh B")  ✅ ĐÃ XONG (2026-07-12)
 **Đã làm:** `VideoSearchEngine.search_temporal(entry, events)` — mỗi `events[i]` là 1 câu

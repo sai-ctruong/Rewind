@@ -61,6 +61,7 @@ class VideoIndexEntry:
     num_sampled: int          # số keyframe sau bước cắt thô (histogram)
     num_indexed: int          # số keyframe sau dedup ngữ nghĩa (vào index)
     ocr_by_id: dict[str, str] = field(default_factory=dict)  # chữ OCR đọc được / keyframe
+    asr_by_id: dict[str, str] = field(default_factory=dict)  # lời nói (ASR) quanh keyframe
 
     # ------------------------------------------------------------ persistence (A2)
     def save(self, directory: str | Path) -> None:
@@ -87,7 +88,7 @@ class VideoIndexEntry:
         payload = {
             "video_id": self.video_id, "num_sampled": self.num_sampled,
             "num_indexed": self.num_indexed, "ocr_by_id": self.ocr_by_id,
-            "raws": raws_light,
+            "asr_by_id": self.asr_by_id, "raws": raws_light,
         }
         with (directory / "entry.pkl").open("wb") as fh:
             pickle.dump(payload, fh)
@@ -104,7 +105,7 @@ class VideoIndexEntry:
         return cls(
             video_id=payload["video_id"], index=index, raws=payload["raws"],
             num_sampled=payload["num_sampled"], num_indexed=payload["num_indexed"],
-            ocr_by_id=payload["ocr_by_id"],
+            ocr_by_id=payload["ocr_by_id"], asr_by_id=payload.get("asr_by_id", {}),
         )
 
 
@@ -125,6 +126,9 @@ class VideoSearchEngine:
         rerank_pool: int = 8,                   # [PROVISIONAL] số ứng viên coarse đưa vào VLM
         enable_ocr: bool = True,                # đọc chữ trên keyframe -> tìm biển hiệu/chữ
         ocr_langs: tuple[str, ...] = ("vi", "en"),
+        enable_asr: bool = False,               # B3: chép lời nói cả video -> BM25 (nặng, opt-in)
+        asr_model: str = "small",               # cỡ Whisper (tiny/base/small/medium/large)
+        asr_language: Optional[str] = "vi",
         bm25_weight: float = 3.0,               # [PROVISIONAL] trọng số OCR/text trong RRF
         embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
         decode_backend: str = "auto",           # A3: "auto"|"cv2"|"decord" (decord=NVDEC nếu có)
@@ -140,6 +144,9 @@ class VideoSearchEngine:
         self.rerank_pool = rerank_pool
         self.enable_ocr = enable_ocr
         self.ocr_langs = ocr_langs
+        self.enable_asr = enable_asr
+        self.asr_model = asr_model
+        self.asr_language = asr_language
         self.bm25_weight = bm25_weight
         self.embed_batch_size = embed_batch_size
         self.decode_backend = decode_backend
@@ -148,6 +155,7 @@ class VideoSearchEngine:
         self._encoders: Optional[list] = None   # nạp lười
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
         self._ocr = None                        # EasyOCR, nạp lười
+        self._asr = None                        # Whisper (ASR cấp-video), nạp lười
 
     # ------------------------------------------------------------- encoders
     def _load_encoders(self) -> list:
@@ -192,6 +200,45 @@ class VideoSearchEngine:
         """Bơm OCR engine ngoài (mock trong test). Bật enable_ocr."""
         self._ocr = ocr
         self.enable_ocr = True
+
+    # ------------------------------------------------------------------- asr
+    def _get_asr(self):
+        if self._asr is None:
+            from ingestion.ocr_asr_extract import WhisperVideoAsrEngine
+            self._asr = WhisperVideoAsrEngine(model_size=self.asr_model,
+                                              language=self.asr_language)
+        return self._asr
+
+    def set_asr(self, asr) -> None:
+        """Bơm ASR cấp-video ngoài (mock trong test). Bật enable_asr."""
+        self._asr = asr
+        self.enable_asr = True
+
+    def _apply_asr(self, raws: list[RawKeyframe],
+                   records: list[KeyframeRecord]) -> None:
+        """Điền `asr_text` cho từng record bằng lời nói quanh timestamp của nó.
+
+        Transcribe MỖI video 1 lần (cache theo source_video) rồi gán đoạn transcript
+        phủ thời điểm keyframe (segment_text_at). Lỗi ASR 1 video KHÔNG làm vỡ cả mẻ —
+        video đó chỉ thiếu asr_text (vẫn còn hình ảnh + OCR). Bổ sung tín hiệu 'lời nói'
+        vào searchable_text -> BM25 tìm được cảnh theo điều người ta nói."""
+        from ingestion.ocr_asr_extract import segment_text_at
+
+        asr = self._get_asr()
+        seg_cache: dict[str, list] = {}
+        for raw, rec in zip(raws, records):
+            src = raw.source_video
+            if not src:
+                continue
+            if src not in seg_cache:
+                try:
+                    seg_cache[src] = asr.transcribe_segments(src)
+                except Exception as e:  # pragma: no cover - lỗi Whisper/ffmpeg
+                    print(f"[video_engine] ASR lỗi cho {src!r} ({e!r}); bỏ qua.")
+                    seg_cache[src] = []
+            text = segment_text_at(seg_cache[src], rec.timestamp)
+            if text:
+                rec.asr_text = text
 
     # -------------------------------------------------------------- indexing
     def _embed_all(self, encoder, raws: list[RawKeyframe]) -> list[np.ndarray]:
@@ -253,6 +300,7 @@ class VideoSearchEngine:
             raws={r.id: r for r in raws},
             num_sampled=len(records), num_indexed=len(kept),
             ocr_by_id={r.id: r.ocr_text for r in records if r.ocr_text},
+            asr_by_id={r.id: r.asr_text for r in records if r.asr_text},
         )
 
     def _pipeline_records(
@@ -353,7 +401,7 @@ class VideoSearchEngine:
         self, video_path: str | Path, out_dir: str | Path,
         video_id: Optional[str] = None, *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
-        enable_ocr: Optional[bool] = None,
+        enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
     ) -> VideoIndexEntry:
         # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
         mf = self.max_frames if max_frames == -1 else max_frames
@@ -362,13 +410,15 @@ class VideoSearchEngine:
             sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
+        if self.enable_asr if enable_asr is None else enable_asr:
+            self._apply_asr(raws, records)
         return self._build_entry(raws, records, video_id=raws[0].video_id)
 
     def index_dataset(
         self, video_paths: Sequence[str | Path], out_dir: str | Path,
         dataset_id: str = "__dataset__", *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
-        enable_ocr: Optional[bool] = None,
+        enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
     ) -> VideoIndexEntry:
         """Index NHIỀU video vào MỘT index chung -> tìm xuyên suốt cả dataset.
 
@@ -381,6 +431,8 @@ class VideoSearchEngine:
             sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")
+        if self.enable_asr if enable_asr is None else enable_asr:
+            self._apply_asr(raws, records)
         return self._build_entry(raws, records, video_id=dataset_id)
 
     # ---------------------------------------------------------------- query

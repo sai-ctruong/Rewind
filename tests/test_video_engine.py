@@ -277,6 +277,30 @@ def test_parallel_index_matches_sequential(tmp_path) -> None:
     assert eng_p.search(entry_p, "màu đỏ", top_k=3)[0].video_id == "a"
 
 
+def test_asr_text_search_finds_spoken_word(tmp_path) -> None:
+    """B3: câu NÓI (ASR) đưa vào BM25 -> tìm được cảnh theo lời nói, dù dense/OCR
+    không biết token đó. Token độc nhất chỉ nằm trong transcript đoạn xanh lá."""
+    from ingestion.ocr_asr_extract import MockVideoAsrEngine
+
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.set_asr(MockVideoAsrEngine(canned={"scenes": [
+        {"start": 0.0, "end": 1.0, "text": "xin chào mọi người"},
+        {"start": 1.0, "end": 2.0, "text": "KEODUYNHAT đang được nói ra"},
+        {"start": 2.0, "end": 3.0, "text": "tạm biệt nhé"},
+    ]}))
+    entry = engine.index_video(video, tmp_path / "f")
+
+    # ASR đã điền vào entry, và có token độc nhất.
+    assert any("KEODUYNHAT" in t for t in entry.asr_by_id.values())
+    # Tìm bằng token CHỈ có trong lời nói -> BM25 kéo đúng cảnh xanh lá (~[1,2)s).
+    res = engine.search(entry, "KEODUYNHAT", top_k=3)
+    assert res and 1.0 <= res[0].timestamp < 2.0
+    assert "bm25" in res[0].source_ranks
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

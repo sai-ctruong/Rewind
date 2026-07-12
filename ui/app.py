@@ -204,6 +204,8 @@ def create_app() -> Flask:
         o: dict = {}
         if "ocr" in data:
             o["enable_ocr"] = bool(data["ocr"])
+        if "asr" in data:
+            o["enable_asr"] = bool(data["asr"])
         return o
 
     @app.get("/api/video/list")
@@ -293,6 +295,7 @@ def create_app() -> Flask:
                     "score": round(float(c.score), 3), "video_id": c.video_id,
                     "explanation": getattr(c, "explanation", None),
                     "ocr": entry.ocr_by_id.get(c.keyframe_id),
+                    "asr": entry.asr_by_id.get(c.keyframe_id),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)
 

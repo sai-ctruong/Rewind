@@ -149,3 +149,68 @@ class WhisperAsrEngine(AsrEngine):
         result = self._model.transcribe(raw.audio_path, language=self.language)
         text = (result.get("text") or "").strip()
         return text or None
+
+
+# ===================== ASR CẤP-VIDEO (cho tìm theo lời nói) ===================
+class VideoAsrEngine(ABC):
+    """Interface: chép lời nói CẢ VIDEO 1 lần, trả các đoạn có mốc thời gian.
+
+    VÌ SAO KHÁC AsrEngine: keyframe video KHÔNG có file audio riêng. Cách đúng là
+    transcribe cả video một lần (Whisper tự tách audio + cho timestamp từng câu), rồi
+    engine gán mỗi keyframe đoạn transcript PHỦ thời điểm của nó -> BM25 tìm được cảnh
+    theo điều người ta NÓI (Mục 2.4/3, tín hiệu độc lập với hình ảnh/OCR)."""
+
+    @abstractmethod
+    def transcribe_segments(self, video_path: str) -> list[dict]:
+        """Trả [{"start": s, "end": e, "text": t}, ...] theo thời gian (giây)."""
+        ...
+
+
+class MockVideoAsrEngine(VideoAsrEngine):
+    """Mock: trả các đoạn đóng hộp theo tên video (stem) — test nhánh ASR offline."""
+
+    def __init__(self, canned: Optional[dict[str, list[dict]]] = None):
+        self.canned = canned or {}
+
+    def transcribe_segments(self, video_path: str) -> list[dict]:
+        from pathlib import Path
+        return self.canned.get(Path(video_path).stem, [])
+
+
+class WhisperVideoAsrEngine(VideoAsrEngine):
+    """Bản THẬT: Whisper transcribe cả video, trả segment có timestamp (lazy-import).
+
+    Whisper nhận thẳng đường dẫn video (tự dùng ffmpeg tách audio). Chạy trên GPU nếu
+    có CUDA. Nặng + chậm -> chỉ dùng lúc INDEXING (offline), bật qua enable_asr."""
+
+    def __init__(self, model_size: str = "small", language: Optional[str] = "vi"):
+        try:
+            import whisper
+        except ImportError as e:  # pragma: no cover - chỉ khi dùng bản thật
+            raise ImportError(
+                "WhisperVideoAsrEngine cần 'openai-whisper'. Cài: "
+                "pip install openai-whisper. (Mock-first — dùng MockVideoAsrEngine để test.)"
+            ) from e
+        self.language = language
+        self._model = whisper.load_model(model_size)
+
+    def transcribe_segments(self, video_path: str) -> list[dict]:  # pragma: no cover
+        result = self._model.transcribe(video_path, language=self.language)
+        return [{"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)),
+                 "text": (s.get("text") or "").strip()}
+                for s in result.get("segments", []) if (s.get("text") or "").strip()]
+
+
+def segment_text_at(segments: list[dict], timestamp: float) -> Optional[str]:
+    """Đoạn transcript PHỦ `timestamp` (start <= t < end). Nếu không đoạn nào phủ,
+    lấy đoạn GẦN nhất trong 2s (câu nói sát khoảnh khắc vẫn liên quan). None nếu xa."""
+    best, best_gap = None, None
+    for seg in segments:
+        if seg["start"] <= timestamp < seg["end"]:
+            return seg["text"] or None
+        gap = min(abs(timestamp - seg["start"]), abs(timestamp - seg["end"]))
+        if best_gap is None or gap < best_gap:
+            best, best_gap = seg, gap
+    if best is not None and best_gap is not None and best_gap <= 2.0:
+        return best["text"] or None
+    return None
