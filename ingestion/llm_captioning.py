@@ -164,8 +164,10 @@ class QwenVLCaptioner(Captioner):
         self.max_new_tokens = max_new_tokens
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if self.device == "cuda" else torch.float32
+        # low_cpu_mem_usage: nạp từng shard, KHÔNG dựng full state-dict trên CPU -> giảm
+        # áp lực RAM/paging file (Windows dễ lỗi "paging file too small" khi đã nạp SigLIP).
         self._model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_name, torch_dtype=dtype
+            model_name, torch_dtype=dtype, low_cpu_mem_usage=True
         ).to(self.device)
         self._model.eval()
         self._proc = AutoProcessor.from_pretrained(model_name, max_pixels=max_pixels)

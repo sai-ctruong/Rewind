@@ -266,7 +266,15 @@ class VideoSearchEngine:
         đại diện sau dedup, KHÔNG phải mọi frame lấy mẫu. Caption (quan hệ + hoàn cảnh)
         vào searchable_text -> BM25 tìm được theo MÔ TẢ NGỮ NGHĨA, không chỉ hình ảnh
         thuần (Mục 2.4). Lỗi caption 1 frame không làm vỡ cả mẻ."""
-        captioner = self._get_captioner()
+        try:
+            captioner = self._get_captioner()
+        except Exception as e:  # pragma: no cover - nạp model lỗi (thiếu RAM/paging file)
+            # KHÔNG làm sập cả lần index chỉ vì captioner nạp lỗi: bỏ caption, giữ index
+            # (vẫn có SigLIP + OCR/ASR). Gợi ý khắc phục rõ ràng.
+            print(f"[video_engine] Không nạp được captioner ({e!r}). BỎ QUA caption — "
+                  "index vẫn chạy. Khắc phục: tăng paging file Windows, hoặc dùng "
+                  "ClaudeCaptioner (API) khi có key.", flush=True)
+            return
         for rec in kept:
             raw = raws_by_id.get(rec.id)
             if raw is None:
