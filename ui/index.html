@@ -426,6 +426,11 @@
             placeholder="VD: a person walking on the street" />
           <button class="btn" type="submit">Tìm trong video</button>
         </form>
+        <div class="controls" style="margin-top:6px">
+          <label class="rerank-tog" title="Tìm khung hình GIỐNG một ảnh mẫu (image-to-video) — đưa ảnh thay vì mô tả chữ">🖼️ Tìm bằng ảnh:
+            <input type="file" id="video-imgfile" accept="image/*" style="max-width:220px"></label>
+          <button class="btn ghost" id="video-imgbtn" type="button">Tìm theo ảnh</button>
+        </div>
         <div class="video-results" id="video-results"></div>
       </div>
       <div class="notice" id="video-offline" style="display:none">
@@ -860,6 +865,36 @@
             vidlbl + cap + ocr + asr + why;
           box.append(c); });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
+    });
+
+    // Q1: tìm bằng ẢNH mẫu (chỉ tab nào có ô upload).
+    const imgbtn = q("imgbtn");
+    if (imgbtn) imgbtn.addEventListener("click", async () => {
+      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const file = q("imgfile").files[0];
+      const box = q("results"), countEl = $("#" + cfg.key + "-count");
+      if (!file) { box.innerHTML = "<div class='empty'>Chọn một ảnh mẫu trước.</div>"; return; }
+      box.innerHTML = "<div class='empty'>Đang tìm khung hình giống ảnh…</div>";
+      if (countEl) countEl.textContent = "";
+      try {
+        const fd = new FormData();
+        fd.append("video", vid); fd.append("image", file); fd.append("topk", cfg.topk);
+        const j = await (await fetch("/api/video/search_image", { method: "POST", body: fd })).json();
+        box.innerHTML = "";
+        if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
+        if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
+        if (countEl) countEl.innerHTML = "🖼️ " + j.results.length + " khung giống ảnh mẫu";
+        j.results.forEach((r, i) => {
+          const c = el("div", "vcard");
+          const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
+          const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
+          c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
+            "<div class='cap'><span class='rank'>#" + (i + 1) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
+            vidlbl + cap;
+          box.append(c);
+        });
+      } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm bằng ảnh.</div>"; }
     });
 
     const inst = { refresh };

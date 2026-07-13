@@ -353,6 +353,30 @@ def test_caption_search_finds_by_relationship(tmp_path) -> None:
     assert "bm25" in res[0].source_ranks
 
 
+def test_search_by_image_finds_matching_scene(tmp_path) -> None:
+    """Q1: truy vấn bằng ẢNH — đưa ảnh ĐỎ thuần -> tìm ra cảnh đỏ (~[0,1)s).
+    Mock encoder đọc màu trung bình ảnh nên ảnh đỏ khớp keyframe đỏ."""
+    import cv2
+    import numpy as np
+
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    # Ảnh mẫu ĐỎ thuần (BGR đỏ) -> JPEG bytes.
+    red = np.zeros((64, 64, 3), np.uint8); red[:] = (0, 0, 255)
+    ok, buf = cv2.imencode(".jpg", red)
+    res = engine.search_by_image(entry, buf.tobytes(), top_k=3)
+    assert res and res[0].timestamp < 1.0                # cảnh đỏ đầu video
+    # Ảnh xanh dương -> ra cảnh xanh dương (~[2,3)s).
+    blue = np.zeros((64, 64, 3), np.uint8); blue[:] = (255, 0, 0)
+    _ok, bbuf = cv2.imencode(".jpg", blue)
+    res2 = engine.search_by_image(entry, bbuf.tobytes(), top_k=3)
+    assert res2 and res2[0].timestamp >= 2.0
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

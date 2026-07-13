@@ -590,6 +590,36 @@ class VideoSearchEngine:
             out.append(l2_normalize(mean.reshape(1, -1))[0])
         return out
 
+    def encode_image_query(self, image_bytes: bytes) -> list[np.ndarray]:
+        """Encode 1 ẢNH truy vấn vào CÙNG không gian với keyframe (mỗi encoder 1 vector).
+
+        VÌ SAO: SigLIP là mô hình image-text -> vector ảnh và vector keyframe cùng không
+        gian, so cosine trực tiếp. Bọc ảnh vào RawKeyframe rồi gọi encoder.embed(raw) —
+        đúng interface chung nên chạy cả bản thật lẫn mock. Đây là 'đổi phương thức truy
+        vấn' (slide Buổi 2): đưa ẢNH MẪU thay vì mô tả chữ, liên kết chặt hơn."""
+        query_raw = RawKeyframe(id="__imgquery__", video_id="__query__",
+                                timestamp=0.0, image_bytes=image_bytes)
+        out: list[np.ndarray] = []
+        for enc in self._load_encoders():
+            v = np.asarray(enc.embed(query_raw), dtype=np.float32).reshape(1, -1)
+            out.append(l2_normalize(v)[0])
+        return out
+
+    def search_by_image(
+        self, entry: VideoIndexEntry, image_bytes: bytes, top_k: int = 8,
+    ) -> list:
+        """Tìm keyframe GIỐNG một ảnh mẫu (image-to-video). Chỉ dùng tín hiệu THỊ GIÁC
+        (dense ensemble), KHÔNG BM25 (ảnh không có 'chữ' để so). Trả top_k coarse."""
+        qvecs = self.encode_image_query(image_bytes)
+        retriever = CoarseRetriever(entry.index)
+        coarse = retriever.search(
+            query_clip_vec=qvecs[0],
+            query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
+            query_text=None,          # query ẢNH: không có nhánh BM25
+            top_k=top_k,
+        )
+        return coarse[:top_k]
+
     def search(
         self, entry: VideoIndexEntry, query: str, top_k: int = 8, rerank: bool = False,
     ) -> list:

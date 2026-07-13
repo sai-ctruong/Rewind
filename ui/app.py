@@ -302,6 +302,32 @@ def create_app() -> Flask:
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         return jsonify(video=vid, query=query, reranked=rerank, results=results)
 
+    @app.post("/api/video/search_image")
+    def video_search_image():
+        """Q1: tìm bằng ẢNH mẫu. Nhận file ảnh (multipart 'image') + 'video' (form).
+        SigLIP encode ảnh -> search thị giác thuần."""
+        vid = request.form.get("video", "")
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        f = request.files.get("image")
+        if f is None or not f.filename:
+            return jsonify(error="Chưa chọn ảnh mẫu."), 400
+        data = f.read()
+        if not data:
+            return jsonify(error="Ảnh rỗng."), 400
+        try:
+            cands = video_state["engine"].search_by_image(
+                entry, data, top_k=int(request.form.get("topk", 8)))
+        except Exception as e:  # pragma: no cover
+            return jsonify(error=f"Lỗi tìm bằng ảnh: {e}"), 500
+        results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
+                    "score": round(float(c.score), 3), "video_id": c.video_id,
+                    "caption": entry.caption_by_id.get(c.keyframe_id),
+                    "ocr": entry.ocr_by_id.get(c.keyframe_id),
+                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
+        return jsonify(video=vid, count=len(results), results=results)
+
     @app.post("/api/video/temporal")
     def video_temporal():
         """B4: tìm chuỗi 'cảnh A TRƯỚC cảnh B (…)'. `events` = danh sách câu mô tả cảnh
