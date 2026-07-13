@@ -213,11 +213,19 @@ theo chỉ số để không đụng khi 2 cảnh trùng chữ. UI: tab "⏱️ 
 (đúng thứ tự có chuỗi, ngược thứ tự rỗng, 3 cảnh, <2 cảnh báo lỗi) + test UI đường lỗi.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
-### B5. LLM Auto-Captioning lúc indexing (blueprint Mục 2.4)
+### B5. LLM Auto-Captioning lúc indexing (blueprint Mục 2.4)  🟡 XÂY XONG, local kẹt VRAM
 Sinh caption tự nhiên cho mỗi keyframe đại diện (LVLM) → BM25 bắt được **quan hệ
 ngữ nghĩa** ("người lớn hướng dẫn trẻ tưới hoa") mà object-detector rời rạc không nắm.
-`llm_captioning.py` có bản mock; cần nối vào indexing video (cần API hoặc VLM local).
-**File:** `ingestion/llm_captioning.py`, `retrieval/video_engine.py`
+**Đã làm:** `QwenVLCaptioner` (local) + `ClaudeCaptioner` (sửa cho frame-RAM, sẵn khi có
+API). Engine `enable_caption`/`set_captioner`/`_apply_captions` — caption CHỈ trên đại
+diện sau dedup → `llm_caption` → BM25. `caption_by_id` (lưu/nạp). UI toggle Caption + 💬.
+Test mock: tìm theo token quan hệ chỉ có trong caption → PASS (logic đúng).
+**VẤN ĐỀ THỰC TẾ (đo trên máy):** Qwen2-VL-2B local nạp cạnh SigLIP **TRÀN VRAM 6GB**
+→ hard-crash (os error 1455) khi UI đang chạy. Đã thêm `_free_encoders()` (xả SigLIP
+trước) nhưng vẫn borderline. **KHUYẾN NGHỊ: dùng ClaudeCaptioner (API) khi có key** —
+không nạp model local, chất lượng cao hơn, gọi song song được. Local chỉ khả thi khi
+đóng hết app GPU khác + video ngắn.
+**File:** `ingestion/llm_captioning.py`, `retrieval/video_engine.py`, `ui/`
 
 ### B6. Ensemble thêm CLIP (BTC cấp sẵn) cạnh SigLIP
 Blueprint Mục 2.1: dùng CLIP feature BTC cấp (miễn phí compute) + SigLIP → giảm
