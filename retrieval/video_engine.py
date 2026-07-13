@@ -605,6 +605,39 @@ class VideoSearchEngine:
             out.append(l2_normalize(v)[0])
         return out
 
+    # Từ dừng (không mang concept) — loại khỏi gợi ý. Việt + Anh thường gặp.
+    _STOPWORDS = {
+        "và", "là", "của", "có", "một", "các", "những", "người", "cảnh", "trong",
+        "trên", "với", "đang", "này", "cho", "được", "tại", "mô", "tả", "video",
+        "the", "a", "an", "of", "in", "on", "with", "and", "to", "at", "is", "are",
+        "photo", "image", "scene",
+    }
+
+    def suggest_concepts(
+        self, entry: VideoIndexEntry, candidate_ids: Sequence[str], query: str,
+        top_n: int = 8,
+    ) -> list[str]:
+        """Gợi ý CONCEPT liên quan từ top-K kết quả (slide Buổi 2 — khám phá/khai phá).
+
+        Đếm từ khoá hay xuất hiện trong caption/OCR/ASR của các keyframe top-K (trừ từ
+        đã có trong câu + từ dừng) -> gợi ý người dùng thêm vào truy vấn để THU HẸP
+        (khai phá) hoặc MỞ RỘNG hướng (khám phá). Rỗng nếu keyframe chưa có tín hiệu chữ
+        (chưa bật caption/OCR/ASR)."""
+        from collections import Counter
+
+        from ingestion.build_index import tokenize
+
+        qtok = set(tokenize(query))
+        cnt: Counter = Counter()
+        for kid in candidate_ids:
+            text = " ".join(t for t in (
+                entry.caption_by_id.get(kid), entry.ocr_by_id.get(kid),
+                entry.asr_by_id.get(kid)) if t)
+            for tok in tokenize(text):
+                if len(tok) >= 3 and tok not in qtok and tok not in self._STOPWORDS:
+                    cnt[tok] += 1
+        return [w for w, _ in cnt.most_common(top_n)]
+
     def neighbors(
         self, entry: VideoIndexEntry, frame_id: str, before: int = 4, after: int = 4,
     ) -> list[RawKeyframe]:

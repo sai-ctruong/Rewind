@@ -300,7 +300,11 @@ def create_app() -> Flask:
                     "asr": entry.asr_by_id.get(c.keyframe_id),
                     "caption": entry.caption_by_id.get(c.keyframe_id),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
-        return jsonify(video=vid, query=query, reranked=rerank, results=results)
+        # F3: gợi ý concept liên quan từ top kết quả (khám phá/khai phá).
+        suggestions = video_state["engine"].suggest_concepts(
+            entry, [c.keyframe_id for c in cands], query)
+        return jsonify(video=vid, query=query, reranked=rerank,
+                       results=results, suggestions=suggestions)
 
     @app.post("/api/video/search_image")
     def video_search_image():

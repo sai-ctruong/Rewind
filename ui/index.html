@@ -852,6 +852,21 @@
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
         if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length) +
           (j.reranked ? " · <b>VLM rerank</b>" : "");
+        // F3: chip GỢI Ý CONCEPT — bấm để thêm vào câu và tìm lại (thu hẹp/mở rộng).
+        if (j.suggestions && j.suggestions.length) {
+          const sug = el("div");
+          sug.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 8px";
+          sug.innerHTML = "<span style='font-size:12px;color:var(--faint)'>Gợi ý:</span>";
+          j.suggestions.forEach(w => { const chip = el("button", "btn ghost");
+            chip.type = "button"; chip.textContent = "+ " + w;
+            chip.style.cssText = "font-size:11px;padding:3px 9px";
+            chip.addEventListener("click", () => {
+              q("query").value = (q("query").value.trim() + " " + w).trim();
+              q("form").requestSubmit ? q("form").requestSubmit() : q("form").dispatchEvent(new Event("submit"));
+            });
+            sug.append(chip); });
+          box.append(sug);
+        }
         // GOM CỤM theo video (khi kết quả xuyên nhiều video) — đỡ tràn frame giống nhau.
         const groups = {};
         j.results.forEach((r, i) => { (groups[r.video_id || ""] = groups[r.video_id || ""] || []).push([r, i]); });

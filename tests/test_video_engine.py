@@ -389,6 +389,24 @@ def test_neighbors_returns_same_video_window(engine_and_entry) -> None:
     assert engine.neighbors(entry, "khong-co-id") == []
 
 
+def test_suggest_concepts_from_captions(tmp_path) -> None:
+    """F3: gợi ý concept lấy từ caption/OCR/ASR của top-K, loại từ đã có trong câu."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.set_captioner(CaptionMockCaptioner())
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    ids = list(entry.caption_by_id.keys())
+    sug = engine.suggest_concepts(entry, ids, query="tưới hoa", top_n=8)
+    assert sug, "phải có concept gợi ý từ caption"
+    assert "tưới" not in sug and "hoa" not in sug   # từ trong câu bị loại
+    assert all(len(w) >= 3 for w in sug)            # bỏ token quá ngắn
+    # Không có tín hiệu chữ -> rỗng.
+    assert engine.suggest_concepts(entry, [], query="x") == []
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)
