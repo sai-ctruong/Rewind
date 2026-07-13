@@ -184,6 +184,10 @@ class VideoSearchEngine:
             from ingestion.embed_siglip import SiglipEncoder
 
             self._encoders = [SiglipEncoder(model_name=n) for n in self.encoder_names]
+            # In DEVICE để phát hiện ngay nếu chạy nhầm CPU (chậm 10-30× -> "index lâu").
+            devs = ", ".join(str(getattr(e, "device", "?")) for e in self._encoders)
+            print(f"[video_engine] SigLIP encoders trên device: {devs} "
+                  f"(cuda = GPU nhanh; cpu = CHẬM, kiểm tra torch CUDA!)", flush=True)
         return self._encoders
 
     def set_encoders(self, encoders: list) -> None:
@@ -273,6 +277,29 @@ class VideoSearchEngine:
             return list(batch_fn(raws, self.embed_batch_size))
         return [encoder.embed(r) for r in raws]
 
+    def _embed_batch_shared(self, encoders: list,
+                            raws: list[RawKeyframe]) -> list[list[np.ndarray]]:
+        """Embed `raws` bằng MỌI encoder, GIẢI MÃ ẢNH 1 LẦN dùng chung (nếu bản thật).
+
+        Trước đây mỗi encoder tự load ảnh -> ensemble 2 encoder giải mã JPEG 2 lần
+        (lãng phí đúng phần tiền xử lý CPU vốn là nút thắt). Ở đây decode 1 lần/lô rồi
+        đưa cùng ảnh cho cả 2 encoder. Mock không có embed_pil_batch -> fallback lối cũ."""
+        if not all(hasattr(e, "embed_pil_batch") for e in encoders):
+            return [self._embed_all(e, raws) for e in encoders]
+        from concurrent.futures import ThreadPoolExecutor
+
+        from ingestion.schemas import load_pil_image
+
+        bs = max(1, self.embed_batch_size)
+        outs: list[list[np.ndarray]] = [[] for _ in encoders]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for start in range(0, len(raws), bs):
+                chunk = raws[start:start + bs]
+                images = list(pool.map(load_pil_image, chunk))   # decode MỘT lần
+                for ei, e in enumerate(encoders):
+                    outs[ei].extend(e.embed_pil_batch(images, bs))
+        return outs
+
     def _embed_raws(self, raws: list[RawKeyframe],
                     enable_ocr: Optional[bool] = None) -> list[KeyframeRecord]:
         """Embed mỗi keyframe bằng cả 2 encoder (slot clip + siglip) + OCR (nếu bật).
@@ -283,8 +310,9 @@ class VideoSearchEngine:
         encoders = self._load_encoders()
         use_ocr = self.enable_ocr if enable_ocr is None else enable_ocr
         ocr = self._get_ocr() if use_ocr else None
-        emb0 = self._embed_all(encoders[0], raws)
-        emb1 = self._embed_all(encoders[1], raws) if len(encoders) > 1 else None
+        embs = self._embed_batch_shared(encoders, raws)
+        emb0 = embs[0]
+        emb1 = embs[1] if len(embs) > 1 else None
         records: list[KeyframeRecord] = []
         for i, r in enumerate(raws):
             rec = KeyframeRecord(
@@ -377,12 +405,15 @@ class VideoSearchEngine:
 
         all_raws: list[RawKeyframe] = []
         all_records: list[KeyframeRecord] = []
+        import time as _time
+        t0 = _time.perf_counter()
         while True:
             item = q.get()
             if item is DONE:
                 break
-            emb0 = self._embed_all(encoders[0], item)
-            emb1 = self._embed_all(encoders[1], item) if len(encoders) > 1 else None
+            embs = self._embed_batch_shared(encoders, item)
+            emb0 = embs[0]
+            emb1 = embs[1] if len(embs) > 1 else None
             for i, r in enumerate(item):
                 rec = KeyframeRecord(id=r.id, video_id=r.video_id,
                                      timestamp=r.timestamp, clip_embedding=emb0[i])
@@ -392,6 +423,11 @@ class VideoSearchEngine:
                     rec.ocr_text = ocr.extract(r)
                 all_records.append(rec)
                 all_raws.append(r)
+            # Tiến độ: cho thấy đang chạy + tốc độ thực (frame/giây) để không tưởng treo.
+            n = len(all_records)
+            fps = n / max(1e-6, _time.perf_counter() - t0)
+            print(f"[index] đã xử lý {n} keyframe ({fps:.1f} frame/giây"
+                  f"{', có OCR' if ocr is not None else ''})", flush=True)
         t.join()
         if err:
             raise err[0]

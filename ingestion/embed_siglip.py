@@ -112,26 +112,30 @@ class SiglipEncoder(SiglipEmbeddingProvider):
 
         from .schemas import load_pil_image
 
-        torch = self._torch
-        out: list[np.ndarray] = []
         # Load ảnh SONG SONG bằng thread: JPEG decode (libjpeg) nhả GIL nên nhiều
         # thread giải mã thật sự chồng nhau. Đây là nút thắt thực đo được (tiền xử lý
-        # CPU lớn hơn phần GPU), nên luồng hoá phần này mới ăn — batch GPU đơn thuần
-        # chỉ ~×1.7. Dùng thread thay process để KHÔNG phải pickle ảnh.
-        pool = ThreadPoolExecutor(max_workers=8)
-        try:
-            for start in range(0, len(raws), batch_size):
-                chunk = raws[start:start + batch_size]
-                images = list(pool.map(load_pil_image, chunk))
-                inputs = self._processor(images=images, return_tensors="pt").to(self.device)
-                with torch.no_grad():
-                    feats = self._model.get_image_features(**inputs)
-                mat = self._pool(feats).float().cpu().numpy().astype(np.float32)
-                norms = np.linalg.norm(mat, axis=1, keepdims=True)
-                norms[norms == 0] = 1.0  # tránh chia 0 với vector suy biến
-                out.extend(mat / norms)
-        finally:
-            pool.shutdown()
+        # CPU lớn hơn phần GPU). Dùng thread thay process để KHÔNG phải pickle ảnh.
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            images = list(pool.map(load_pil_image, raws))
+        return self.embed_pil_batch(images, batch_size)
+
+    def embed_pil_batch(
+        self, images: list, batch_size: int = 256,
+    ) -> list[np.ndarray]:  # pragma: no cover - bản thật (cần GPU/model)
+        """Embed các ảnh PIL ĐÃ LOAD SẴN (bỏ bước giải mã). Cho phép ENSEMBLE giải mã
+        JPEG 1 LẦN rồi dùng chung cho CẢ 2 encoder — trước đây mỗi encoder tự load lại
+        nên giải mã 2 lần (lãng phí đúng phần tiền xử lý là nút thắt)."""
+        torch = self._torch
+        out: list[np.ndarray] = []
+        for start in range(0, len(images), batch_size):
+            chunk = images[start:start + batch_size]
+            inputs = self._processor(images=chunk, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                feats = self._model.get_image_features(**inputs)
+            mat = self._pool(feats).float().cpu().numpy().astype(np.float32)
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # tránh chia 0 với vector suy biến
+            out.extend(mat / norms)
         return out
 
     def encode_text(self, text: str) -> np.ndarray:  # pragma: no cover - bản thật
