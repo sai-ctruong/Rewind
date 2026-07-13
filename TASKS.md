@@ -112,15 +112,35 @@ bộ nhãn theo **cửa sổ thời gian** (ổn định qua mọi cấu hình),
 Test offline bằng mock (`tests/test_bench_retrieval.py`, 6 test). **Bộ nhãn thật đã tạo:**
 `evaluation/labels.json` — 25 cặp trên 3 video thật (Sydney/NYC/Seoul mưa), cửa sổ xác
 minh bằng cách trích frame ra xem (xem `evaluation/labels.README.md`).
-**ĐÃ CHẠY THẬT (2026-07-12, RTX 3060, 3 video, 3196 keyframe, coarse-only KHÔNG OCR/rerank):**
-- Throughput A1: xem mục A1 (×1.7).
-- Accuracy trên 25 nhãn: **hit@1=0.20, hit@5=0.68, MRR=0.40** (recall@1=0.05, recall@5=0.30
-  — recall thấp là do cửa sổ nhãn chứa nhiều frame "đúng" mà chỉ lấy vài kết quả; hit@k
-  là thước đo KIS đáng tin ở đây). Đây là ĐÁY (chưa bật OCR, chưa VLM rerank).
-**CÒN LẠI:**
-- Chạy `--sweep` (quét sample_every_s) để chọn "khuỷu tay" — chưa chạy (index ×3 lâu).
-- Đo lại có bật OCR + VLM rerank để thấy mức nâng so với đáy 0.68.
-- Chốt `configs/settings.yaml` sau khi có đường cong sweep.
+**ĐÃ CHẠY THẬT (2026-07-12, RTX 3060, 3 video, 25 nhãn):**
+
+*Sweep sample_every_s (coarse-only, không OCR):*
+| sample | hit@1 | hit@5 | MRR | index | #kf |
+|---|---|---|---|---|---|
+| 2.0s | 0.28 | 0.68 | 0.443 | 77s | 1529 |
+| 1.0s | 0.28 | 0.68 | 0.467 | 86s | 2679 |
+| 0.5s | **0.36** | 0.68 | **0.515** | 150s | 4147 |
+→ **hit@5 phẳng 0.68** ở mọi mức (recall bị chặn bởi ENCODER, không phải lấy mẫu).
+Lấy mẫu dày hơn chỉ tăng PRECISION (hit@1/MRR). "Khuỷu tay": **1.0s** (cân bằng) hoặc
+**0.5s** nếu cần top-1 tốt và chịu được index ×2.
+
+*OCR & VLM rerank (sample 1.0):*
+| cấu hình | hit@1 | hit@5 | MRR | ghi chú |
+|---|---|---|---|---|
+| coarse (không OCR) | 0.28 | **0.68** | 0.467 | đáy |
+| coarse + OCR (bm25_w=3.0) | 0.32 | **0.48 ↓** | 0.394 ↓ | **OCR LÀM HẠI recall!** |
+| coarse + OCR + rerank | **0.48** | 0.52 | 0.50 | rerank +hit@1 mạnh, ~25s/query |
+
+**PHÁT HIỆN QUAN TRỌNG:**
+1. **OCR ở bm25_weight=3.0 LÀM HẠI hit@5 (0.68→0.48)** — chữ trên biển hiệu khớp nhầm
+   token truy vấn thị giác, đẩy frame đúng khỏi top-5. → `bm25_weight=3.0` [PROVISIONAL]
+   là QUÁ CAO cho query thị giác. Cần **sweep bm25_weight** + xét **trọng số theo loại
+   query** (chỉ tăng BM25 khi query là chữ literal như tên biển hiệu).
+2. **VLM rerank tăng hit@1 mạnh (0.32→0.48)** nhưng ~25s/query (Qwen2-VL-2B, không OOM 6GB)
+   → chỉ hợp KIS top-K, KHÔNG hợp AVS. Và rerank KHÔNG cứu được recall đã mất ở coarse.
+3. Cấu hình HỨA HẸN NHẤT chưa đo: **coarse KHÔNG OCR (hit@5=0.68) + rerank** — giữ recall
+   cao rồi rerank precision. Nên đo tiếp.
+**CÒN LẠI:** sweep bm25_weight; đo coarse-no-OCR + rerank; chốt configs/settings.yaml.
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
