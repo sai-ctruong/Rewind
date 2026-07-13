@@ -174,7 +174,17 @@ VLM rerank cho KIS (không cho AVS vì ~24s/query); OCR weight cao (≥2) HẠI 
   IN HOA (tên biển hiệu: SAMSUNG/LANEIGE/OPEN) → BM25 CAO (3.0) để tín hiệu OCR nổi; câu
   mô tả thị giác → BM25 THẤP (1.0) giữ recall. Giải trực tiếp mâu thuẫn "OCR giúp query
   chữ nhưng hại query thị giác". Test `test_adaptive_bm25_weight` + tìm-biển-OCR.
-  **CÒN LẠI:** re-benchmark trên 37 nhãn + adaptive để đo mức lợi thật.
+
+**XÁC MINH TRÊN 37 NHÃN (2026-07-12, cùng index OCR) — adaptive THẮNG rõ:**
+| cấu hình (coarse) | hit@1 | hit@5 | MRR |
+|---|---|---|---|
+| fixed bm25=1.0 | 0.297 | 0.649 | 0.452 |
+| fixed bm25=3.0 | 0.324 | **0.514 ↓** | 0.406 |
+| **adaptive** ✅ | **0.351** | **0.649** | **0.487** |
+→ Adaptive đạt hit@1 CAO NHẤT (0.351) MÀ giữ nguyên recall 0.649 (không tụt xuống 0.514
+như fixed-3.0). Đúng mục tiêu "được cả hai": lấy lại precision cho query chữ mà không
+hại recall thị giác. **adaptive + VLM rerank (config KIS): hit@1=0.595, hit@5=0.676,
+MRR=0.623** — ổn định với bản 25 nhãn (0.60).
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
