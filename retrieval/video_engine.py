@@ -605,6 +605,23 @@ class VideoSearchEngine:
             out.append(l2_normalize(v)[0])
         return out
 
+    def neighbors(
+        self, entry: VideoIndexEntry, frame_id: str, before: int = 4, after: int = 4,
+    ) -> list[RawKeyframe]:
+        """Trả các keyframe LÂN CẬN (cùng video, quanh thời điểm) của 1 frame — phục vụ
+        'Video Browser' (slide Buổi 2): từ 1 kết quả, xem frame trước/sau để định vị bối
+        cảnh, thay vì lưới phẳng rời rạc. Dùng MỌI frame đã lấy mẫu (kể cả bị dedup gộp)
+        để timeline dày; ảnh dựng lại từ video gốc khi cần."""
+        ref = entry.raws.get(frame_id)
+        if ref is None:
+            return []
+        same = sorted((r for r in entry.raws.values() if r.video_id == ref.video_id),
+                      key=lambda r: r.timestamp)
+        idx = next((i for i, r in enumerate(same) if r.id == frame_id), None)
+        if idx is None:
+            return []
+        return same[max(0, idx - before): idx + after + 1]
+
     def search_by_image(
         self, entry: VideoIndexEntry, image_bytes: bytes, top_k: int = 8,
     ) -> list:

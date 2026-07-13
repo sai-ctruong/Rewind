@@ -852,20 +852,51 @@
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
         if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length) +
           (j.reranked ? " · <b>VLM rerank</b>" : "");
-        j.results.forEach((r, i) => { const win = cfg.highlightTop && i === 0;
-          const c = el("div", "vcard" + (win ? " win" : ""));
-          const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
-          const ocr = r.ocr ? "<div class='ocr'>📝 " + r.ocr.slice(0, 80) + "</div>" : "";
-          const asr = r.asr ? "<div class='ocr'>🔊 " + r.asr.slice(0, 80) + "</div>" : "";
-          const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
-          const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
-          c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
-            "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
-            (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
-            vidlbl + cap + ocr + asr + why;
-          box.append(c); });
+        // GOM CỤM theo video (khi kết quả xuyên nhiều video) — đỡ tràn frame giống nhau.
+        const groups = {};
+        j.results.forEach((r, i) => { (groups[r.video_id || ""] = groups[r.video_id || ""] || []).push([r, i]); });
+        const multi = Object.keys(groups).length > 1;
+        for (const [g, items] of Object.entries(groups)) {
+          if (multi) { const h = el("div");
+            h.style.cssText = "width:100%;font:600 13px var(--mono);color:var(--muted);margin:10px 0 2px";
+            h.textContent = "🎬 " + g + " · " + items.length + " khung"; box.append(h); }
+          items.forEach(([r, i]) => { const win = cfg.highlightTop && i === 0;
+            const c = el("div", "vcard" + (win ? " win" : ""));
+            const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
+            const ocr = r.ocr ? "<div class='ocr'>📝 " + r.ocr.slice(0, 80) + "</div>" : "";
+            const asr = r.asr ? "<div class='ocr'>🔊 " + r.asr.slice(0, 80) + "</div>" : "";
+            const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
+            const vidlbl = (!multi && r.video_id) ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
+            c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
+              "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
+              (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
+              vidlbl + cap + ocr + asr + why +
+              "<button class='btn ghost nb' type='button' style='margin-top:6px;font-size:11px'>🎞 Lân cận</button>";
+            box.append(c);
+            c.querySelector(".nb").addEventListener("click", () => toggleNeighbors(c, r.id));
+          });
+        }
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
     });
+
+    // D1: mở/đóng dải keyframe LÂN CẬN (cùng video, trước/sau) để định vị bối cảnh.
+    async function toggleNeighbors(card, frameId) {
+      let strip = card.querySelector(".nbstrip");
+      if (strip) { strip.remove(); return; }
+      strip = el("div", "nbstrip");
+      strip.style.cssText = "display:flex;gap:4px;overflow-x:auto;width:100%;margin-top:6px;padding:5px;background:var(--surface-2);border-radius:8px";
+      strip.textContent = "…"; card.append(strip);
+      try {
+        const j = await (await fetch("/api/video/neighbors/" + encodeURIComponent(frameId))).json();
+        strip.textContent = "";
+        (j.frames || []).forEach(f => { const t = el("div");
+          t.style.cssText = "flex:none;text-align:center;font:10px var(--mono);color:var(--faint)";
+          t.innerHTML = "<img src='" + f.image + "' loading='lazy' style='width:84px;height:56px;object-fit:cover;border-radius:5px;" +
+            (f.is_ref ? "outline:2px solid var(--accent)" : "") + "'><div>" + f.timestamp + "s</div>";
+          strip.append(t); });
+        if (!j.frames || !j.frames.length) strip.textContent = "Không có lân cận.";
+      } catch (e) { strip.textContent = "Lỗi tải lân cận."; }
+    }
 
     // Q1: tìm bằng ẢNH mẫu (chỉ tab nào có ô upload).
     const imgbtn = q("imgbtn");

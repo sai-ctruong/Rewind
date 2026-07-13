@@ -126,6 +126,12 @@ def test_video_search_image_without_index_errors(client) -> None:
     assert r.status_code == 400
 
 
+def test_video_neighbors_missing_errors(client) -> None:
+    # D1: frame không tồn tại -> 404.
+    r = client.get("/api/video/neighbors/khong/co")
+    assert r.status_code == 404
+
+
 def test_video_frame_missing_errors(client) -> None:
     r = client.get("/api/video/frame/khong/co")
     assert r.status_code == 404
@@ -152,7 +158,8 @@ def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
     for hook in ("/api/health", "/api/kisc/start", "/api/search", "/api/vqa",
                  "/api/video/list", "/api/video/search", "/api/video/index_folder",
-                 "/api/video/temporal", "/api/video/search_image"):
+                 "/api/video/temporal", "/api/video/search_image",
+                 "/api/video/neighbors/"):
         assert hook in html
     # Có bản mô phỏng dự phòng cho chế độ Artifact (không backend).
     assert "simSession" in html and "data-theme" in html

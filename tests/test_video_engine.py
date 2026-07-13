@@ -377,6 +377,18 @@ def test_search_by_image_finds_matching_scene(tmp_path) -> None:
     assert res2 and res2[0].timestamp >= 2.0
 
 
+def test_neighbors_returns_same_video_window(engine_and_entry) -> None:
+    """D1: lân cận = keyframe CÙNG video, quanh thời điểm, sắp theo timestamp tăng dần."""
+    engine, entry = engine_and_entry
+    mid = sorted(entry.raws.values(), key=lambda r: r.timestamp)[len(entry.raws) // 2]
+    nb = engine.neighbors(entry, mid.id, before=2, after=2)
+    assert nb and all(r.video_id == mid.video_id for r in nb)
+    ts = [r.timestamp for r in nb]
+    assert ts == sorted(ts)                 # đúng thứ tự thời gian
+    assert any(r.id == mid.id for r in nb)  # có chính frame tham chiếu
+    assert engine.neighbors(entry, "khong-co-id") == []
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

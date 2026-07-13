@@ -365,6 +365,18 @@ def create_app() -> Flask:
             return jsonify(error="Chưa có index nào để lưu. Nạp video trước."), 400
         return jsonify(saved=saved, dir=str(INDEX_DIR))
 
+    @app.get("/api/video/neighbors/<path:frame_id>")
+    def video_neighbors(frame_id: str):
+        """D1: keyframe lân cận (cùng video, quanh thời điểm) để duyệt bối cảnh."""
+        for entry in video_state["videos"].values():
+            if frame_id in entry.raws:
+                raws = video_state["engine"].neighbors(entry, frame_id)
+                return jsonify(frames=[{
+                    "id": r.id, "timestamp": round(r.timestamp, 1), "video_id": r.video_id,
+                    "is_ref": r.id == frame_id, "image": f"/api/video/frame/{r.id}",
+                } for r in raws])
+        return jsonify(error="Không thấy keyframe."), 404
+
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
         from ingestion.schemas import load_cv2_image
