@@ -48,12 +48,12 @@ Slide nhấn 3 đánh đổi cốt lõi: **tốc độ ↔ sức mạnh ↔ chi 
 ### ✅ Đã có
 Late-fusion ensemble · early-fusion rerank · prompt ensemble · temporal · ASR · caption · adaptive BM25.
 
-### 🔲 Q1. Truy vấn bằng ẢNH (image → video)  ⭐ ƯU TIÊN CAO (mới từ slide)
-Slide: *"thay đổi phương thức truy vấn để liên kết chặt hơn"*. Người dùng đưa 1 ẢNH mẫu
-→ SigLIP encode ảnh (ĐÃ có `embed`) → search như query text. **Dễ nhất** vì tận dụng
-encoder sẵn có; giá trị cao (nhiều bài KIS cho sẵn ảnh/đoạn video mẫu).
-**Làm:** endpoint `/api/video/search_image` (nhận ảnh upload) + ô upload trên UI.
-**File:** `retrieval/video_engine.py` (search_by_image), `ui/app.py`, `ui/index.html`
+### ✅ Q1. Truy vấn bằng ẢNH (image → video)  ĐÃ XONG (2026-07-14)
+Slide: *"thay đổi phương thức truy vấn"*. **Đã làm:** `encode_image_query` (bọc ảnh vào
+RawKeyframe → `encoder.embed`, chung interface thật/mock) + `search_by_image` (dense
+ensemble thuần, không BM25). Endpoint `/api/video/search_image` (multipart) + ô upload +
+nút "Tìm theo ảnh" tab Video. Test: ảnh đỏ→cảnh đỏ, ảnh xanh→cảnh xanh.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### 🔲 Q2. Truy vấn bằng SKETCH / ảnh sinh từ mô tả (mới từ slide)
 Slide nêu "truy vấn bằng ảnh sinh ra từ sketch". Cho phép vẽ phác/tạo ảnh từ text rồi
@@ -85,12 +85,13 @@ Benchmark cho thấy tinh chỉnh BM25/sample KHÔNG phá được trần. Hai �
 ### ✅ Đã có
 Lưới keyframe (ảnh + timestamp + video_id) · dedup giảm trùng · tab Chuỗi (A→B→C).
 
-### 🔲 D1. Video Browser nâng cao (mới từ slide)
+### 🟡 D1. Video Browser nâng cao  PHẦN LỚN XONG (2026-07-14)
 Slide: *"hiển thị gì khi người dùng không biết bắt đầu từ đâu"*, *"frame gần giống nhau"*.
-- **Xem lân cận**: từ 1 keyframe, xem frame trước/sau trong CÙNG video (timeline nhỏ).
-- **Nhảy tới giây** trong video gốc (mở video ở timestamp).
-- **Gom cụm kết quả** theo video để không tràn frame giống nhau.
-**File:** `ui/index.html`, `ui/app.py` (endpoint lân cận theo video_id + khoảng thời gian)
+**Đã làm:** `engine.neighbors()` + endpoint `/api/video/neighbors/<id>` (keyframe cùng
+video quanh thời điểm); UI nút "🎞 Lân cận" mở dải trước/sau (highlight frame gốc); **gom
+cụm kết quả theo video** khi tìm xuyên dataset. Test neighbors + 404.
+**CÒN LẠI:** nhảy/mở video gốc ở timestamp (cần phục vụ file video); trang khám phá D2.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### 🔲 D2. Trang "khám phá" khi chưa biết bắt đầu (mới từ slide)
 Hiển thị mẫu đại diện đa dạng của dataset (mỗi video/cụm 1 ảnh) để người dùng lướt chọn.
@@ -114,10 +115,12 @@ Bấm "giống/không giống" trên kết quả → tinh chỉnh truy vấn (đ
 được thích — Rocchio/PRF). Cân bằng khám phá (mở rộng) ↔ khai phá (tách video giống nhau).
 **File:** `retrieval/video_engine.py` (feedback vector), `ui/`
 
-### 🔲 F3. Gợi ý concept liên quan (mới từ slide)
-Từ truy vấn, gợi ý concept: (a) model nghĩ người dùng muốn (khám phá), (b) giảm bất định
-kết quả (khai phá). Có thể dùng object/caption thường gặp trong top-K.
-**File:** `retrieval/video_engine.py`, `ui/`
+### ✅ F3. Gợi ý concept liên quan  ĐÃ XONG (2026-07-14)
+**Đã làm:** `engine.suggest_concepts()` đếm từ khoá hay gặp trong caption/OCR/ASR của
+top-K (trừ từ trong câu + từ dừng) → endpoint search trả `suggestions`; UI chip gợi ý,
+bấm → thêm vào câu + tìm lại (thu hẹp/mở rộng). Rỗng nếu chưa bật caption/OCR/ASR.
+Test gợi ý + loại từ query.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ---
 
