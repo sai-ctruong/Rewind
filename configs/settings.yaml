@@ -164,3 +164,33 @@ paths:
   objects_dir: null             # metadata object (Open Images 600 categories)
   index_dir: "artifacts/index"  # nơi lưu Faiss index + BM25 sau build (Phase 3)
   benchmark_dir: "evaluation/benchmarks"  # nơi lưu recall/latency curve (Mục 11.3)
+
+# -----------------------------------------------------------------------------
+# 11. VIDEO SEARCH ENGINE (retrieval/video_engine.py) — GIÁ TRỊ ĐÃ BENCHMARK
+# -----------------------------------------------------------------------------
+# LƯU Ý: đây là bản GHI LẠI quyết định đã đo (nguồn sự thật là DEFAULT trong
+# retrieval/video_engine.py — engine hiện KHÔNG parse file này; giữ đồng bộ tay).
+# Benchmark: RTX 3060, 3 video data/videos/, 37 nhãn evaluation/labels.json.
+# Đường cong đầy đủ + bảng: xem TASKS.md mục B1 và evaluation/benchmarks/.
+video_engine:
+  # [ĐO 2026-07-12] Lấy mẫu 1 frame/giây: hit@5 phẳng 0.68 ở 2.0/1.0/0.5s (recall
+  # bị chặn bởi ENCODER, không phải lấy mẫu). 0.5s tăng hit@1 (0.36 vs 0.28) nhưng
+  # index ×2. Chọn 1.0s cân bằng; đổi 0.5s nếu ưu tiên KIS top-1 và chịu được index.
+  sample_every_s: 1.0
+  max_frames: null              # null = quét TOÀN BỘ video (không giới hạn frame)
+  # [ĐO 2026-07-12] Trọng số BM25 (OCR/ASR/chữ) trong RRF. 1.0 tối ưu recall (hit@5
+  # 0.72); 3.0 HẠI recall (0.52) vì chữ biển hiệu khớp nhầm query thị giác; 0 = dense
+  # -only (0.68). ADAPTIVE bật: query có token IN HOA (tên biển) -> dùng bm25_weight_high.
+  bm25_weight: 1.0
+  adaptive_bm25: true
+  bm25_weight_high: 3.0         # dùng cho query CHỮ (tên biển hiệu IN HOA)
+  # [ĐO 2026-07-12] VLM rerank (Qwen2-VL-2B): hit@1 0.35 -> 0.60, nhưng ~24s/query
+  # -> CHỈ dùng cho KIS (top-K nhỏ), KHÔNG cho AVS. Không OOM trên 6GB VRAM.
+  rerank_pool: 8
+  # A1 batch embedding: ×2.15 sau khi luồng hoá load ảnh (nút thắt = tiền xử lý CPU,
+  # không phải GPU). Xem TASKS.md mục A1.
+  embed_batch_size: 256
+  enable_ocr: true
+  enable_asr: false             # Whisper nặng, opt-in (cần openai-whisper + ffmpeg)
+  # A3 decode: "auto" ưu tiên decord/NVDEC nếu cài, else cv2 (chỉ decode frame lấy mẫu).
+  decode_backend: "auto"

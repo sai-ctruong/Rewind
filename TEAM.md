@@ -4,7 +4,8 @@
 > gì · đang tới đâu · file nào làm gì · setup thế nào · làm gì tiếp theo**. Đặc tả kỹ
 > thuật đầy đủ nằm ở `CLAUDE.md` (blueprint, chỉ có trên máy — không đẩy lên GitHub).
 
-Cập nhật lần cuối: 2026-07-12 · Nhánh chính: `main` · 159 unit test xanh.
+Cập nhật lần cuối: 2026-07-12 · Nhánh chính: `main` · 183 unit test xanh.
+Đã benchmark thật (RTX 3060, 37 nhãn) — xem `TASKS.md` để biết config đã chốt.
 
 ---
 
@@ -47,9 +48,17 @@ tầng lọc thô ưu tiên recall, tầng rerank tối ưu precision, **không 
 - [x] 📁 **Nạp dataset từ THƯ MỤC bất kỳ** trên máy (quét đệ quy)
 - [x] 📝 **Tìm bằng CHỮ / biển hiệu** (OCR EasyOCR → BM25 fusion) — `ingestion/ocr_asr_extract.py::EasyOcrEngine`
 - [x] 🤖 **VLM rerank** hiểu từng chữ + ngữ cảnh (Qwen2-VL-2B, local) — `retrieval/vlm_rerank.py`
-- [x] ⚡ **GPU (CUDA)** — SigLIP embedding ~8× nhanh hơn CPU
-- [x] 🎨 **Web UI** 5 tab (KISC · KIS · AVS · VQA · Video) — `ui/`
+- [x] ⚡ **GPU (CUDA)** — SigLIP embedding tự dùng CUDA + fp16
+- [x] 🎨 **Web UI** 6 tab (KISC · KIS · AVS · VQA · Video · ⏱️ Chuỗi) — `ui/`
 - [x] 💾 **Cache model trên ổ D** (không phồng ổ C) — `ingestion/model_cache.py`
+- [x] 🧠 **Xử lý frame TRONG RAM** — không ghi .jpg ra đĩa (image_bytes), tự dựng lại từ video gốc khi cần
+- [x] 💽 **Lưu/nạp index ra đĩa** (A2) — nạp 1 lần, mở lại tức thì, không embed lại — nút "Lưu index"
+- [x] 🚀 **Batch embedding + song song decode‖embed** (A1/A4) — throughput ×2.15 (đo thật)
+- [x] 🎞️ **Backend decode cắm được** (A3) — decord/NVDEC nếu cài, else cv2 (chỉ decode frame lấy mẫu)
+- [x] ⏱️ **Temporal trên video thật** (B4) — "cảnh A trước cảnh B" (`search_temporal` + tab Chuỗi)
+- [x] 🔊 **ASR/Whisper cấp-video** (B3) — tìm theo LỜI NÓI (opt-in, toggle ASR)
+- [x] 🎯 **Trọng số BM25 theo loại query** — query chữ (biển hiệu) BM25 cao, query thị giác BM25 thấp
+- [x] 📊 **Harness benchmark + 37 nhãn thật** — Recall@K/MRR + throughput (`evaluation/bench_retrieval.py`, `labels.json`)
 
 ### Hạ tầng
 - [x] 159 unit test (pytest, chạy offline bằng mock)
@@ -170,18 +179,19 @@ Chia theo **mảng** để ít đụng file của nhau:
 
 ## 8. 📋 Backlog — việc tiếp theo (ưu tiên từ trên xuống)
 
-Đều **không cần API key** trừ khi ghi rõ:
+✅ **ĐÃ XONG mùa này**: lưu/nạp index (A2), ASR/Whisper (B3), temporal video thật (B4),
+đánh giá trên 37 nhãn thật (B1), toggle OCR/ASR trên UI, batch+song song (A1/A4), decode
+backend (A3), trọng số BM25 theo loại query. Chi tiết + số benchmark: `TASKS.md`.
 
-1. 💾 **Lưu/nạp index ra đĩa** — dataset lớn nạp 1 lần, mở lại tức thì (không embed lại). *(B)*
-2. 📊 **Progress bar** khi nạp dataset lớn (biết còn bao lâu). *(B)*
-3. 🔘 **Toggle tắt/bật OCR** trên UI (nạp nhanh khi không cần chữ). *(B)*
-4. 🎙️ **ASR (Whisper) — tìm theo LỜI NÓI** trong video (đã có WhisperAsrEngine, chưa wire vào video_engine). *(B)*
-5. 🧭 **Query understanding cho video** — parse câu → tách filter (thời gian/đối tượng) trước khi search. *(A)*
-6. ⏱️ **Temporal search trên video thật** — "cảnh A trước cảnh B". *(A)*
-7. 📈 **Đánh giá trên dữ liệu có nhãn thật** — tạo bộ test ground-truth, đo Recall@K/mAP. *(chung)*
-8. 🧠 **VQA/KISC trên video thật** — cần object-detection hoặc `ANTHROPIC_API_KEY` (LVLM). *(A)*
-9. 🗃️ **Sharding index** cho kho rất lớn (hàng trăm giờ). *(A/B)*
-10. ⚙️ **CI GitHub Actions** chạy pytest mỗi push. *(chung)*
+**CÒN LẠI** (đều **không cần API key** trừ khi ghi rõ):
+1. 🧠 **LLM captioning** (Mục 2.4) — nâng TRẦN recall (hit@5 ~0.68 đang bị chặn bởi encoder).
+   Sinh caption ngữ nghĩa → BM25 bắt quan hệ ("người lớn hướng dẫn trẻ tưới hoa"). *Cần `ANTHROPIC_API_KEY`.* *(A)*
+2. 🧭 **Query understanding cho video** — parse câu → filter thời gian/đối tượng trước search. *(A)*
+3. 📊 **Progress bar** khi nạp dataset lớn (biết còn bao lâu). *(B)*
+4. 🗃️ **A5: IVF-PQ + sharding** — chỉ khi > vài triệu vector (đo RAM trước — Mục 2.2). *(A/B)*
+5. 🧠 **VQA/KISC trên video thật** — cần object-detection hoặc `ANTHROPIC_API_KEY` (LVLM). *(A)*
+6. ⚙️ **CI GitHub Actions** chạy pytest mỗi push. *(chung)*
+7. 🏷️ **Tăng bộ nhãn** (37 → ~100+) để giảm nhiễu hit@1 (±0.1 giữa các lần chạy). *(chung)*
 
 ---
 
