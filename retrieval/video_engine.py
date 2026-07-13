@@ -203,6 +203,24 @@ class VideoSearchEngine:
         `.embed(raw) -> vec` và `.encode_text(str) -> vec`."""
         self._encoders = list(encoders)[:2]
 
+    def _free_encoders(self) -> None:
+        """Xả SigLIP khỏi VRAM/RAM (để nạp VLM caption trên máy hạn bộ nhớ). Encoder
+        tự nạp lại LƯỜI ở lần search kế. An toàn: chỉ gọi khi embedding đã tính xong."""
+        if not self._encoders:
+            return
+        try:
+            import gc
+            for e in self._encoders:
+                if hasattr(e, "_model"):
+                    del e._model
+            self._encoders = None
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # pragma: no cover - dọn bộ nhớ 'best-effort'
+            self._encoders = None
+
     # ------------------------------------------------------------- reranker
     def _get_reranker(self) -> FineReranker:
         if self._reranker is None:
@@ -266,6 +284,12 @@ class VideoSearchEngine:
         đại diện sau dedup, KHÔNG phải mọi frame lấy mẫu. Caption (quan hệ + hoàn cảnh)
         vào searchable_text -> BM25 tìm được theo MÔ TẢ NGỮ NGHĨA, không chỉ hình ảnh
         thuần (Mục 2.4). Lỗi caption 1 frame không làm vỡ cả mẻ."""
+        # GIẢI PHÓNG SigLIP trước khi nạp VLM caption LOCAL thật (Qwen): máy 6GB không
+        # chứa nổi cả 2 (tràn paging file Windows -> crash). Chỉ xả khi captioner CHƯA
+        # được bơm (tức sắp nạp Qwen local); captioner bơm sẵn (mock/Claude) thì không
+        # cần — tránh làm hỏng test mock và tránh xả vô ích với Claude (không nạp local).
+        if self._captioner is None:
+            self._free_encoders()
         try:
             captioner = self._get_captioner()
         except Exception as e:  # pragma: no cover - nạp model lỗi (thiếu RAM/paging file)
