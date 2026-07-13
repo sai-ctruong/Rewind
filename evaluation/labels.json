@@ -25,5 +25,20 @@
   {"query": "xe buýt hai tầng màu vàng và xanh lá", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
   {"query": "yellow double-decker bus at a crosswalk", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
   {"query": "quán cà phê có mái hiên đỏ và bàn ngoài trời", "video_id": "walk_rain_seoul", "time_window": [2845.0, 2858.0]},
-  {"query": "bảng neon màu hồng có chữ 2021", "video_id": "walk_rain_seoul", "time_window": [3145.0, 3158.0]}
+  {"query": "bảng neon màu hồng có chữ 2021", "video_id": "walk_rain_seoul", "time_window": [3145.0, 3158.0]},
+
+  {"query": "công trường xây dựng có bao xi măng và biển OPEN", "video_id": "walk_rain_seoul", "time_window": [293.0, 308.0]},
+  {"query": "bảng đèn LED điện tử lớn bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [1043.0, 1058.0]},
+  {"query": "cửa hàng điện tử SAMSUNG bên đường", "video_id": "walk_rain_seoul", "time_window": [1478.0, 1493.0]},
+  {"query": "Samsung store sign on a rainy street", "video_id": "walk_rain_seoul", "time_window": [1478.0, 1493.0]},
+  {"query": "người che ô màu xanh dương đi trong mưa", "video_id": "walk_rain_seoul", "time_window": [1343.0, 1360.0]},
+  {"query": "hẻm hẹp có biển neon ATHOME PLACE", "video_id": "walk_rain_seoul", "time_window": [2093.0, 2110.0]},
+  {"query": "ngã tư rộng có cọc tiêu giao thông màu cam", "video_id": "walk_rain_seoul", "time_window": [2393.0, 2410.0]},
+  {"query": "xe SUV BMW màu đen đậu bên đường", "video_id": "walk_rain_seoul", "time_window": [2693.0, 2710.0]},
+
+  {"query": "quảng trường có ghế nằm tắm nắng", "video_id": "beach_walking", "time_window": [15.3, 17.0]},
+  {"query": "công viên nhiều cây xanh", "video_id": "beach_walking", "time_window": [19.3, 21.0]},
+
+  {"query": "xe hơi thể thao màu đen trên phố", "video_id": "walking", "time_window": [1.5, 4.0]},
+  {"query": "đám đông băng qua đường ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 3.0]}
 ]

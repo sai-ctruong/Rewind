@@ -166,6 +166,16 @@ tăng số nhãn.
 **KẾT LUẬN CHỐT:** bm25_weight=1.0 (đã đổi); sample_every_s=1.0 (0.5 nếu ưu tiên KIS top-1);
 VLM rerank cho KIS (không cho AVS vì ~24s/query); OCR weight cao (≥2) HẠI recall.
 
+**ĐÃ LÀM TIẾP (2026-07-12):**
+- **Mở rộng nhãn 25 → 37** (`evaluation/labels.json`: +12 mục xác minh — SAMSUNG, ATHOME
+  PLACE, công trường OPEN, bảng LED, BMW đen, cọc cam, ghế tắm nắng, công viên, xe thể
+  thao đen…) để giảm nhiễu hit@1.
+- **Trọng số BM25 THEO LOẠI QUERY** (`adaptive_bm25_weight`, mặc định bật): query có token
+  IN HOA (tên biển hiệu: SAMSUNG/LANEIGE/OPEN) → BM25 CAO (3.0) để tín hiệu OCR nổi; câu
+  mô tả thị giác → BM25 THẤP (1.0) giữ recall. Giải trực tiếp mâu thuẫn "OCR giúp query
+  chữ nhưng hại query thị giác". Test `test_adaptive_bm25_weight` + tìm-biển-OCR.
+  **CÒN LẠI:** re-benchmark trên 37 nhãn + adaptive để đo mức lợi thật.
+
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema
 `StructuredQuery` đã có) **trước** khi search → pre-filter thu hẹp, tăng precision.

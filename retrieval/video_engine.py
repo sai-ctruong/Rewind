@@ -51,6 +51,22 @@ QUERY_TEMPLATES = (
 )
 
 
+def adaptive_bm25_weight(query: str, low: float, high: float) -> float:
+    """Chọn trọng số BM25 theo LOẠI query — dựa trên benchmark thật (2026-07-12):
+    OCR/BM25 nặng GIÚP query CHỮ (tên biển hiệu) nhưng HẠI query THỊ GIÁC (kéo recall
+    0.72→0.52). Vì một trọng số cố định không thắng cả hai, ta suy ra ý định từ câu:
+
+    Nếu query chứa token IN HOA ≥2 chữ ASCII (kiểu tên biển hiệu: SAMSUNG, LANEIGE,
+    OPEN, STREET FOOD, ATHOME) -> đây là query CHỮ -> dùng BM25 CAO để tín hiệu OCR nổi
+    lên. Ngược lại (mô tả cảnh/vật bằng lời thường) -> BM25 THẤP để không nhiễu recall."""
+    import re
+
+    for tok in re.findall(r"[A-Za-z][A-Za-z\-]+", query):
+        if len(tok) >= 2 and tok.isupper():
+            return high
+    return low
+
+
 @dataclass
 class VideoIndexEntry:
     """Kết quả index 1 video: Faiss index + map id -> RawKeyframe (đường dẫn ảnh)."""
@@ -131,6 +147,8 @@ class VideoSearchEngine:
         asr_language: Optional[str] = "vi",
         bm25_weight: float = 1.0,               # [ĐO 2026-07-12] 1.0 tối ưu: hit@5=0.72;
                                                 # 3.0 làm hại recall (0.52), 0.0 dense-only (0.68)
+        adaptive_bm25: bool = True,             # trọng số BM25 theo loại query (chữ vs thị giác)
+        bm25_weight_high: float = 3.0,          # trọng số BM25 khi query là CHỮ (biển hiệu)
         embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
         decode_backend: str = "auto",           # A3: "auto"|"cv2"|"decord" (decord=NVDEC nếu có)
         use_gpu_decode: bool = True,            # dùng NVDEC khi backend=decord + có CUDA
@@ -149,6 +167,8 @@ class VideoSearchEngine:
         self.asr_model = asr_model
         self.asr_language = asr_language
         self.bm25_weight = bm25_weight
+        self.adaptive_bm25 = adaptive_bm25
+        self.bm25_weight_high = bm25_weight_high
         self.embed_batch_size = embed_batch_size
         self.decode_backend = decode_backend
         self.use_gpu_decode = use_gpu_decode
@@ -465,6 +485,9 @@ class VideoSearchEngine:
         qvecs = self.encode_query(query)
         retriever = CoarseRetriever(entry.index)
         pool = max(top_k, self.rerank_pool) if rerank else top_k
+        # Trọng số BM25 theo LOẠI query (benchmark: chữ cần cao, thị giác cần thấp).
+        bm25_w = (adaptive_bm25_weight(query, self.bm25_weight, self.bm25_weight_high)
+                  if self.adaptive_bm25 else self.bm25_weight)
         coarse = retriever.search(
             query_clip_vec=qvecs[0],
             query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
@@ -472,8 +495,7 @@ class VideoSearchEngine:
             # RRF gộp dense (hình ảnh) + sparse (chữ) -> tìm được cả cảnh lẫn text.
             query_text=query,
             top_k=pool,
-            # BM25 (OCR/chữ) nặng hơn để khớp biển hiệu nổi lên (dense có 2 encoder).
-            weights={"bm25": self.bm25_weight},
+            weights={"bm25": bm25_w},
         )
         if not rerank or not coarse:
             return coarse[:top_k]

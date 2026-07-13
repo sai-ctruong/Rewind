@@ -15,7 +15,7 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 
 from ingestion.schemas import RawKeyframe, load_cv2_image  # noqa: E402
-from retrieval.video_engine import VideoSearchEngine  # noqa: E402
+from retrieval.video_engine import VideoSearchEngine, adaptive_bm25_weight  # noqa: E402
 
 
 # ------------------------- video + mock encoder helpers -----------------------
@@ -297,6 +297,31 @@ def test_asr_text_search_finds_spoken_word(tmp_path) -> None:
     assert any("KEODUYNHAT" in t for t in entry.asr_by_id.values())
     # Tìm bằng token CHỈ có trong lời nói -> BM25 kéo đúng cảnh xanh lá (~[1,2)s).
     res = engine.search(entry, "KEODUYNHAT", top_k=3)
+    assert res and 1.0 <= res[0].timestamp < 2.0
+    assert "bm25" in res[0].source_ranks
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("cửa hàng SAMSUNG bên đường", 3.0),     # IN HOA -> query chữ -> cao
+    ("biển STREET FOOD trong hẻm", 3.0),
+    ("JB HI-FI", 3.0),
+    ("người phụ nữ cầm ô màu đỏ", 1.0),       # mô tả thị giác -> thấp
+    ("a photo of a yellow bus", 1.0),
+    ("Starbucks bên đường", 1.0),             # viết hoa đầu, KHÔNG all-caps -> thấp (bảo thủ)
+])
+def test_adaptive_bm25_weight(query, expected) -> None:
+    assert adaptive_bm25_weight(query, low=1.0, high=3.0) == expected
+
+
+def test_adaptive_bm25_still_finds_ocr_sign(tmp_path) -> None:
+    """Query IN HOA (tên biển) -> BM25 cao adaptive -> vẫn tìm ra qua OCR."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.set_ocr(SignMockOcr())
+    entry = engine.index_video(video, tmp_path / "frames")
+    res = engine.search(entry, "SPECIALGREENSIGN", top_k=3)   # all-caps -> adaptive cao
     assert res and 1.0 <= res[0].timestamp < 2.0
     assert "bm25" in res[0].source_ranks
 
