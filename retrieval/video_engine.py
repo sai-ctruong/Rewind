@@ -78,6 +78,7 @@ class VideoIndexEntry:
     num_indexed: int          # số keyframe sau dedup ngữ nghĩa (vào index)
     ocr_by_id: dict[str, str] = field(default_factory=dict)  # chữ OCR đọc được / keyframe
     asr_by_id: dict[str, str] = field(default_factory=dict)  # lời nói (ASR) quanh keyframe
+    caption_by_id: dict[str, str] = field(default_factory=dict)  # mô tả ngữ cảnh (VLM) / keyframe
 
     # ------------------------------------------------------------ persistence (A2)
     def save(self, directory: str | Path) -> None:
@@ -104,7 +105,8 @@ class VideoIndexEntry:
         payload = {
             "video_id": self.video_id, "num_sampled": self.num_sampled,
             "num_indexed": self.num_indexed, "ocr_by_id": self.ocr_by_id,
-            "asr_by_id": self.asr_by_id, "raws": raws_light,
+            "asr_by_id": self.asr_by_id, "caption_by_id": self.caption_by_id,
+            "raws": raws_light,
         }
         with (directory / "entry.pkl").open("wb") as fh:
             pickle.dump(payload, fh)
@@ -122,6 +124,7 @@ class VideoIndexEntry:
             video_id=payload["video_id"], index=index, raws=payload["raws"],
             num_sampled=payload["num_sampled"], num_indexed=payload["num_indexed"],
             ocr_by_id=payload["ocr_by_id"], asr_by_id=payload.get("asr_by_id", {}),
+            caption_by_id=payload.get("caption_by_id", {}),
         )
 
 
@@ -145,6 +148,8 @@ class VideoSearchEngine:
         enable_asr: bool = False,               # B3: chép lời nói cả video -> BM25 (nặng, opt-in)
         asr_model: str = "small",               # cỡ Whisper (tiny/base/small/medium/large)
         asr_language: Optional[str] = "vi",
+        enable_caption: bool = False,           # Mục 2.4: VLM sinh mô tả ngữ cảnh -> BM25 (nặng, opt-in)
+        caption_model: str = "Qwen/Qwen2-VL-2B-Instruct",
         bm25_weight: float = 1.0,               # [ĐO 2026-07-12] 1.0 tối ưu: hit@5=0.72;
                                                 # 3.0 làm hại recall (0.52), 0.0 dense-only (0.68)
         adaptive_bm25: bool = True,             # trọng số BM25 theo loại query (chữ vs thị giác)
@@ -166,6 +171,8 @@ class VideoSearchEngine:
         self.enable_asr = enable_asr
         self.asr_model = asr_model
         self.asr_language = asr_language
+        self.enable_caption = enable_caption
+        self.caption_model = caption_model
         self.bm25_weight = bm25_weight
         self.adaptive_bm25 = adaptive_bm25
         self.bm25_weight_high = bm25_weight_high
@@ -177,6 +184,7 @@ class VideoSearchEngine:
         self._reranker: Optional[FineReranker] = None  # VLM rerank, nạp lười
         self._ocr = None                        # EasyOCR, nạp lười
         self._asr = None                        # Whisper (ASR cấp-video), nạp lười
+        self._captioner = None                  # Qwen2-VL captioner, nạp lười
 
     # ------------------------------------------------------------- encoders
     def _load_encoders(self) -> list:
@@ -238,6 +246,38 @@ class VideoSearchEngine:
         """Bơm ASR cấp-video ngoài (mock trong test). Bật enable_asr."""
         self._asr = asr
         self.enable_asr = True
+
+    # ------------------------------------------------------------- captioner
+    def _get_captioner(self):
+        if self._captioner is None:
+            from ingestion.llm_captioning import QwenVLCaptioner
+            self._captioner = QwenVLCaptioner(model_name=self.caption_model)
+        return self._captioner
+
+    def set_captioner(self, captioner) -> None:
+        """Bơm captioner ngoài (mock trong test / ClaudeCaptioner khi có API). Bật enable_caption."""
+        self._captioner = captioner
+        self.enable_caption = True
+
+    def _apply_captions(self, raws_by_id: dict, kept: list[KeyframeRecord]) -> None:
+        """Sinh caption ngữ cảnh (VLM) cho các keyframe ĐẠI DIỆN (sau dedup) -> llm_caption.
+
+        VÌ SAO CHỈ SURVIVORS: caption VLM chậm (~vài giây/ảnh) nên chỉ chạy trên số ít
+        đại diện sau dedup, KHÔNG phải mọi frame lấy mẫu. Caption (quan hệ + hoàn cảnh)
+        vào searchable_text -> BM25 tìm được theo MÔ TẢ NGỮ NGHĨA, không chỉ hình ảnh
+        thuần (Mục 2.4). Lỗi caption 1 frame không làm vỡ cả mẻ."""
+        captioner = self._get_captioner()
+        for rec in kept:
+            raw = raws_by_id.get(rec.id)
+            if raw is None:
+                continue
+            try:
+                cap = captioner.caption(raw)
+            except Exception as e:  # pragma: no cover
+                print(f"[video_engine] caption lỗi {rec.id} ({e!r}); bỏ qua.")
+                cap = None
+            if cap:
+                rec.llm_caption = cap
 
     def _apply_asr(self, raws: list[RawKeyframe],
                    records: list[KeyframeRecord]) -> None:
@@ -328,6 +368,7 @@ class VideoSearchEngine:
 
     def _build_entry(
         self, raws: list[RawKeyframe], records: list[KeyframeRecord], video_id: str,
+        enable_caption: Optional[bool] = None,
     ) -> VideoIndexEntry:
         # Dedup NGỮ NGHĨA (Mục 5.1): gộp frame gần trùng theo embedding chính (slot 1).
         # deduplicate_keyframes gom theo video_id nên với DATASET nhiều video vẫn dedup
@@ -341,6 +382,10 @@ class VideoSearchEngine:
         # còn lại (đã bị gộp) không bao giờ hiển thị/rerank nên bỏ bytes đi. Vẫn giữ
         # record raw (timestamp...) để tra cứu, chỉ None hoá phần ảnh nặng.
         kept_ids = {r.id for r in kept}
+        # Caption ngữ cảnh (VLM) chỉ trên ĐẠI DIỆN — trước khi None-hoá ảnh của frame bị
+        # loại, và trước khi build index (caption vào searchable_text -> BM25).
+        if self.enable_caption if enable_caption is None else enable_caption:
+            self._apply_captions({r.id: r for r in raws}, kept)
         for r in raws:
             if r.id not in kept_ids:
                 r.image_bytes = None
@@ -350,6 +395,7 @@ class VideoSearchEngine:
             num_sampled=len(records), num_indexed=len(kept),
             ocr_by_id={r.id: r.ocr_text for r in records if r.ocr_text},
             asr_by_id={r.id: r.asr_text for r in records if r.asr_text},
+            caption_by_id={r.id: r.llm_caption for r in kept if r.llm_caption},
         )
 
     def _pipeline_records(
@@ -459,6 +505,7 @@ class VideoSearchEngine:
         video_id: Optional[str] = None, *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
         enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
+        enable_caption: Optional[bool] = None,
     ) -> VideoIndexEntry:
         # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
         mf = self.max_frames if max_frames == -1 else max_frames
@@ -469,13 +516,15 @@ class VideoSearchEngine:
             raise RuntimeError("Không trích được keyframe nào từ video.")
         if self.enable_asr if enable_asr is None else enable_asr:
             self._apply_asr(raws, records)
-        return self._build_entry(raws, records, video_id=raws[0].video_id)
+        return self._build_entry(raws, records, video_id=raws[0].video_id,
+                                 enable_caption=enable_caption)
 
     def index_dataset(
         self, video_paths: Sequence[str | Path], out_dir: str | Path,
         dataset_id: str = "__dataset__", *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
         enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
+        enable_caption: Optional[bool] = None,
     ) -> VideoIndexEntry:
         """Index NHIỀU video vào MỘT index chung -> tìm xuyên suốt cả dataset.
 
@@ -490,7 +539,8 @@ class VideoSearchEngine:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")
         if self.enable_asr if enable_asr is None else enable_asr:
             self._apply_asr(raws, records)
-        return self._build_entry(raws, records, video_id=dataset_id)
+        return self._build_entry(raws, records, video_id=dataset_id,
+                                 enable_caption=enable_caption)
 
     # ---------------------------------------------------------------- query
     def encode_query(self, query: str) -> list[np.ndarray]:

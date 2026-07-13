@@ -326,6 +326,33 @@ def test_adaptive_bm25_still_finds_ocr_sign(tmp_path) -> None:
     assert "bm25" in res[0].source_ranks
 
 
+class CaptionMockCaptioner:
+    """Caption giả theo màu cảnh — token QUAN HỆ độc nhất (dense/OCR không biết)."""
+
+    def caption(self, raw):
+        b, g, r = load_cv2_image(raw).reshape(-1, 3).mean(axis=0)  # BGR
+        if g > 150 and r < 100:
+            return "một người lớn đang HUONGDANTRE tưới hoa trong công viên"
+        return "một cảnh trong video"
+
+
+def test_caption_search_finds_by_relationship(tmp_path) -> None:
+    """Mục 2.4: VLM caption đưa QUAN HỆ vào BM25 -> tìm được theo mô tả ngữ cảnh,
+    dù token quan hệ không có trong hình ảnh thuần lẫn OCR."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.set_captioner(CaptionMockCaptioner())          # bật caption (mock)
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    # Caption chỉ sinh trên ĐẠI DIỆN sau dedup, và có token quan hệ độc nhất.
+    assert any("HUONGDANTRE" in c for c in entry.caption_by_id.values())
+    res = engine.search(entry, "HUONGDANTRE", top_k=3)    # token chỉ có trong caption
+    assert res and 1.0 <= res[0].timestamp < 2.0          # cảnh xanh lá ~[1,2)s
+    assert "bm25" in res[0].source_ranks
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

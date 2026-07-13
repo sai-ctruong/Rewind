@@ -328,6 +328,7 @@
           <button class="btn ghost" id="kis-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="kis-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="kis-ocr"> OCR</label>
+          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH ('người lớn hướng dẫn trẻ tưới hoa'). RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="kis-caption"> Caption</label>
           <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="kis-asr"> ASR</label>
         </div>
         <form class="search-bar" id="kis-form">
@@ -359,6 +360,7 @@
           <button class="btn ghost" id="avs-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="avs-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="avs-ocr"> OCR</label>
+          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH. RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="avs-caption"> Caption</label>
           <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="avs-asr"> ASR</label>
         </div>
         <form class="search-bar" id="avs-form">
@@ -416,6 +418,7 @@
           <button class="btn ghost" id="video-folder-btn">Nạp thư mục</button>
           <button class="btn ghost" id="video-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
           <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="video-ocr"> OCR</label>
+          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH ('người lớn hướng dẫn trẻ tưới hoa'). RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="video-caption"> Caption</label>
           <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="video-asr"> ASR</label>
         </div>
         <form class="search-bar" id="video-form">
@@ -767,6 +770,7 @@
       const o = {};
       const oc = q("ocr"); if (oc) o.ocr = oc.checked;
       const ar = q("asr"); if (ar) o.asr = ar.checked;
+      const cp = q("caption"); if (cp) o.caption = cp.checked;
       return o;
     };
 
@@ -848,11 +852,12 @@
           const why = r.explanation ? "<div class='why'>" + r.explanation + "</div>" : "";
           const ocr = r.ocr ? "<div class='ocr'>📝 " + r.ocr.slice(0, 80) + "</div>" : "";
           const asr = r.asr ? "<div class='ocr'>🔊 " + r.asr.slice(0, 80) + "</div>" : "";
+          const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
           const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
           c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
             "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
             (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
-            vidlbl + ocr + asr + why;
+            vidlbl + cap + ocr + asr + why;
           box.append(c); });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
     });
