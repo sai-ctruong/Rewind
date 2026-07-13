@@ -140,7 +140,31 @@ Lấy mẫu dày hơn chỉ tăng PRECISION (hit@1/MRR). "Khuỷu tay": **1.0s**
    → chỉ hợp KIS top-K, KHÔNG hợp AVS. Và rerank KHÔNG cứu được recall đã mất ở coarse.
 3. Cấu hình HỨA HẸN NHẤT chưa đo: **coarse KHÔNG OCR (hit@5=0.68) + rerank** — giữ recall
    cao rồi rerank precision. Nên đo tiếp.
-**CÒN LẠI:** sweep bm25_weight; đo coarse-no-OCR + rerank; chốt configs/settings.yaml.
+**ĐÃ ĐO TIẾP (2026-07-12, cùng index có OCR):**
+
+*Sweep bm25_weight (coarse, không rerank) → CHỌN ĐƯỢC:*
+| bm25_weight | hit@1 | hit@5 | MRR |
+|---|---|---|---|
+| 0.0 (dense-only) | 0.16 | 0.68 | 0.383 |
+| 0.5 | 0.20 | 0.68 | 0.403 |
+| **1.0** ✅ | 0.20 | **0.72** | 0.416 |
+| 2.0 | 0.28 | 0.56 | 0.391 |
+| 3.0 (cũ) | 0.24 | 0.52 | 0.351 |
+→ **bm25_weight=1.0 tối ưu** (recall CAO NHẤT 0.72, hơn cả dense-only 0.68 — OCR nhẹ
+GIÚP các query chữ như Starbucks/LANEIGE/STREET FOOD). **ĐÃ ĐỔI default 3.0→1.0** trong
+`video_engine.py`.
+
+*(a) dense-coarse (bm25_w=0) + VLM rerank → CẤU HÌNH TỐT NHẤT CHO KIS:*
+- **hit@1=0.60, hit@5=0.68, MRR=0.628** (~24s/query). Giữ recall 0.68 rồi rerank kéo top-1
+  từ 0.28 lên **0.60** — vượt xa mọi cấu hình khác. Đây là config KIS nên dùng khi có
+  time budget.
+
+**LƯU Ý ĐỘ NHIỄU:** hit@1 dao động ~±0.1 giữa các lần chạy (25 nhãn ít, có tie/nondeterminism
+faiss); **hit@5 ỔN ĐỊNH**. Đừng chốt dựa trên chênh lệch hit@1 <0.1. Muốn số chắc hơn →
+tăng số nhãn.
+
+**KẾT LUẬN CHỐT:** bm25_weight=1.0 (đã đổi); sample_every_s=1.0 (0.5 nếu ưu tiên KIS top-1);
+VLM rerank cho KIS (không cho AVS vì ~24s/query); OCR weight cao (≥2) HẠI recall.
 
 ### B2. Query understanding cho video (parse câu → filter)
 Tách câu tự nhiên → `{objects, actions, location, time, temporal_order}` (schema

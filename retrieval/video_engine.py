@@ -129,7 +129,8 @@ class VideoSearchEngine:
         enable_asr: bool = False,               # B3: chép lời nói cả video -> BM25 (nặng, opt-in)
         asr_model: str = "small",               # cỡ Whisper (tiny/base/small/medium/large)
         asr_language: Optional[str] = "vi",
-        bm25_weight: float = 3.0,               # [PROVISIONAL] trọng số OCR/text trong RRF
+        bm25_weight: float = 1.0,               # [ĐO 2026-07-12] 1.0 tối ưu: hit@5=0.72;
+                                                # 3.0 làm hại recall (0.52), 0.0 dense-only (0.68)
         embed_batch_size: int = 256,            # [PROVISIONAL] lô embed GPU (giảm nếu tràn VRAM)
         decode_backend: str = "auto",           # A3: "auto"|"cv2"|"decord" (decord=NVDEC nếu có)
         use_gpu_decode: bool = True,            # dùng NVDEC khi backend=decord + có CUDA
