@@ -108,20 +108,30 @@ class SiglipEncoder(SiglipEmbeddingProvider):
 
         Trả về danh sách vector đơn vị ĐÚNG THỨ TỰ `raws` (khớp 1-1 để ráp record).
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         from .schemas import load_pil_image
 
         torch = self._torch
         out: list[np.ndarray] = []
-        for start in range(0, len(raws), batch_size):
-            chunk = raws[start:start + batch_size]
-            images = [load_pil_image(r) for r in chunk]
-            inputs = self._processor(images=images, return_tensors="pt").to(self.device)
-            with torch.no_grad():
-                feats = self._model.get_image_features(**inputs)
-            mat = self._pool(feats).float().cpu().numpy().astype(np.float32)
-            norms = np.linalg.norm(mat, axis=1, keepdims=True)
-            norms[norms == 0] = 1.0  # tránh chia 0 với vector suy biến
-            out.extend(mat / norms)
+        # Load ảnh SONG SONG bằng thread: JPEG decode (libjpeg) nhả GIL nên nhiều
+        # thread giải mã thật sự chồng nhau. Đây là nút thắt thực đo được (tiền xử lý
+        # CPU lớn hơn phần GPU), nên luồng hoá phần này mới ăn — batch GPU đơn thuần
+        # chỉ ~×1.7. Dùng thread thay process để KHÔNG phải pickle ảnh.
+        pool = ThreadPoolExecutor(max_workers=8)
+        try:
+            for start in range(0, len(raws), batch_size):
+                chunk = raws[start:start + batch_size]
+                images = list(pool.map(load_pil_image, chunk))
+                inputs = self._processor(images=images, return_tensors="pt").to(self.device)
+                with torch.no_grad():
+                    feats = self._model.get_image_features(**inputs)
+                mat = self._pool(feats).float().cpu().numpy().astype(np.float32)
+                norms = np.linalg.norm(mat, axis=1, keepdims=True)
+                norms[norms == 0] = 1.0  # tránh chia 0 với vector suy biến
+                out.extend(mat / norms)
+        finally:
+            pool.shutdown()
         return out
 
     def encode_text(self, text: str) -> np.ndarray:  # pragma: no cover - bản thật

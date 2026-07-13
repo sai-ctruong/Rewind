@@ -41,8 +41,11 @@ tensor, một lượt `get_image_features` (fp16, chia lô tránh tràn VRAM).
 theo lô **58.7 fps** = **×1.7** (KHÔNG phải ×50–100 như ước tính sai ban đầu).
 **Vì sao chỉ ×1.7:** nút thắt là **tiền xử lý CPU** (JPEG decode + resize/normalize của
 processor, chạy tuần tự/ảnh), không phải phép nhân ma trận GPU. Batch chỉ tăng tốc phần
-GPU vốn đã nhỏ. → Muốn nhanh hơn phải tấn công TIỀN XỬ LÝ: NVDEC (A3) cho decode,
-processor nhanh (fast image processor), hoặc nhiều worker preprocessing (mở rộng A4).
+GPU vốn đã nhỏ.
+**Đã tối ưu thêm (luồng hoá load ảnh trong embed_batch, 2026-07-12):** dùng
+`ThreadPoolExecutor` giải mã JPEG song song (libjpeg nhả GIL) → **×1.7 → ×2.15** (58.7 →
+72.7 fps). Còn dư địa: resize/normalize của processor (1 lời gọi, chưa song song) + GPU
+là phần còn lại. Muốn nhanh hơn nữa: NVDEC (A3) cho decode, fast image processor.
 
 ### A2. Lưu / nạp index ra đĩa  ✅ ĐÃ XONG (2026-07-12)
 **Vấn đề:** index + `image_bytes` nằm trong RAM; tắt app là mất, phải embed lại từ đầu.
