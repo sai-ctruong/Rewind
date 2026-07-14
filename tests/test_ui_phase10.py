@@ -132,6 +132,14 @@ def test_video_neighbors_missing_errors(client) -> None:
     assert r.status_code == 404
 
 
+def test_video_progress_endpoint(client) -> None:
+    # A6: endpoint tiến độ luôn trả trạng thái (rảnh -> active False).
+    r = client.get("/api/video/progress")
+    assert r.status_code == 200
+    b = r.get_json()
+    assert "active" in b and "count" in b and "fps" in b
+
+
 def test_video_frame_missing_errors(client) -> None:
     r = client.get("/api/video/frame/khong/co")
     assert r.status_code == 404

@@ -433,7 +433,7 @@ class VideoSearchEngine:
     def _pipeline_records(
         self, video_specs: list[tuple], out_dir: str | Path, *,
         sample_every_s: Optional[float], max_frames: Optional[int],
-        enable_ocr: Optional[bool],
+        enable_ocr: Optional[bool], progress_cb=None,
     ) -> tuple[list[RawKeyframe], list[KeyframeRecord]]:
         """SONG SONG HOÁ decode ‖ embed (A4): 1 luồng PRODUCER stream keyframe (decode
         CPU/NVDEC), luồng chính CONSUMER embed theo lô trên GPU + OCR.
@@ -503,9 +503,15 @@ class VideoSearchEngine:
                 all_raws.append(r)
             # Tiến độ: cho thấy đang chạy + tốc độ thực (frame/giây) để không tưởng treo.
             n = len(all_records)
-            fps = n / max(1e-6, _time.perf_counter() - t0)
+            elapsed = _time.perf_counter() - t0
+            fps = n / max(1e-6, elapsed)
             print(f"[index] đã xử lý {n} keyframe ({fps:.1f} frame/giây"
                   f"{', có OCR' if ocr is not None else ''})", flush=True)
+            if progress_cb is not None:
+                try:
+                    progress_cb(n, elapsed)   # A6: đẩy tiến độ ra UI (không chặn)
+                except Exception:  # pragma: no cover - callback lỗi không được làm vỡ index
+                    pass
         t.join()
         if err:
             raise err[0]
@@ -514,7 +520,7 @@ class VideoSearchEngine:
     def _collect_records(
         self, video_specs: list[tuple], out_dir: str | Path, *,
         sample_every_s: Optional[float], max_frames: Optional[int],
-        enable_ocr: Optional[bool],
+        enable_ocr: Optional[bool], progress_cb=None,
     ) -> tuple[list[RawKeyframe], list[KeyframeRecord]]:
         """Cắt + embed keyframe cho các video. Dùng pipeline song song (A4) nếu
         `parallel_index`, ngược lại chạy tuần tự (dễ debug/tất định). Hai đường cho
@@ -522,7 +528,7 @@ class VideoSearchEngine:
         if self.parallel_index:
             return self._pipeline_records(
                 video_specs, out_dir, sample_every_s=sample_every_s,
-                max_frames=max_frames, enable_ocr=enable_ocr)
+                max_frames=max_frames, enable_ocr=enable_ocr, progress_cb=progress_cb)
         all_raws: list[RawKeyframe] = []
         for path, vid in video_specs:
             all_raws.extend(extract_keyframes(
@@ -537,13 +543,14 @@ class VideoSearchEngine:
         video_id: Optional[str] = None, *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
         enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
-        enable_caption: Optional[bool] = None,
+        enable_caption: Optional[bool] = None, progress_cb=None,
     ) -> VideoIndexEntry:
         # max_frames=-1 (sentinel) -> dùng mặc định engine; None -> không giới hạn.
         mf = self.max_frames if max_frames == -1 else max_frames
         raws, records = self._collect_records(
             [(video_path, video_id)], out_dir,
-            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
+            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr,
+            progress_cb=progress_cb)
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ video.")
         if self.enable_asr if enable_asr is None else enable_asr:
@@ -556,7 +563,7 @@ class VideoSearchEngine:
         dataset_id: str = "__dataset__", *,
         sample_every_s: Optional[float] = None, max_frames: Optional[int] = -1,
         enable_ocr: Optional[bool] = None, enable_asr: Optional[bool] = None,
-        enable_caption: Optional[bool] = None,
+        enable_caption: Optional[bool] = None, progress_cb=None,
     ) -> VideoIndexEntry:
         """Index NHIỀU video vào MỘT index chung -> tìm xuyên suốt cả dataset.
 
@@ -566,7 +573,8 @@ class VideoSearchEngine:
         mf = self.max_frames if max_frames == -1 else max_frames
         raws, records = self._collect_records(
             [(vp, None) for vp in video_paths], out_dir,
-            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr)
+            sample_every_s=sample_every_s, max_frames=mf, enable_ocr=enable_ocr,
+            progress_cb=progress_cb)
         if not raws:
             raise RuntimeError("Không trích được keyframe nào từ dataset.")
         if self.enable_asr if enable_asr is None else enable_asr:

@@ -179,7 +179,22 @@ def create_app() -> Flask:
     # Model nạp LƯỜI (lần index đầu); mỗi video index xong được cache.
     from retrieval.video_engine import VideoIndexEntry, VideoSearchEngine
 
-    video_state: dict = {"engine": VideoSearchEngine(), "videos": {}}
+    video_state: dict = {"engine": VideoSearchEngine(), "videos": {},
+                         "progress": {"active": False, "count": 0, "fps": 0.0,
+                                      "elapsed": 0.0, "label": ""}}
+
+    def _progress_cb(label: str):
+        """Trả callback engine gọi khi index -> cập nhật video_state['progress'] để
+        endpoint /api/video/progress đọc (A6). Đánh dấu active; caller tự tắt ở finally."""
+        p = video_state["progress"]
+        p.update(active=True, count=0, fps=0.0, elapsed=0.0, label=label)
+        def cb(n, elapsed):
+            p.update(count=n, fps=round(n / max(elapsed, 1e-6), 1),
+                     elapsed=round(elapsed, 1), active=True, label=label)
+        return cb
+
+    def _progress_done():
+        video_state["progress"]["active"] = False
 
     def _safe_name(vid: str) -> str:
         """Tên thư mục an toàn cho video_id (đề phòng ký tự lạ)."""
@@ -210,6 +225,11 @@ def create_app() -> Flask:
             o["enable_caption"] = bool(data["caption"])
         return o
 
+    @app.get("/api/video/progress")
+    def video_progress():
+        """A6: tiến độ index hiện tại (UI poll khi đang nạp) — count + fps + elapsed."""
+        return jsonify(video_state["progress"])
+
     @app.get("/api/video/list")
     def video_list():
         vids = (sorted(p.name for p in VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists()
@@ -231,9 +251,12 @@ def create_app() -> Flask:
                 return jsonify(error="Không có video nào trong data/videos/"), 404
             try:
                 entry = video_state["engine"].index_dataset(
-                    vids, FRAMES_DIR, **_index_opts(request.json or {}))
+                    vids, FRAMES_DIR, progress_cb=_progress_cb("toàn bộ dataset"),
+                    **_index_opts(request.json or {}))
             except RuntimeError as e:
                 return jsonify(error=str(e)), 400
+            finally:
+                _progress_done()
             video_state["videos"]["__dataset__"] = entry
             return jsonify(video="__dataset__", frames=entry.num_indexed,
                            sampled=entry.num_sampled, videos=len(vids))
@@ -247,9 +270,12 @@ def create_app() -> Flask:
             return jsonify(video=path.stem, cached=True, frames=entry.num_indexed)
         try:
             entry = video_state["engine"].index_video(
-                path, FRAMES_DIR, **_index_opts(request.json or {}))
+                path, FRAMES_DIR, progress_cb=_progress_cb(name),
+                **_index_opts(request.json or {}))
         except RuntimeError as e:
             return jsonify(error=str(e)), 400
+        finally:
+            _progress_done()
         video_state["videos"][entry.video_id] = entry
         return jsonify(video=entry.video_id, frames=entry.num_indexed,
                        sampled=entry.num_sampled)
@@ -273,9 +299,12 @@ def create_app() -> Flask:
             return jsonify(error=f"Không tìm thấy video trong: {raw_path}"), 404
         try:
             entry = video_state["engine"].index_dataset(
-                vids, FRAMES_DIR, **_index_opts(request.json or {}))
+                vids, FRAMES_DIR, progress_cb=_progress_cb(f"{len(vids)} video"),
+                **_index_opts(request.json or {}))
         except RuntimeError as e:
             return jsonify(error=str(e)), 400
+        finally:
+            _progress_done()
         video_state["videos"]["__dataset__"] = entry
         video_state["dataset_folder"] = str(folder)
         return jsonify(video="__dataset__", frames=entry.num_indexed,
@@ -415,4 +444,6 @@ def create_app() -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(debug=False, port=5000)
+    # threaded=True: cho phép poll /api/video/progress SONG SONG khi 1 request index
+    # đang chạy (blocking) -> progress bar mới cập nhật được (A6).
+    app.run(debug=False, port=5000, threaded=True)

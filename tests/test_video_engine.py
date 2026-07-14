@@ -420,6 +420,18 @@ def test_search_with_feedback_shifts_toward_positive(engine_and_entry) -> None:
     assert engine.search_with_feedback(entry, "màu đỏ", top_k=3)[0].timestamp < 1.0
 
 
+def test_progress_cb_invoked_during_index(tmp_path) -> None:
+    """A6: index_video gọi progress_cb với số keyframe đã xử lý (tăng dần)."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False,
+                               embed_batch_size=2)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    calls = []
+    engine.index_video(video, tmp_path / "f", progress_cb=lambda n, el: calls.append(n))
+    assert calls and calls == sorted(calls) and calls[-1] >= 1
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

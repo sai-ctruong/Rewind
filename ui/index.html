@@ -769,6 +769,18 @@
       } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
     };
 
+    // A6: poll tiến độ index (khi đang nạp) -> hiện count + fps để không tưởng treo.
+    const startProgressPoll = (st) => {
+      const iv = setInterval(async () => {
+        try {
+          const p = await (await fetch("/api/video/progress")).json();
+          if (p && p.active) st.textContent =
+            "⏳ Đã xử lý " + p.count + " keyframe · " + p.fps + " fps · " + p.elapsed + "s…";
+        } catch (e) { /* bỏ qua nhịp lỗi */ }
+      }, 900);
+      return () => clearInterval(iv);
+    };
+
     // Tuỳ chọn nạp: chỉ còn OCR on/off. Luôn quét TOÀN BỘ video (engine tự lấy
     // mẫu mỗi 1s, không giới hạn frame) — không cho chọn giây/số frame nữa.
     const idxOpts = () => {
@@ -799,6 +811,7 @@
       const st = q("status"); st.className = "vstatus busy";
       st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model, có thể vài phút)…";
       q("load").disabled = true;
+      const stopPoll = startProgressPoll(st);
       try {
         const j = await (await fetch("/api/video/index", { method: "POST",
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name, ...idxOpts() }) })).json();
@@ -807,7 +820,7 @@
         else { INDEXED.add(j.video);
           st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”.`; }
       } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
-      q("load").disabled = false;
+      stopPoll(); q("load").disabled = false;
     });
     // Nạp cả một THƯ MỤC dataset bất kỳ trên máy (không cần chép vào data/videos/).
     const fbtn = q("folder-btn");
@@ -818,6 +831,7 @@
       st.className = "vstatus busy";
       st.textContent = "Đang quét thư mục + cắt keyframe + embed (nhiều video → có thể lâu)…";
       fbtn.disabled = true;
+      const stopPoll = startProgressPoll(st);
       try {
         const j = await (await fetch("/api/video/index_folder", { method: "POST",
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, ...idxOpts() }) })).json();
@@ -829,7 +843,7 @@
           st.textContent = `✓ Đã nạp ${j.videos} video (${j.frames} keyframe) từ: ${j.folder}. Nhập câu để tìm cả dataset.`;
         }
       } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp thư mục."; }
-      fbtn.disabled = false;
+      stopPoll(); fbtn.disabled = false;
     });
     // F2: trạng thái phản hồi liên quan (👍/👎) — reset khi đổi câu (ý định mới).
     const fb = { pos: new Set(), neg: new Set() };
