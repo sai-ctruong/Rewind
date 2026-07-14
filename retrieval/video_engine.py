@@ -673,6 +673,45 @@ class VideoSearchEngine:
                     cnt[tok] += 1
         return [w for w, _ in cnt.most_common(top_n)]
 
+    def explore(
+        self, entry: VideoIndexEntry, per_video: int = 3, limit: int = 30,
+    ) -> list[RawKeyframe]:
+        """Chọn mẫu keyframe ĐA DẠNG khắp dataset (slide Buổi 2 — 'hiển thị gì khi người
+        dùng chưa biết bắt đầu từ đâu'). Mỗi video lấy `per_video` frame RẢI ĐỀU theo thời
+        gian (đầu/giữa/cuối) -> lướt nhanh để chọn hướng, thay vì phải gõ câu trước."""
+        by_video: dict[str, list] = {}
+        for kid in entry.index.ids:
+            r = entry.raws.get(kid)
+            if r is not None:
+                by_video.setdefault(r.video_id, []).append((r.timestamp, r))
+        out: list[RawKeyframe] = []
+        for items in by_video.values():
+            items.sort(key=lambda x: x[0])
+            n = min(per_video, len(items))
+            picks = ([0] if n <= 1 else
+                     [round(i * (len(items) - 1) / (n - 1)) for i in range(n)])
+            for i in sorted(set(picks)):
+                out.append(items[i][1])
+        return out[:limit]
+
+    def search_similar(
+        self, entry: VideoIndexEntry, keyframe_id: str, top_k: int = 8,
+    ) -> list:
+        """Tìm keyframe GIỐNG một keyframe cho trước — dùng THẲNG embedding đã lưu (không
+        cần encode lại ảnh). Nền cho D2: bấm 1 ảnh khám phá -> ra các cảnh tương tự."""
+        idx = entry.index
+        qvecs: list[np.ndarray] = []
+        for enc in ("clip", "siglip"):
+            if idx.has_encoder(enc):
+                m = idx.mean_embedding([keyframe_id], enc)
+                if m is not None:
+                    qvecs.append(l2_normalize(m.reshape(1, -1))[0])
+        if not qvecs:
+            return []
+        # +1 rồi bỏ chính nó khỏi kết quả (luôn giống nó nhất).
+        res = self._run_search(entry, qvecs, "", top_k + 1, rerank=False)
+        return [c for c in res if c.keyframe_id != keyframe_id][:top_k]
+
     def neighbors(
         self, entry: VideoIndexEntry, frame_id: str, before: int = 4, after: int = 4,
     ) -> list[RawKeyframe]:

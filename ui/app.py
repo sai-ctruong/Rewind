@@ -432,6 +432,34 @@ def create_app() -> Flask:
             return jsonify(error="Chưa có index nào để lưu. Nạp video trước."), 400
         return jsonify(saved=saved, dir=str(INDEX_DIR))
 
+    @app.get("/api/video/explore")
+    def video_explore():
+        """D2: mẫu keyframe đa dạng khắp video để 'khám phá' khi chưa biết bắt đầu."""
+        vid = request.args.get("video", "")
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp."), 400
+        raws = video_state["engine"].explore(
+            entry, per_video=int(request.args.get("per_video", 3)),
+            limit=int(request.args.get("limit", 30)))
+        return jsonify(frames=[{"id": r.id, "timestamp": round(r.timestamp, 1),
+                                "video_id": r.video_id,
+                                "image": f"/api/video/frame/{r.id}"} for r in raws])
+
+    @app.get("/api/video/similar/<path:frame_id>")
+    def video_similar(frame_id: str):
+        """D2: tìm keyframe tương tự 1 keyframe (bấm từ trang khám phá)."""
+        for entry in video_state["videos"].values():
+            if frame_id in entry.raws:
+                cands = video_state["engine"].search_similar(
+                    entry, frame_id, top_k=int(request.args.get("topk", 8)))
+                return jsonify(results=[{
+                    "id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
+                    "score": round(float(c.score), 3), "video_id": c.video_id,
+                    "caption": entry.caption_by_id.get(c.keyframe_id),
+                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands])
+        return jsonify(error="Không thấy keyframe."), 404
+
     @app.get("/api/video/neighbors/<path:frame_id>")
     def video_neighbors(frame_id: str):
         """D1: keyframe lân cận (cùng video, quanh thời điểm) để duyệt bối cảnh."""

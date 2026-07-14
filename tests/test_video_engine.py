@@ -463,6 +463,27 @@ def test_understand_and_temporal_routing() -> None:
     assert engine.temporal_events("một người đi bộ trên phố") is None  # câu thường
 
 
+def test_explore_and_search_similar(tmp_path) -> None:
+    """D2: explore lấy mẫu đa dạng (nhiều video); search_similar trả cảnh CÙNG MÀU,
+    loại bỏ chính nó."""
+    va = tmp_path / "a.mp4"; vb = tmp_path / "b.mp4"
+    _make_video(va, [(0, 0, 255), (0, 255, 0), (0, 0, 255)], frames_per_color=10)  # đỏ,lá,đỏ
+    _make_video(vb, [(255, 0, 0)], frames_per_color=10)                             # xanh dương
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    entry = engine.index_dataset([va, vb], tmp_path / "f")
+
+    ex = engine.explore(entry, per_video=2, limit=10)
+    assert ex and {r.video_id for r in ex} == {"a", "b"}   # phủ cả 2 video
+
+    # Từ cảnh ĐỎ ĐẦU (~[0,1)s) -> tương tự nhất là cảnh ĐỎ SAU (~[2,3)s), KHÔNG phải chính nó.
+    red1 = next(i for i in entry.index.ids
+                if entry.raws[i].video_id == "a" and entry.raws[i].timestamp < 1.0)
+    sim = engine.search_similar(entry, red1, top_k=3)
+    assert sim and all(c.keyframe_id != red1 for c in sim)
+    assert sim[0].timestamp >= 2.0                          # cảnh đỏ thứ hai (cùng màu)
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

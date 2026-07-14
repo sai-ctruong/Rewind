@@ -431,6 +431,7 @@
             <input type="file" id="video-imgfile" accept="image/*" style="max-width:220px"></label>
           <button class="btn ghost" id="video-imgbtn" type="button" title="Chỉ ảnh, hoặc ảnh + câu ở ô tìm (multimodal)">Tìm theo ảnh (+chữ)</button>
           <button class="btn ghost" id="video-sketch-toggle" type="button" title="Vẽ phác hoạ rồi tìm khung giống — kết hợp câu ở ô tìm nếu có">✏️ Phác hoạ</button>
+          <button class="btn ghost" id="video-explore" type="button" title="Chưa biết bắt đầu từ đâu? Lướt mẫu đa dạng — bấm 1 ảnh để tìm cảnh tương tự">🧭 Khám phá</button>
         </div>
         <div class="controls" id="video-sketch-panel" style="display:none;flex-wrap:wrap;align-items:flex-start;margin-top:6px">
           <canvas id="video-sketch" width="320" height="180"
@@ -1052,6 +1053,44 @@
       const file = q("imgfile").files[0];
       if (!file) { q("results").innerHTML = "<div class='empty'>Chọn một ảnh mẫu trước.</div>"; return; }
       runImageSearch(file, "🖼️ ảnh");
+    });
+
+    // D2: TRANG KHÁM PHÁ — lướt mẫu đa dạng; bấm 1 ảnh -> tìm cảnh tương tự.
+    const renderResultCards = (box, results, countEl, label) => {
+      box.innerHTML = "";
+      if (!results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
+      if (countEl) countEl.innerHTML = label + " · " + results.length + " khung";
+      results.forEach((r, i) => { const c = el("div", "vcard");
+        const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
+        const vidlbl = r.video_id ? "<div class='vid'>🎬 " + r.video_id + "</div>" : "";
+        c.innerHTML = "<img loading='lazy' src='" + r.image + "' alt='keyframe'>" +
+          "<div class='cap'><span class='rank'>#" + (i + 1) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
+          vidlbl + cap; box.append(c); });
+    };
+    const explorebtn = q("explore");
+    if (explorebtn) explorebtn.addEventListener("click", async () => {
+      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const box = q("results"), countEl = $("#" + cfg.key + "-count");
+      box.innerHTML = "<div class='empty'>Đang lấy mẫu khám phá…</div>"; if (countEl) countEl.textContent = "";
+      try {
+        const j = await (await fetch("/api/video/explore?video=" + encodeURIComponent(vid))).json();
+        box.innerHTML = "";
+        if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
+        const hint = el("div"); hint.style.cssText = "width:100%;font-size:12.5px;color:var(--faint);margin-bottom:6px";
+        hint.textContent = "🧭 Mẫu đa dạng — bấm 1 ảnh để tìm các cảnh TƯƠNG TỰ."; box.append(hint);
+        (j.frames || []).forEach(f => { const c = el("div", "vcard"); c.style.cursor = "pointer";
+          c.innerHTML = "<img loading='lazy' src='" + f.image + "' alt='kf'>" +
+            "<div class='cap'><span class='t'>t=" + f.timestamp + "s</span></div><div class='vid'>🎬 " + f.video_id + "</div>";
+          c.addEventListener("click", async () => {
+            box.innerHTML = "<div class='empty'>Đang tìm cảnh tương tự…</div>";
+            try { const s = await (await fetch("/api/video/similar/" + encodeURIComponent(f.id))).json();
+              if (s.error) { box.innerHTML = "<div class='empty'>" + s.error + "</div>"; return; }
+              renderResultCards(box, s.results || [], countEl, "🧭 Tương tự");
+            } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm tương tự.</div>"; }
+          });
+          box.append(c); });
+      } catch (e) { box.innerHTML = "<div class='empty'>Lỗi khám phá.</div>"; }
     });
 
     // Q2: PHÁC HOẠ (sketch) -> xuất canvas thành ảnh -> tìm như ảnh mẫu (Q1/Q3).

@@ -132,6 +132,16 @@ def test_video_neighbors_missing_errors(client) -> None:
     assert r.status_code == 404
 
 
+def test_video_explore_without_index_errors(client) -> None:
+    r = client.get("/api/video/explore?video=chua_nap")
+    assert r.status_code == 400
+
+
+def test_video_similar_missing_errors(client) -> None:
+    r = client.get("/api/video/similar/khong/co")
+    assert r.status_code == 404
+
+
 def test_video_progress_endpoint(client) -> None:
     # A6: endpoint tiến độ luôn trả trạng thái (rảnh -> active False).
     r = client.get("/api/video/progress")
