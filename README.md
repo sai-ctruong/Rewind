@@ -1,169 +1,145 @@
-<div align="center">
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Rewind — Tua lại tìm khoảnh khắc" width="100%">
+</p>
 
-# 🎬 Trợ lý ảo Truy xuất Đa phương tiện — AIC 2026
+<h1 align="center">Rewind</h1>
+<p align="center"><b>Tua lại tìm khoảnh khắc.</b><br/>
+Công cụ tìm kiếm ngữ nghĩa cho video quy mô lớn — tìm bất kỳ khoảnh khắc nào bằng <em>lời mô tả</em>, <em>ảnh mẫu</em>, hoặc <em>hội thoại</em>.</p>
 
-**Hệ thống tìm kiếm video/lifelog thông minh cho Hội thi AI Challenge TP.HCM 2026**
-*Mô phỏng thể thức Lifelog Search Challenge (LSC) & Video Browser Showdown (VBS)*
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/tests-243%20passing-2f9e6f" alt="Tests">
+  <img src="https://img.shields.io/badge/ANN-Faiss%20HNSW-F5A623" alt="Faiss">
+  <img src="https://img.shields.io/badge/encoder-SigLIP2-6E8BFF" alt="SigLIP">
+  <img src="https://img.shields.io/badge/layer-Agentic-8B5CF6" alt="Agentic">
+  <img src="https://img.shields.io/badge/UI-Flask-000000?logo=flask" alt="Flask">
+</p>
 
-![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-130%20passing-2f9e6f)
-![Faiss](https://img.shields.io/badge/ANN-Faiss%20HNSW-F5A623)
-![BM25](https://img.shields.io/badge/sparse-BM25-6E8BFF)
-![Flask](https://img.shields.io/badge/UI-Flask-000000?logo=flask)
-![Status](https://img.shields.io/badge/roadmap-Phase%200--10%20✓-2f9e6f)
+<p align="center">
+  <a href="#-bắt-đầu-nhanh">Bắt đầu</a> ·
+  <a href="#-điểm-nổi-bật">Chức năng</a> ·
+  <a href="#-kiến-trúc">Kiến trúc</a> ·
+  <a href="#-tài-liệu">Tài liệu</a>
+</p>
 
-</div>
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
----
+## 🎬 Rewind là gì?
 
-## 📖 Giới thiệu
+Rewind biến một kho video khổng lồ — từ vài giờ tới **hàng trăm giờ** (hàng triệu
+keyframe) — thành thứ bạn có thể **tra cứu theo ý nghĩa**, không phải tua tay hay lục theo
+tên file. Bạn mô tả khoảnh khắc cần tìm (*"người lớn hướng dẫn trẻ em tưới hoa ở quầy bán
+hoa quả"*), đưa một **ảnh mẫu**, hoặc **trò chuyện** để hệ thống hỏi lại thu hẹp dần — và
+nó trả về đúng khung hình.
 
-Hệ thống xử lý **4 dạng bài toán** truy xuất trên kho video từ vài giờ tới **vài trăm giờ** (ước tính hàng triệu keyframe):
+Điểm khác biệt: Rewind không dừng ở "so khớp vector". Trên nền truy xuất nhiều tầng là một
+**lớp agentic** — một bộ điều phối dùng LLM tự quyết nên gọi công cụ nào, **ghi nhớ hội
+thoại xuyên nhiều lượt**, và **tổng hợp câu trả lời có dẫn chứng** thay vì trả về lưới ảnh
+trần.
 
-| Dạng | Input | Output |
-|------|-------|--------|
-| 🎯 **KIS** — Known-Item Search | 1 mô tả / đoạn mẫu | Top-1/Top-5 keyframe chính xác tuyệt đối |
-| 🔍 **AVS** — Ad-hoc Video Search | Mô tả tổng quát | Danh sách **tất cả** đoạn khớp, xếp hạng |
-| ❓ **VQA** — Video QA | Video + câu hỏi | Câu trả lời có suy luận (đếm, thứ tự thời gian) |
-| 💬 **KISC** — Conversational KIS | Hội thoại nhiều lượt | Trợ lý **chủ động hỏi lại** để thu hẹp phạm vi |
+<table>
+<tr>
+<td width="50%" valign="top">
 
-> **Nguyên tắc số 1:** Độ chính xác > tốc độ. Pipeline nhiều tầng, tầng lọc thô ưu tiên **recall cao** (không bao giờ đánh mất ứng viên đúng), tầng rerank tối ưu precision.
+**🗣️ Tìm bằng lời**
+> *"người mặc áo đỏ đứng ở quầy hoa quả"*
 
----
+**🖼️ Tìm bằng ảnh / phác hoạ**
+> đưa một ảnh mẫu → ra cảnh giống
+
+</td>
+<td width="50%" valign="top">
+
+**⏱️ Tìm theo thứ tự thời gian**
+> *"cởi mũ **trước khi** vào phòng"*
+
+**💬 Tìm bằng hội thoại**
+> hệ chủ động hỏi lại để khoanh vùng
+
+</td>
+</tr>
+</table>
+
+> **Nguyên tắc thiết kế cốt lõi:** *độ chính xác đặt trên tốc độ*. Tầng lọc thô ưu tiên
+> **recall cao** (không đánh mất ứng viên đúng), tầng rerank tối ưu precision. Mọi thứ
+> **tính trước được** dồn vào lúc index (offline); chỉ thứ phụ thuộc query mới tối ưu độ trễ.
+
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
 ## ✨ Điểm nổi bật
 
-- 🧩 **Kiến trúc multi-stage** recall-first: coarse (nhanh, giữ recall) → fusion → LVLM rerank (chính xác) → temporal check.
-- ⚡ **Scale-ready**: Faiss HNSW + metadata pre-filter, coarse search **9–25 ms** trên 1.5k–5k keyframe.
-- 🤝 **Ensemble 2 encoder** (CLIP + SigLIP) giảm rủi ro "cùng sai".
-- 🧪 **Mock-first**: mọi thành phần cần GPU/API đều có bản Mock chạy **offline**, bản thật viết sẵn *lazy-import* — cắm dữ liệu thật là chạy.
-- 💬 **KISC** hội tụ trung bình **2 lượt** hội thoại (Information Gain / entropy).
-- 🎨 **Web UI** đẹp, 2 theme, nối thẳng pipeline thật.
-- ✅ **130 unit test** xanh, chạy `pytest` hoàn toàn offline.
+|  |  |
+|---|---|
+| 🧩 **Truy xuất recall-first nhiều tầng** | coarse (nhanh, giữ recall) → RRF fusion → VLM rerank → kiểm nhất quán thời gian |
+| 🧠 **Lớp Agentic** | Tool Registry · Search Agent (observe→reason→act) · Session Memory · RAG Reader |
+| ⚡ **Sẵn sàng scale** | Faiss HNSW + metadata pre-filter, coarse cỡ mili-giây · batch embed · lưu/nạp index · pipeline decode ‖ embed |
+| 🤝 **Ensemble 2 encoder** | SigLIP2 + SigLIP đa ngôn ngữ — giảm "cùng sai", **Việt lẫn Anh** |
+| 🔎 **Hybrid dense + sparse** | SigLIP (thị giác) trộn BM25 (OCR/ASR/caption) qua RRF, trọng số **thích ứng** |
+| 🧪 **Mock-first** | mọi thành phần cần GPU/API đều có bản Mock chạy **offline**; bản thật *lazy-import* |
+| ✅ **243 unit test** | `pytest` chạy hoàn toàn offline — kể cả vòng lặp Agent |
 
----
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
-## 🏗️ Kiến trúc pipeline
+## 🏗️ Kiến trúc
 
 ```mermaid
 flowchart TD
-    subgraph IDX["🗂️ INDEXING (offline, trước ngày thi)"]
-        V[Video] --> KF[Keyframe + Objects]
+    subgraph IDX["🗂️ INDEXING (offline)"]
+        V[Video] --> KF[Cắt keyframe + objects]
         KF --> DD[Dedup gần trùng]
-        DD --> EMB[CLIP + SigLIP embed]
-        DD --> CAP[LLM caption + OCR + ASR]
+        DD --> EMB[SigLIP2 + SigLIP-ml embed]
+        DD --> ENR[Caption LLM · OCR · ASR]
         EMB --> IX[(Faiss HNSW + BM25 + metadata)]
-        CAP --> IX
+        ENR --> IX
     end
 
-    subgraph RET["🔎 RETRIEVAL (online, mỗi query)"]
-        Q[Query / Hội thoại] --> QU[1· Query Understanding LLM]
-        QU --> QE[2· Multi-Query Expansion]
-        QE --> CO[3· Coarse recall-first<br/>CLIP+SigLIP + BM25 + pre-filter]
-        CO --> FU[4· RRF Fusion]
-        FU --> RR[5· LVLM Fine Rerank<br/>+ time budget + early-stop]
-        RR --> TC[6· Temporal Consistency Check]
-        TC --> RO{7· Route}
-        RO -->|KIS| K[Top-1/5]
-        RO -->|AVS| A[Danh sách xếp hạng]
-        RO -->|VQA| VQ[Trả lời + suy luận]
-        RO -->|KISC| KC[Hỏi lại nếu độ tự tin thấp]
+    subgraph RET["🔎 RETRIEVAL (online)"]
+        Q[Truy vấn: chữ / ảnh / hội thoại] --> QU[Query understanding]
+        QU --> CO[Coarse recall-first<br/>dense ensemble + BM25 + pre-filter]
+        CO --> FU[RRF fusion]
+        FU --> RR[VLM fine rerank<br/>+ time budget + early-stop]
+        RR --> TC[Kiểm nhất quán thời gian]
+    end
+
+    subgraph AG["🧠 AGENTIC LAYER"]
+        AGENT[Search Agent] --> TOOLS[Tool Registry]
+        AGENT --> MEM[Session Memory<br/>episodic + semantic]
+        AGENT --> READER[RAG Reader<br/>đáp án có dẫn chứng]
     end
 
     IX -.-> CO
+    TOOLS -.điều phối.-> RET
+    TC --> RES{Định tuyến}
+    RES -->|known-item| K[Top-1/5]
+    RES -->|ad-hoc| A[Danh sách xếp hạng]
+    RES -->|VQA| VQ[Trả lời + suy luận]
+    RES -->|hội thoại| KC[Hỏi lại khi mơ hồ]
 ```
 
----
+**Hai đường đi.** *Fast path* (`engine.search`) chạy pipeline truy xuất trực tiếp cho đa
+số truy vấn. *Smart path* (`SearchAgent`) đặt một bộ não LLM lên trên: nó **điều phối**
+chính các công cụ đó cho những truy vấn khó, hội thoại, hay cần suy luận nhiều bước — chứ
+không cài lại thuật toán truy xuất.
 
-## 📂 Cấu trúc dự án
-
-```
-aic2026_system/
-├── kisc_module/          💬 Module hội thoại KISC (Information Gain)
-├── ingestion/            🗂️  Dedup · embed CLIP/SigLIP · OCR/ASR · caption · build_index
-├── retrieval/            🔎 Query understanding/expansion · coarse · fusion · rerank
-│                            · temporal_check · vqa_module · kisc_adapter
-├── evaluation/           📊 metrics (Recall@K, MRR, mAP, nDCG, EM, F1) · run_eval
-├── ui/                   🎨 app.py (Flask) · index.html (web demo đẹp)
-├── tests/                ✅ 130 unit test (pytest, offline)
-├── configs/settings.yaml ⚙️  Ngưỡng tập trung (đánh dấu [PROVISIONAL]/[FIXED])
-└── CLAUDE.md             📘 Blueprint kỹ thuật đầy đủ
-```
-
----
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
 ## 🚀 Bắt đầu nhanh
 
 ```bash
-# 1. Tạo môi trường (Python 3.10+; dự án dùng 3.14)
-py -3.14 -m venv .venv
-.venv\Scripts\activate            # Windows
+# 1. Môi trường (Python 3.10+)
+python -m venv .venv
+.venv\Scripts\activate            # Windows · source .venv/bin/activate (Linux/macOS)
 pip install -r requirements.txt
 
-# 2. Chạy toàn bộ test (offline, không cần GPU/API)
-pytest                            # → 130 passed
+# 2. Chạy toàn bộ test — offline, không cần GPU/API
+pytest                            # → 243 passed
 
-# 3. Mở web demo (nối pipeline thật)
+# 3. Web demo (nối pipeline thật)
 python -m ui.app                  # → http://127.0.0.1:5000
-
-# 4. Báo cáo đánh giá end-to-end
-python -m evaluation.run_eval
-
-# 5. Demo hội thoại KISC
-python -m kisc_module.demo             # bản gốc (mock)
-python -m retrieval.kisc_real_demo     # trên retriever thật
 ```
 
-> 💡 Trên Windows, nếu console vỡ tiếng Việt: đặt `set PYTHONUTF8=1`.
-
----
-
-## 🖥️ Web demo
-
-Trang demo có **3 chế độ** — nối thẳng pipeline thật qua Flask, hoặc chạy **mô phỏng** độc lập trong trình duyệt:
-
-| Chế độ | Mô tả |
-|--------|-------|
-| 💬 **Hội thoại KISC** | Mô tả khoảnh khắc → trợ lý hỏi thu hẹp; bộ đếm ứng viên giảm dần theo thời gian thực |
-| 🔍 **Tìm kiếm** | Truy vấn ngôn ngữ tự nhiên → kết quả xếp hạng kèm thuộc tính |
-| ❓ **Hỏi–đáp VQA** | Đếm số lượng, xác định "ai làm gì" trên cửa sổ keyframe |
-
----
-
-## 🧠 Tech stack & quyết định thiết kế
-
-| Thành phần | Lựa chọn | Vì sao |
-|-----------|----------|--------|
-| Multimodal encoder | **CLIP** (BTC cấp) + **SigLIP** (ensemble) | Giảm correlated errors, tăng accuracy không cần model lớn |
-| Vector search | **Faiss HNSW** (cosine) | Cân bằng tốc độ/chính xác, giữ float (ưu tiên accuracy) |
-| Sparse retrieval | **BM25** trên objects/OCR/ASR/caption | Bắt tín hiệu chữ/ngữ nghĩa embedding bỏ sót |
-| Score fusion | **Reciprocal Rank Fusion** (k=60) | Gộp nhiều ranked list khác thang đo, không cần chuẩn hoá |
-| LVLM rerank & VQA | **Claude** (vision) | Suy luận quan hệ ngữ nghĩa; giới hạn là **độ trễ**, không phải chi phí |
-| Data enrichment | **LLM auto-captioning** lúc indexing | Nắm quan hệ tương tác mà object detector rời rạc bỏ lỡ |
-
----
-
-## 📊 Đánh giá
-
-`evaluation/metrics.py` cung cấp: **Recall@K · Hit@K · MRR · Average Precision (mAP) · nDCG** cho KIS/AVS; **Exact Match · token F1** cho VQA. `run_eval.py` sinh bộ test có nhãn, chạy end-to-end và in báo cáo + lưu JSON.
-
----
-
-## 🧪 Triết lý Mock-first
-
-> *"Mọi module chạy được offline bằng mock data trước khi cắm dữ liệu/GPU/API thật."*
-
-Mỗi thành phần cần tài nguyên nặng đều theo mẫu **`ABC` (interface) + `Mock*` (offline) + bản thật (lazy-import)**:
-
-```
-Encoder / OCR / ASR / Captioner / Reranker / VQA Answerer / Query Understander
-   └─ interface ──┬── MockXxx        → chạy ngay, test offline (numpy)
-                  └── XxxThật (lazy) → import torch/anthropic/... chỉ khi dùng
-```
-
-### 🎥 Xử lý video THẬT (SigLIP, không cần API key)
-
-Mắt xích `video.mp4 → keyframe → embedding → tìm kiếm` đã chạy thật bằng model local (miễn phí, chỉ cần tải model lần đầu):
+<details>
+<summary><b>🎥 Tìm kiếm trên video thật (SigLIP local, không cần API key)</b></summary>
 
 ```bash
 pip install opencv-python-headless torch transformers sentencepiece protobuf pillow
@@ -171,54 +147,79 @@ pip install opencv-python-headless torch transformers sentencepiece protobuf pil
 # Cắt keyframe từ video
 python -m ingestion.video_ingest phim.mp4 --out artifacts/frames --every 1.0
 
-# Tìm kiếm bằng chữ trên video thật (SigLIP cross-modal, không cần API)
+# Truy vấn bằng chữ (SigLIP cross-modal — cùng không gian với ảnh)
 python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên phố" --topk 5
 ```
+</details>
 
-> ✅ Đã kiểm chứng: trên clip 3 cảnh (CAT/DOG/CAR), truy vấn *"a photo of a car"* → trả về đúng khung hình CAR. `ingestion/video_ingest.py` (cv2) cắt keyframe + bỏ frame trùng; `SiglipEncoder.encode_text()` mã hoá query cùng không gian ảnh.
+<details>
+<summary><b>🧠 Dùng lớp Agentic từ code</b></summary>
 
-**Độ chính xác nâng cao** (`retrieval/video_engine.py`): ensemble **SigLIP2 + SigLIP-multilingual** fuse bằng RRF (Mục 2.1) · **query prompt ensemble** — trung bình embedding nhiều biến thể câu (Mục 4.2) · lấy mẫu dày 0.5s + **dedup ngữ nghĩa** (Mục 5.1). Hỗ trợ **tiếng Việt lẫn tiếng Anh**. Benchmark trước/sau: `python -m evaluation.bench_video_engine` (Mục 11.3).
+```python
+from retrieval.video_engine import VideoSearchEngine
+from retrieval.search_agent import SearchAgent
+from retrieval.vqa_module import MockReader
 
-**Tìm bằng CHỮ trên biển hiệu (OCR)** (`ingestion/ocr_asr_extract.py::EasyOcrEngine`): SigLIP hiểu hình ảnh nhưng không đọc chữ cụ thể. EasyOCR (GPU, tiếng Việt+Anh) đọc chữ trên mỗi keyframe → index vào **BM25**; khi truy vấn, RRF gộp dense (SigLIP) + sparse (OCR, trọng số cao hơn) → tìm được cả cảnh lẫn text/biển hiệu (VD "NEW YORK", "SEPHORA"). Bật mặc định (`enable_ocr=True`).
+engine = VideoSearchEngine()
+entry  = engine.index_video("phim.mp4", "artifacts/frames")
 
-**Rerank bằng VLM local — hiểu từng chữ + ngữ cảnh** (`retrieval/vlm_rerank.py`, Mục 4.4): bật tuỳ chọn (checkbox "Rerank VLM" trên UI, hoặc `search(..., rerank=True)`). SigLIP là dual-encoder (nén cả câu thành 1 vector, yếu về tổ hợp từ); **Qwen2-VL-2B** dùng cross-attention đọc ảnh + *từng token* câu → suy luận đúng quan hệ/thứ tự/số lượng, **đa ngôn ngữ**. Kiến trúc 2 tầng: coarse SigLIP (nhanh, recall) → VLM rerank top-K (chậm trên CPU, chính xác). **Không cần API key** (model chạy local).
+# MockReader chạy offline; đổi sang ClaudePlanner/ClaudeReader khi có ANTHROPIC_API_KEY
+agent = SearchAgent(engine, entry, reader=MockReader())
 
-### 🔌 Cắm dữ liệu thật (khi có tài nguyên)
+run = agent.run("cảnh người cởi mũ trước khi vào phòng")
+print(run.tools_used())      # ['understand', 'search_temporal', ...] — Agent tự định tuyến
+print(run.answer)            # câu trả lời có trích dẫn keyframe
 
-1. Chuẩn bị **video + CLIP feature BTC** và đặt `ANTHROPIC_API_KEY`.
-2. `pip install torch transformers faiss-cpu openai-whisper paddleocr anthropic`.
-3. Đổi `Mock*` → bản thật (không đổi interface): `SiglipEncoder`, `PaddleOcrEngine`, `WhisperAsrEngine`, `ClaudeCaptioner`, `ClaudeReranker`, `ClaudeVqaAnswerer`, `ClaudeQueryUnderstander`.
-4. **Benchmark** các tham số `[PROVISIONAL]` trong `configs/settings.yaml` (efSearch, top-K, time_budget) theo Mục 11.3 — không đoán số.
+# Hội thoại có trí nhớ: lượt sau nhớ phản hồi lượt trước (Rocchio)
+agent.chat("cảnh trên phố")
+agent.chat("cảnh trên phố", positive_ids=["kf_42"])   # 👍 → kéo kết quả về hướng này
+```
+</details>
 
----
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
-## 🗺️ Trạng thái roadmap
+## 📚 Tài liệu
 
-| Phase | Nội dung | | Phase | Nội dung | |
-|:---:|---|:---:|:---:|---|:---:|
-| 0 | Scaffold + config | ✅ | 6 | Temporal consistency check | ✅ |
-| 1 | Deduplication | ✅ | 7 | VQA module | ✅ |
-| 2 | Ingestion pipeline | ✅ | 8 | Tích hợp KISC (retriever thật) | ✅ |
-| 3 | Faiss HNSW + coarse | ✅ | 9 | Evaluation metrics | ✅ |
-| 4 | Query understanding | ✅ | 10 | Web UI | ✅ |
-| 5 | Fusion + LVLM rerank | ✅ | | **Tổng** | **130 test ✓** |
+| Tài liệu | Dành cho |
+|---|---|
+| 📘 [`HUONG_DAN.md`](HUONG_DAN.md) | Cẩm nang thao tác bằng **code/CLI** — bảng tra "muốn làm X → dùng gì", đi qua từng chức năng |
+| 🖥️ [`HUONG_DAN_GIAO_DIEN.md`](HUONG_DAN_GIAO_DIEN.md) | Hướng dẫn dùng **giao diện web** — từng tab, từng nút, vòng phản hồi |
+| 💬 [`kisc_module/`](kisc_module/) | Module hội thoại thu hẹp bằng Information Gain |
 
----
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
-## 📜 Ràng buộc không thương lượng
+## 🧠 Tech stack & lý do chọn
 
-1. 🎯 **Accuracy > speed** — chấp nhận pipeline nhiều tầng miễn nằm trong time budget.
-2. 🔒 **Không mất recall ở tầng lọc thô** — ứng viên bị loại ở coarse không bao giờ được xét lại.
-3. 📈 **Scale-ready** — không brute-force khi > ~50.000 vector.
-4. 🐍 Python 3.10+, type hints, docstring giải thích **lý do** thiết kế.
-5. 🧪 Mọi module có unit test, chạy offline bằng mock.
+| Thành phần | Lựa chọn | Vì sao |
+|-----------|----------|--------|
+| Encoder đa phương thức | **SigLIP2** + **SigLIP đa ngôn ngữ** (ensemble) | Sigmoid loss ổn định, zero-shot tốt; ensemble giảm correlated errors |
+| Vector search | **Faiss HNSW** (cosine) | Cân bằng tốc độ/chính xác, giữ float — ưu tiên accuracy |
+| Sparse retrieval | **BM25** trên objects/OCR/ASR/caption | Bắt tín hiệu chữ (biển hiệu, lời nói) mà embedding bỏ sót |
+| Score fusion | **Reciprocal Rank Fusion** (k=60) | Gộp nhiều ranked list khác thang đo, không cần chuẩn hoá |
+| VLM rerank & VQA | **Qwen2-VL** (local) / **Claude** vision | Cross-attention đọc *từng token* → hiểu quan hệ, thứ tự, số lượng |
+| Bộ não Agent | **LLM function-calling** (Anthropic) | Điều phối công cụ, suy luận nhiều bước, hội thoại |
 
----
+<img src="docs/assets/divider.svg" width="100%" alt="">
 
-<div align="center">
+## 🗺️ Trạng thái
 
-📘 Xem [`CLAUDE.md`](CLAUDE.md) để biết đặc tả kỹ thuật đầy đủ · 💬 [`kisc_module/`](kisc_module/) cho chi tiết module hội thoại
+| Nhóm | Nội dung | |
+|---|---|:---:|
+| Truy xuất | dedup · ingestion · Faiss HNSW · coarse · fusion · rerank · temporal | ✅ |
+| Truy vấn | hiểu query · mở rộng · ảnh · sketch · đa phương thức · temporal | ✅ |
+| Hiển thị | video browser · lân cận · gom cụm · explore · progress | ✅ |
+| Phản hồi | relevance feedback (Rocchio) · gợi ý concept · hội thoại KISC | ✅ |
+| Agentic | Tool Registry · Search Agent · Session Memory · RAG Reader | ✅ |
+| Scale/eval | batch embed · lưu/nạp index · benchmark harness · metrics | ✅ |
 
-*Xây dựng cho Hội thi AI Challenge TP.HCM 2026*
+*Còn lại:* reasoning nhiều nhánh CoT/ToT (đợi API) · VQA trên video dài thật · IVF-PQ/sharding khi cần profiling quy mô lớn.
 
-</div>
+<img src="docs/assets/divider.svg" width="100%" alt="">
+
+<p align="center">
+  <img src="docs/assets/banner.svg" width="70%" alt="Rewind">
+</p>
+<p align="center"><i>Rewind — tua lại tìm khoảnh khắc.</i></p>
+<p align="center">
+  <sub>Chạy offline bằng mock · cắm model/API thật là dùng · 243 test xanh</sub>
+</p>
