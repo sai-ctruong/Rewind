@@ -142,3 +142,24 @@ def test_claude_planner_requires_key_without_client(monkeypatch) -> None:
     p = ClaudePlanner()  # không tiêm client
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         p._get_client()
+
+
+# ------------------------------- G4 Reader tích hợp ---------------------------
+def test_reader_synthesizes_answer_for_mock_planner(agent) -> None:
+    from retrieval.vqa_module import MockReader
+    agent.reader = MockReader()                      # MockPlanner answer=None -> Reader điền
+    run = agent.run("cảnh màu đỏ")
+    assert run.answer and "[" in run.answer          # câu trả lời grounded có trích dẫn
+    assert run.meta.get("cited_frame_ids")           # id được trích dẫn
+
+
+def test_reader_does_not_override_claude_answer(agent) -> None:
+    from retrieval.vqa_module import MockReader
+    scripted = [
+        SimpleNamespace(content=[_tool_use("search", {"query": "cảnh màu đỏ"})]),
+        SimpleNamespace(content=[_text("Câu trả lời của Claude.")]),
+    ]
+    agent.planner = ClaudePlanner(client=_FakeClaude(scripted))
+    agent.reader = MockReader()
+    run = agent.run("cảnh màu đỏ")
+    assert run.answer == "Câu trả lời của Claude."   # Reader KHÔNG ghi đè

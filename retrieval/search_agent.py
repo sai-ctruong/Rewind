@@ -273,12 +273,18 @@ class ClaudePlanner(Planner):
 class SearchAgent:
     """Bộ điều phối: dựng Action Space cho (engine, entry) rồi giao Planner tự lái.
 
-    Mặc định MockPlanner (offline). Bơm ClaudePlanner khi có API key để dùng bộ não thật."""
+    Mặc định MockPlanner (offline). Bơm ClaudePlanner khi có API key để dùng bộ não thật.
 
-    def __init__(self, engine, entry, planner: Optional[Planner] = None):
+    READER (G4, tuỳ chọn): sau khi Planner ra kết quả, nếu có `reader` và câu trả lời
+    còn TRỐNG (MockPlanner không tự sinh câu chữ; ClaudePlanner đã tự trả lời trong loop
+    thì giữ nguyên), Reader TỔNG HỢP câu trả lời grounded có trích dẫn keyframe — đúng
+    mắt xích "Rerank -> Reader" của MemoriEase 3.0 (slide 31)."""
+
+    def __init__(self, engine, entry, planner: Optional[Planner] = None, reader=None):
         self.engine = engine
         self.entry = entry
         self.planner: Planner = planner or MockPlanner()
+        self.reader = reader
 
     def run(self, query: str, images: Optional[dict[str, bytes]] = None,
             max_steps: int = 6) -> AgentRun:
@@ -289,5 +295,11 @@ class SearchAgent:
             steps.append(AgentStep(action, result))
 
         res = self.planner.run(query, images or {}, registry, record, max_steps)
-        return AgentRun(query=query, steps=steps, results=res.results,
-                        answer=res.answer, meta=res.meta)
+        run = AgentRun(query=query, steps=steps, results=res.results,
+                       answer=res.answer, meta=res.meta)
+        # G4: chỉ đọc-tổng-hợp khi Planner chưa tự trả lời (tránh ghi đè câu của Claude).
+        if self.reader is not None and run.answer is None and run.results:
+            ra = self.reader.read(query, run.results, self.entry)
+            run.answer = ra.answer
+            run.meta["cited_frame_ids"] = ra.cited_frame_ids
+        return run

@@ -271,3 +271,151 @@ class ClaudeVqaAnswerer(VqaAnswerer):
             reasoning="Câu trả lời từ Claude vision trên cửa sổ keyframe.",
             used_frame_ids=[f.id for f in chosen],
         )
+
+
+# ============================================================================
+# G4 — RAG READER (MemoriEase 3.0: "Rerank -> Reader")
+# ============================================================================
+#
+# BỐI CẢNH (Slide Buổi 3, slide 31): sau khi Agent RERANK ra top-K keyframe, một bước
+# READER TỔNG HỢP câu trả lời ngôn ngữ tự nhiên CÓ DẪN CHỨNG (grounded) — không chỉ trả
+# về lưới ảnh trần. Đây là bước biến "danh sách kết quả" thành "câu trả lời có thể đọc",
+# và là mắt xích để KISC/hội thoại nói "tôi tìm được X vì…".
+#
+# KHÁC VqaModule: VQA trả lời một CÂU HỎI trên một cửa sổ thời gian; Reader TÓM TẮT/GIẢI
+# THÍCH kết quả TRUY XUẤT (top-K keyframe rời rạc, có thể khác video) theo truy vấn. Dùng
+# lại đúng hạ tầng (VqaAnswer-style, Claude vision lazy) nhưng đầu vào là KẾT QUẢ TOOL đã
+# chuẩn hoá (dict) + entry để tra text/ảnh — nối thẳng được vào G2 SearchAgent.
+
+
+@dataclass
+class ReaderAnswer:
+    """Câu trả lời grounded của Reader: text + CÁC keyframe được trích dẫn (truy vết)."""
+
+    answer: str
+    cited_frame_ids: list[str] = field(default_factory=list)
+    reasoning: str = ""
+
+
+def _frame_text(entry, kid: str) -> str:
+    """Gộp mọi tín hiệu CHỮ có cho 1 keyframe (caption VLM + OCR + ASR) để grounding.
+
+    Reader dựa vào đây để dẫn chứng bằng NGÔN TỪ (không chỉ id). Rỗng nếu keyframe chưa
+    có caption/OCR/ASR — khi đó Reader lùi về mô tả theo video/thời gian."""
+    parts = [
+        getattr(entry, "caption_by_id", {}).get(kid),
+        getattr(entry, "ocr_by_id", {}).get(kid),
+        getattr(entry, "asr_by_id", {}).get(kid),
+    ]
+    return " · ".join(p for p in parts if p)
+
+
+class Reader(ABC):
+    """Interface Reader: (truy vấn, kết quả top-K, entry) -> câu trả lời grounded."""
+
+    @abstractmethod
+    def read(self, query: str, results: Sequence[dict], entry,
+             top_k: int = 5) -> ReaderAnswer:
+        ...
+
+
+class MockReader(Reader):
+    """Reader OFFLINE tất định: dựng câu trả lời từ TÍN HIỆU CHỮ sẵn có của top-K.
+
+    Không "nhìn" được ảnh (đó là việc của ClaudeReader), nhưng tổng hợp caption/OCR/ASR
+    + video/timestamp thành câu trả lời có DẪN CHỨNG keyframe_id — đủ để chạy/đo pipeline
+    G2→Reader và demo 'trả lời có giải thích' mà không cần API key."""
+
+    def read(self, query: str, results: Sequence[dict], entry,
+             top_k: int = 5) -> ReaderAnswer:
+        top = list(results)[:top_k]
+        if not top:
+            return ReaderAnswer(answer=f"Không tìm thấy kết quả cho: \"{query}\".")
+        cited = [it["keyframe_id"] for it in top]
+        lines: list[str] = []
+        for it in top:
+            kid = it["keyframe_id"]
+            txt = _frame_text(entry, kid)
+            where = f"video {it.get('video_id')} @ {float(it.get('timestamp') or 0):.1f}s"
+            snippet = f" — {txt}" if txt else ""
+            lines.append(f"[{kid}] ({where}){snippet}")
+        head = (f"Tìm thấy {len(results)} kết quả liên quan đến \"{query}\". "
+                f"{len(top)} keyframe khớp nhất:")
+        return ReaderAnswer(
+            answer=head + "\n" + "\n".join(lines),
+            cited_frame_ids=cited,
+            reasoning="Tổng hợp caption/OCR/ASR + vị trí thời gian của top-K (offline).",
+        )
+
+
+READER_PROMPT = (
+    "Duoi day la cac keyframe truy xuat duoc cho truy van: \"{query}\". Moi anh kem "
+    "keyframe_id. Hay TRA LOI NGAN GON bang tieng Viet: mo ta ket qua khop nhat va "
+    "GIAI THICH vi sao no khop truy van, TRICH DAN keyframe_id lien quan trong ngoac "
+    "vuong (vi du [kf_12])."
+)
+
+
+class ClaudeReader(Reader):
+    """Reader THẬT dùng Claude vision (anthropic lazy): gửi top-K ảnh + truy vấn, nhận
+    câu trả lời grounded. Cho tiêm `client` để test cấu trúc request offline.
+
+    Ảnh lấy từ `entry.raws[kid].image_bytes` (frame trong RAM); keyframe đã nạp lại từ
+    đĩa (mất image_bytes) sẽ được BỎ QUA phần ảnh — Reader vẫn grounding bằng text +
+    trích dẫn id (giảm nhẹ chứ không chặn)."""
+
+    def __init__(self, model: str = "claude-opus-4-8", max_tokens: int = 500,
+                 max_images: int = 5, client=None):
+        self.model = model
+        self.max_tokens = max_tokens
+        self.max_images = max_images
+        self._client = client
+
+    def _get_client(self):
+        if self._client is None:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                raise RuntimeError("ClaudeReader cần ANTHROPIC_API_KEY (hoặc MockReader).")
+            try:
+                import anthropic
+            except ImportError as e:  # pragma: no cover
+                raise ImportError("Chưa cài 'anthropic'. pip install anthropic") from e
+            self._client = anthropic.Anthropic()
+        return self._client
+
+    def _build_content(self, query: str, results, entry, top_k: int):
+        import base64
+
+        top = list(results)[:top_k]
+        content: list[dict] = []
+        cited: list[str] = []
+        n_img = 0
+        for it in top:
+            kid = it["keyframe_id"]
+            cited.append(kid)
+            raw = getattr(entry, "raws", {}).get(kid)
+            img = getattr(raw, "image_bytes", None) if raw is not None else None
+            if img and n_img < self.max_images:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg",
+                               "data": base64.standard_b64encode(img).decode("ascii")},
+                })
+                n_img += 1
+            content.append({"type": "text", "text": f"keyframe_id={kid} "
+                            f"({_frame_text(entry, kid) or 'khong co mo ta'})"})
+        content.append({"type": "text", "text": READER_PROMPT.format(query=query)})
+        return content, cited
+
+    def read(self, query: str, results: Sequence[dict], entry,
+             top_k: int = 5) -> ReaderAnswer:
+        if not results:
+            return ReaderAnswer(answer=f"Không tìm thấy kết quả cho: \"{query}\".")
+        content, cited = self._build_content(query, results, entry, top_k)
+        msg = self._get_client().messages.create(
+            model=self.model, max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": content}],
+        )
+        text = "".join(b.text for b in msg.content
+                       if getattr(b, "type", None) == "text").strip()
+        return ReaderAnswer(answer=text, cited_frame_ids=cited,
+                            reasoning="Claude vision tổng hợp top-K keyframe.")

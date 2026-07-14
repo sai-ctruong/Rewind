@@ -263,11 +263,18 @@ lượt; cache chỉ có embedding. Ghi log phiên + carry facts vào Planner (G
 (F2) qua nhiều lượt — đúng "observation space = lịch sử trò chuyện nhiều lượt" (slide 31).
 **File mới:** `retrieval/session_memory.py` · **Test:** 2 lượt, lượt 2 dùng lại fact/filter lượt 1.
 
-### 🟡 G4. RAG Reader — sinh đáp án có dẫn chứng (MemoriEase 3.0)
-Slide 31: sau Rerank là **Reader** tổng hợp câu trả lời. Nối `vqa_module` (đã có Mock +
-Claude-lazy) làm **Reader chung**: nhận top-K keyframe + caption + lịch sử → sinh câu
-trả lời tiếng Việt **trích dẫn keyframe** (cho VQA và cho KISC "tôi tìm được X vì…").
-**File:** mở rộng `retrieval/vqa_module.py` + nối vào G2 · **Test:** đáp án cite đúng id keyframe.
+### ✅ G4. RAG Reader — sinh đáp án có dẫn chứng (MemoriEase 3.0)  ĐÃ XONG (2026-07-15)
+Slide 31: sau Rerank là **Reader** tổng hợp câu trả lời. **Đã làm:** thêm `Reader` (ABC),
+`MockReader`, `ClaudeReader`, `ReaderAnswer` vào `vqa_module.py`. Reader nhận KẾT QUẢ TOOL
+đã chuẩn hoá (list dict) + entry (tra caption/OCR/ASR/ảnh) → câu trả lời tiếng Việt
+**trích dẫn keyframe_id** + vị trí video/thời gian.
+- `MockReader` (offline): tổng hợp caption/OCR/ASR + timestamp của top-K, cite id.
+- `ClaudeReader` (lazy): gửi top-K ảnh (từ `raws[kid].image_bytes`) + text cho Claude
+  vision; tiêm `client` để test cấu trúc request offline.
+- **Nối G2:** `SearchAgent(reader=…)` — điền `answer` khi Planner chưa tự trả lời (Mock),
+  KHÔNG ghi đè câu của ClaudePlanner. Đúng mắt xích "Rerank → Reader".
+**File:** `retrieval/vqa_module.py`, `retrieval/search_agent.py` · **Test:**
+`tests/test_rag_reader.py` (6) + 2 test tích hợp trong `test_search_agent.py`.
 
 ### 🟢 G5. Reasoning trace CoT/ToT — nâng cấp Query Understanding
 Slide "Reasoning": System-2, CoT (chuỗi đơn), ToT (nhiều nhánh + tự đánh giá + backtrack).
