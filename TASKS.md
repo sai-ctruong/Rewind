@@ -2,7 +2,7 @@
 
 > **Nguồn yêu cầu:** `CLAUDE.md` (blueprint kỹ thuật) + **Slide Tập huấn Buổi 2**
 > (khung "Hệ thống tìm kiếm video" — ThS. Nguyễn Quang Thức) + **benchmark thật**
-> (RTX 3060, 37 nhãn). Trạng thái tổng quan xem `TEAM.md`.
+> (RTX 3060, 51 nhãn). Trạng thái tổng quan xem `TEAM.md`.
 >
 > Cập nhật: 2026-07-14 · Nhánh: `main` · 185 test xanh.
 
@@ -39,7 +39,7 @@ Slide nhấn 3 đánh đổi cốt lõi: **tốc độ ↔ sức mạnh ↔ chi 
 | **Caption ngữ cảnh** (quan hệ + hoàn cảnh) | 🟡 B5 | logic xong; local Qwen kẹt VRAM 6GB → chờ API |
 | **KISC** (hội thoại, khám phá/khai phá) | ✅ | trên data mẫu — CHƯA nối video thật |
 | **Scale**: batch embed ×2.15 · lưu/nạp index · decode backend · song song | ✅ A1–A4 | benchmark thật |
-| **Benchmark harness** + 37 nhãn thật + tuning | ✅ B1 | xem Mục 5 |
+| **Benchmark harness** + 51 nhãn thật + tuning | ✅ B1 | xem Mục 5 |
 
 ---
 
@@ -103,9 +103,12 @@ cụm kết quả theo video** khi tìm xuyên dataset. Test neighbors + 404.
 **CÒN LẠI:** nhảy/mở video gốc ở timestamp (cần phục vụ file video); trang khám phá D2.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
-### 🔲 D2. Trang "khám phá" khi chưa biết bắt đầu (mới từ slide)
-Hiển thị mẫu đại diện đa dạng của dataset (mỗi video/cụm 1 ảnh) để người dùng lướt chọn.
-**File:** `ui/`
+### ✅ D2. Trang "khám phá" khi chưa biết bắt đầu  ĐÃ XONG (2026-07-14)
+**Đã làm:** `engine.explore()` lấy mẫu keyframe ĐA DẠNG khắp dataset (mỗi video rải đều
+theo thời gian) + `search_similar()` dùng THẲNG embedding đã lưu (không encode lại). Endpoint
+`/api/video/explore` + `/api/video/similar/<id>`. UI nút "🧭 Khám phá" → grid; bấm 1 ảnh →
+tìm cảnh tương tự. Test explore phủ nhiều video + similar cùng màu.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ---
 
@@ -156,15 +159,18 @@ Test gợi ý + loại từ query.
 
 | | Việc | Trạng thái |
 |---|---|---|
-| B1 | Harness benchmark (throughput + Recall/MRR) + **37 nhãn thật** + sweep | ✅ (xem Mục 7) |
-| C1 | **Tăng nhãn 37 → ~100+** (giảm nhiễu hit@1 ±0.1) | 🔲 |
+| B1 | Harness benchmark (throughput + Recall/MRR) + **51 nhãn thật** + sweep | ✅ (xem Mục 7) |
+| C1 | **Tăng nhãn** (37 → **51** ✅; tiến tới ~100+) — giảm nhiễu hit@1 | 🟡 51 xong, thêm được |
 | C2 | **VQA trên video thật** (đếm/thứ tự) — cần object-detection hoặc API | 🔲 |
 | C3 | **CI GitHub Actions** chạy pytest mỗi push | 🔲 |
 | C4 | Quy trình **PR** khi 2 người làm song song | 🔲 |
 
 ---
 
-## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, 37 nhãn — chi tiết `evaluation/benchmarks/`)
+## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, đo trên 37 nhãn — chi tiết `evaluation/benchmarks/`)
+
+> LƯU Ý: các số dưới đo trên bộ **37 nhãn**; bộ nhãn đã mở rộng lên **51** (C1) nhưng
+> CHƯA chạy lại benchmark trên 51. Chạy lại để cập nhật: `python -m evaluation.bench_retrieval --labels evaluation/labels.json`.
 
 **Cấu hình đã chốt (ghi ở `configs/settings.yaml` mục 11 + default `video_engine.py`):**
 - `bm25_weight = 1.0` + **adaptive** (query IN HOA → 3.0). Sweep: 1.0 cho hit@5 **0.72** (cao nhất);
@@ -177,8 +183,8 @@ Test gợi ý + loại từ query.
 **Adaptive BM25 thắng cố định (coarse):** adaptive hit@1 0.351 / hit@5 0.649 > fixed-1.0
 (0.297/0.649) và fixed-3.0 (0.324/0.514 — recall tụt).
 
-**⚠️ Độ nhiễu:** hit@1 dao động ±0.1 giữa các lần (37 nhãn còn ít); **hit@5 ổn định**.
-Đừng chốt trên chênh hit@1 <0.1 → cần thêm nhãn (C1).
+**⚠️ Độ nhiễu:** hit@1 dao động ±0.1 giữa các lần (bộ 37 nhãn còn ít); **hit@5 ổn định**.
+Đừng chốt trên chênh hit@1 <0.1. Đã tăng lên **51 nhãn** (C1) để giảm nhiễu — chạy lại benchmark để thấy.
 
 ---
 

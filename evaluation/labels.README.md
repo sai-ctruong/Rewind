@@ -1,6 +1,6 @@
 # evaluation/labels.json — bộ nhãn đánh giá truy xuất video (B1)
 
-25 cặp **(query → cửa sổ thời gian đúng)** trên 3 video thật trong `data/videos/`,
+51 cặp **(query → cửa sổ thời gian đúng)** trên 3 video thật trong `data/videos/`,
 dùng cho `evaluation/bench_retrieval.py` để đo **Recall@K / hit@K / MRR** thật.
 
 ## Cách tạo bộ nhãn này (để tin được số đo)
@@ -34,7 +34,7 @@ python -m evaluation.bench_retrieval --labels evaluation/labels.json
 Lệnh này (trên GPU) sẽ:
 1. Index 3 video (ensemble SigLIP, batch embedding A1, pipeline A4).
 2. Đo **throughput embedding** (frame/giây LẺ vs THEO LÔ → lượng hoá A1).
-3. Chấm **Recall@K / hit@K / MRR** trên 25 nhãn.
+3. Chấm **Recall@K / hit@K / MRR** trên 51 nhãn.
 4. Lưu `evaluation/benchmarks/retrieval_benchmark.json`.
 
 ## Lưu ý & cách mở rộng

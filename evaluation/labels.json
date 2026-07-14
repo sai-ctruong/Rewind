@@ -40,5 +40,20 @@
   {"query": "công viên nhiều cây xanh", "video_id": "beach_walking", "time_window": [19.3, 21.0]},
 
   {"query": "xe hơi thể thao màu đen trên phố", "video_id": "walking", "time_window": [1.5, 4.0]},
-  {"query": "đám đông băng qua đường ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 3.0]}
+  {"query": "đám đông băng qua đường ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 3.0]},
+  {"query": "người đàn ông áo trắng đứng ở khu bến cảng", "video_id": "beach_walking", "time_window": [5.5, 7.0]},
+
+  {"query": "xe tải nhỏ màu xanh dương đậu bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [68.0, 83.0]},
+  {"query": "quầy quảng cáo trà TEA màu xanh lá", "video_id": "walk_rain_seoul", "time_window": [218.0, 233.0]},
+  {"query": "phố đêm neon đỏ nhiều nhà hàng", "video_id": "walk_rain_seoul", "time_window": [518.0, 533.0]},
+  {"query": "cửa hàng mặt tiền màu đỏ và bậc thang", "video_id": "walk_rain_seoul", "time_window": [668.0, 683.0]},
+  {"query": "người cầm ô màu vàng ở vạch qua đường", "video_id": "walk_rain_seoul", "time_window": [968.0, 983.0]},
+  {"query": "cờ quảng cáo Decathlon màu xanh dương", "video_id": "walk_rain_seoul", "time_window": [1118.0, 1133.0]},
+  {"query": "biển giảm giá SALE 70 màu đỏ", "video_id": "walk_rain_seoul", "time_window": [1268.0, 1290.0]},
+  {"query": "tòa nhà kính chọc trời và quảng trường ướt vắng", "video_id": "walk_rain_seoul", "time_window": [1718.0, 1735.0]},
+  {"query": "hẻm quán ăn có dây đèn lồng ban đêm", "video_id": "walk_rain_seoul", "time_window": [2018.0, 2033.0]},
+  {"query": "hẻm có nhiều xe máy đậu, người áo trắng", "video_id": "walk_rain_seoul", "time_window": [2168.0, 2185.0]},
+  {"query": "vỉa hè lát gạch xanh lá và xe máy đậu", "video_id": "walk_rain_seoul", "time_window": [2768.0, 2785.0]},
+  {"query": "xe sedan màu trắng đậu bên đường", "video_id": "walk_rain_seoul", "time_window": [2918.0, 2935.0]},
+  {"query": "áp phích chân dung lớn trên kính và cọc tiêu cam", "video_id": "walk_rain_seoul", "time_window": [3068.0, 3085.0]}
 ]
