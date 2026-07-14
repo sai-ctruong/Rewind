@@ -427,9 +427,9 @@
           <button class="btn" type="submit">Tìm trong video</button>
         </form>
         <div class="controls" style="margin-top:6px">
-          <label class="rerank-tog" title="Tìm khung hình GIỐNG một ảnh mẫu (image-to-video) — đưa ảnh thay vì mô tả chữ">🖼️ Tìm bằng ảnh:
+          <label class="rerank-tog" title="Tìm khung hình GIỐNG một ảnh mẫu. Nếu Ô TÌM ở trên CÓ CHỮ, sẽ kết hợp CHỮ + ẢNH (multimodal).">🖼️ Ảnh mẫu:
             <input type="file" id="video-imgfile" accept="image/*" style="max-width:220px"></label>
-          <button class="btn ghost" id="video-imgbtn" type="button">Tìm theo ảnh</button>
+          <button class="btn ghost" id="video-imgbtn" type="button" title="Chỉ ảnh, hoặc ảnh + câu ở ô tìm (multimodal)">Tìm theo ảnh (+chữ)</button>
         </div>
         <div class="video-results" id="video-results"></div>
       </div>
@@ -961,18 +961,22 @@
       const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
       const file = q("imgfile").files[0];
+      const text = q("query").value.trim();   // Q3: có chữ -> multimodal (chữ + ảnh)
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
       if (!file) { box.innerHTML = "<div class='empty'>Chọn một ảnh mẫu trước.</div>"; return; }
-      box.innerHTML = "<div class='empty'>Đang tìm khung hình giống ảnh…</div>";
+      box.innerHTML = "<div class='empty'>" +
+        (text ? "Đang tìm theo ẢNH + CHỮ (multimodal)…" : "Đang tìm khung hình giống ảnh…") + "</div>";
       if (countEl) countEl.textContent = "";
       try {
         const fd = new FormData();
         fd.append("video", vid); fd.append("image", file); fd.append("topk", cfg.topk);
+        if (text) fd.append("query", text);
         const j = await (await fetch("/api/video/search_image", { method: "POST", body: fd })).json();
         box.innerHTML = "";
         if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
-        if (countEl) countEl.innerHTML = "🖼️ " + j.results.length + " khung giống ảnh mẫu";
+        if (countEl) countEl.innerHTML = (text ? "🖼️+📝 " : "🖼️ ") + j.results.length +
+          (text ? " khung khớp ẢNH + CHỮ" : " khung giống ảnh mẫu");
         j.results.forEach((r, i) => {
           const c = el("div", "vcard");
           const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";

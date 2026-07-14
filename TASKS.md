@@ -60,10 +60,13 @@ Slide nêu "truy vấn bằng ảnh sinh ra từ sketch". Cho phép vẽ phác/t
 dùng làm image-query (dựa trên Q1). Bước sau Q1.
 **File:** `ui/` (canvas sketch), tái dùng Q1.
 
-### 🔲 Q3. Kết hợp NHIỀU KIỂU truy vấn (multi-modal fusion) (mới từ slide)
-Slide: *"cơ chế kết hợp nhiều kiểu truy vấn"*. Gộp text + ảnh (+ temporal) trong MỘT
-truy vấn → RRF nhiều nguồn. Dựa trên Q1.
-**File:** `retrieval/video_engine.py`
+### ✅ Q3. Kết hợp NHIỀU KIỂU truy vấn (multi-modal) ĐÃ XONG (2026-07-14)
+Slide: *"cơ chế kết hợp nhiều kiểu truy vấn"*. **Đã làm:** `search_multimodal(query_text,
+image_bytes, text_weight)` — trộn Ở MỨC VECTOR `q=norm(w·vec_chữ+(1−w)·vec_ảnh)` (SigLIP
+cùng không gian chữ+ảnh); chữ vẫn cho BM25/rerank. Endpoint `/api/video/search_image`
+nhận thêm `query` → có chữ thì multimodal, không thì ảnh thuần. UI: nút "Tìm theo ảnh
+(+chữ)" tự lấy câu ở ô tìm. Test: lệch chữ→theo chữ, lệch ảnh→theo ảnh.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### 🔲 Q4. Query understanding → pre-filter (B2 cũ)
 Parse câu → `StructuredQuery {objects, actions, location, time, temporal_order}` trước

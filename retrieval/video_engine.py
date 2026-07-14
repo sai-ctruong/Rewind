@@ -678,6 +678,30 @@ class VideoSearchEngine:
         )
         return coarse[:top_k]
 
+    def search_multimodal(
+        self, entry: VideoIndexEntry, query_text: str, image_bytes: bytes, *,
+        text_weight: float = 0.5, top_k: int = 8, rerank: bool = False,
+    ) -> list:
+        """KẾT HỢP truy vấn CHỮ + ẢNH (slide Buổi 2 — 'kết hợp nhiều kiểu truy vấn').
+
+        SigLIP đưa cả câu và ảnh vào CÙNG không gian nên trộn được ở MỨC VECTOR:
+        q = chuẩn_hoá(w·vec_chữ + (1−w)·vec_ảnh) cho từng encoder. Cho phép mô tả bằng
+        lời VÀ chỉ 'giống ảnh này' cùng lúc -> liên kết chặt hơn mỗi loại đơn lẻ. Câu chữ
+        vẫn dùng cho BM25 + rerank."""
+        tvecs = self.encode_query(query_text) if query_text else None
+        ivecs = self.encode_image_query(image_bytes) if image_bytes else None
+        if tvecs is None and ivecs is None:
+            raise ValueError("search_multimodal cần ít nhất câu chữ HOẶC ảnh.")
+        if ivecs is None:  # chỉ có chữ -> như search thường
+            return self._run_search(entry, tvecs, query_text, top_k, rerank)
+        if tvecs is None:  # chỉ có ảnh -> dense thuần (không BM25/rerank text)
+            return self._run_search(entry, ivecs, "", top_k, rerank=False)
+        fused: list[np.ndarray] = []
+        for tv, iv in zip(tvecs, ivecs):
+            v = text_weight * tv + (1.0 - text_weight) * iv
+            fused.append(l2_normalize(v.reshape(1, -1))[0])
+        return self._run_search(entry, fused, query_text, top_k, rerank)
+
     def search(
         self, entry: VideoIndexEntry, query: str, top_k: int = 8, rerank: bool = False,
     ) -> list:

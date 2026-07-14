@@ -355,9 +355,14 @@ def create_app() -> Flask:
         data = f.read()
         if not data:
             return jsonify(error="Ảnh rỗng."), 400
+        text = (request.form.get("query") or "").strip()
+        topk = int(request.form.get("topk", 8))
         try:
-            cands = video_state["engine"].search_by_image(
-                entry, data, top_k=int(request.form.get("topk", 8)))
+            if text:  # Q3: có CẢ chữ -> multimodal (trộn vector chữ + ảnh)
+                cands = video_state["engine"].search_multimodal(
+                    entry, text, data, top_k=topk)
+            else:      # chỉ ảnh
+                cands = video_state["engine"].search_by_image(entry, data, top_k=topk)
         except Exception as e:  # pragma: no cover
             return jsonify(error=f"Lỗi tìm bằng ảnh: {e}"), 500
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),

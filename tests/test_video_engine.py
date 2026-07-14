@@ -432,6 +432,26 @@ def test_progress_cb_invoked_during_index(tmp_path) -> None:
     assert calls and calls == sorted(calls) and calls[-1] >= 1
 
 
+def test_search_multimodal_combines_text_and_image(engine_and_entry, tmp_path) -> None:
+    """Q3: kết hợp CHỮ + ẢNH. text_weight lệch về chữ -> theo chữ; lệch về ảnh -> theo ảnh."""
+    import cv2
+    import numpy as np
+
+    engine, entry = engine_and_entry
+    blue = np.zeros((64, 64, 3), np.uint8); blue[:] = (255, 0, 0)  # BGR xanh dương
+    _ok, bbytes = cv2.imencode(".jpg", blue)
+    bbytes = bbytes.tobytes()
+
+    # Chữ "màu đỏ" + ảnh xanh dương. Nghiêng về CHỮ -> ra cảnh ĐỎ (~[0,1)s).
+    r_text = engine.search_multimodal(entry, "màu đỏ", bbytes, text_weight=0.9, top_k=3)
+    assert r_text and r_text[0].timestamp < 1.0
+    # Nghiêng về ẢNH -> ra cảnh XANH DƯƠNG (~[2,3)s).
+    r_img = engine.search_multimodal(entry, "màu đỏ", bbytes, text_weight=0.1, top_k=3)
+    assert r_img and r_img[0].timestamp >= 2.0
+    # Chỉ ảnh (không chữ) -> vẫn ra xanh dương.
+    assert engine.search_multimodal(entry, "", bbytes, top_k=3)[0].timestamp >= 2.0
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)
