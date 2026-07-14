@@ -1,10 +1,10 @@
 # 📋 TASKS.md — Kế hoạch đầy đủ (Hệ thống tìm kiếm video AIC 2026)
 
-> **Nguồn yêu cầu:** `CLAUDE.md` (blueprint kỹ thuật) + **Slide Tập huấn Buổi 2**
-> (khung "Hệ thống tìm kiếm video" — ThS. Nguyễn Quang Thức) + **benchmark thật**
-> (RTX 3060, 51 nhãn). Trạng thái tổng quan xem `TEAM.md`.
+> **Nguồn yêu cầu:** `CLAUDE.md` (blueprint kỹ thuật) + **Slide Buổi 2** (khung "Hệ
+> thống tìm kiếm video" — 3 trụ cột) + **Slide Buổi 3** (khung "Agentic AI & LLM trong
+> tìm kiếm" → Mục 9, Nhóm G) + **benchmark thật** (RTX 3060, 51 nhãn). Tổng quan: `TEAM.md`.
 >
-> Cập nhật: 2026-07-14 · Nhánh: `main` · 185 test xanh.
+> Cập nhật: 2026-07-15 · Nhánh: `main` · ~200 test xanh.
 
 ---
 
@@ -215,3 +215,68 @@ mới KHÓ hơn (mục tiêu Seoul đặc thù/thoáng qua). **hit@5 ~0.65 cực
 
 > Nguyên tắc xuyên suốt (blueprint Mục 11.3): **đo trước, tối ưu sau**. Mọi thay đổi
 > accuracy phải chứng minh bằng `evaluation/bench_retrieval.py` trên nhãn thật.
+
+---
+
+## 9. NHÓM G — LỚP AGENTIC (theo Slide Buổi 3: "Kiến trúc Agentic AI & LLM trong tìm kiếm")
+
+> **Nguồn:** Slide Buổi 3 (Hồ Lê Minh Quân). Buổi 3 KHÔNG thêm dataset — nó là **khung
+> tư duy kiến trúc**: LLM làm "bộ não" (reasoning core) **điều phối bộ công cụ** thay
+> vì chạy pipeline cứng. Hai ứng dụng sát đề: **VideoQA STAR agent** (slide 30 — Planner
+> luân phiên gọi Tool *Thời gian* + Tool *Không gian*) và **MemoriEase 2.0/3.0** (slide
+> 31 — Conversational Lifelog + RAG: trích bộ lọc metadata → Rocchio vector → **Rerank →
+> Reader sinh đáp án**). Project đã có **đủ mọi "công cụ" rời** (search, temporal, image,
+> rerank, understand, feedback-Rocchio, VQA, KISC) nhưng **chưa có bộ não điều phối**.
+
+**Nguyên tắc:** mọi task dưới đây theo pattern **ABC + Mock + Claude-lazy** (Mục 1.5
+CLAUDE.md) — `Mock*` chạy offline (rule-based) để test/đo NGAY khi chưa có API key;
+`Claude*` (function-calling) bật khi có `ANTHROPIC_API_KEY`. KHÔNG chặn tiến độ vì thiếu key.
+
+### ✅ G1. Tool Registry — hình thức hoá "Action Space"  ĐÃ XONG (2026-07-15)
+Slide: *Action Space = tập công cụ khai báo được*. **Đã làm:** `ToolRegistry` bind
+(engine, entry) → 9 tool có schema JSON: `search`, `search_temporal`, `search_by_image`,
+`search_multimodal`, `understand`, `neighbors`, `search_similar`, `suggest_concepts`,
+`disambiguation`. Mỗi tool có `description` tiếng Việt (nói RÕ khi nào dùng) + `parameters`
+JSON Schema. `specs("anthropic"|"openai")` xuất đúng định dạng function-calling 2 SDK.
+`call(name, **kw)` dispatch + **nuốt lỗi thành `ToolResult(ok=False, error=…)`** (Agent
+self-reflect, không sập). Ảnh truy vấn qua `image_ref` (không nhét bytes vào schema).
+Output CHUẨN HOÁ (`norm_candidates/raws/temporal`) → JSON-friendly cho G2/Reader.
+**File:** `retrieval/agent_tools.py` · **Test:** `tests/test_agent_tools.py` (12 test:
+đăng ký đủ 9 tool · schema 2 SDK · call thành công từng tool · 3 đường lỗi self-reflect).
+
+### 🔴 G2. Search Agent (Orchestrator loop) — STAR / MemoriEase
+Slide 30–31: vòng **observe → reason → act → observe**. Planner nhận query, tự quyết
+chuỗi tool (vd: `understand` → nếu có temporal thì `search_temporal`, nếu là ảnh thì
+`search_by_image`, rồi `rerank`, nếu mơ hồ thì `disambiguation`). Thay pipeline cứng
+bằng vòng lặp có điều phối. `MockPlanner` (luật: map query_type → chuỗi tool cố định,
+đủ để test) + `ClaudePlanner` (function-calling thật).
+**File mới:** `retrieval/search_agent.py` · **Test:** query temporal → planner tự gọi
+`search_temporal`; query ảnh → `search_by_image`; đo số bước hội tụ.
+
+### 🟡 G3. Session Memory (episodic + semantic) — trí nhớ xuyên lượt
+Slide "Memory": **episodic** (append-only event stream của phiên: đã hỏi gì, kết quả,
+👍/👎) + **semantic** (facts đã chốt: "mục tiêu = móc khoá đỏ"). Hiện KISC chỉ nhớ 1
+lượt; cache chỉ có embedding. Ghi log phiên + carry facts vào Planner (G2) và Rocchio
+(F2) qua nhiều lượt — đúng "observation space = lịch sử trò chuyện nhiều lượt" (slide 31).
+**File mới:** `retrieval/session_memory.py` · **Test:** 2 lượt, lượt 2 dùng lại fact/filter lượt 1.
+
+### 🟡 G4. RAG Reader — sinh đáp án có dẫn chứng (MemoriEase 3.0)
+Slide 31: sau Rerank là **Reader** tổng hợp câu trả lời. Nối `vqa_module` (đã có Mock +
+Claude-lazy) làm **Reader chung**: nhận top-K keyframe + caption + lịch sử → sinh câu
+trả lời tiếng Việt **trích dẫn keyframe** (cho VQA và cho KISC "tôi tìm được X vì…").
+**File:** mở rộng `retrieval/vqa_module.py` + nối vào G2 · **Test:** đáp án cite đúng id keyframe.
+
+### 🟢 G5. Reasoning trace CoT/ToT — nâng cấp Query Understanding
+Slide "Reasoning": System-2, CoT (chuỗi đơn), ToT (nhiều nhánh + tự đánh giá + backtrack).
+Với query nhiều ràng buộc/temporal: sinh **vài kế hoạch truy vấn ứng viên**, tự chấm,
+chọn (hoặc chạy song song rồi RRF-merge). Nâng cấp Q4. Chỉ đáng làm sau khi có API
+(ToT thật cần LLM); `Mock` = enumerate biến thể có sẵn.
+**File:** mở rộng `retrieval/query_understanding.py` + `query_expansion.py`.
+
+### Thứ tự đề xuất Nhóm G
+**G1 → G2 → G4 → G3 → G5.** G1+G2 làm được NGAY (MockPlanner, không cần key) và cho giá
+trị demo lớn nhất ("hệ có bộ não"). G3/G4/G5 phát huy tối đa khi có `ANTHROPIC_API_KEY`.
+
+> ⚠️ **Định vị:** Nhóm G là lớp *điều phối trên nền đã có*, KHÔNG thay thế pipeline hiện
+> tại — pipeline vẫn là "fast path" mặc định; Agent là "smart path" cho query khó/hội thoại.
+> Đúng đánh đổi **tốc độ ↔ sức mạnh ↔ chi phí** mà cả Buổi 2 lẫn Buổi 3 đều nhấn.
