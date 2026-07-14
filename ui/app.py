@@ -361,8 +361,17 @@ def create_app() -> Flask:
         # F3: gợi ý concept liên quan từ top kết quả (khám phá/khai phá).
         suggestions = eng.suggest_concepts(
             entry, [c.keyframe_id for c in cands], query)
+        # F1: nếu kết quả còn mơ hồ -> chọn vài ảnh ĐA DẠNG để CHỦ ĐỘNG hỏi lại.
+        disambig = []
+        if not (pos or neg):
+            ids = eng.disambiguation(entry, cands)
+            if ids:
+                by_id = {c.keyframe_id: c for c in cands}
+                disambig = [{"id": i, "timestamp": round(by_id[i].timestamp, 1),
+                             "video_id": by_id[i].video_id,
+                             "image": f"/api/video/frame/{i}"} for i in ids if i in by_id]
         return jsonify(video=vid, query=query, reranked=rerank, parsed=parsed,
-                       results=results, suggestions=suggestions)
+                       results=results, suggestions=suggestions, disambiguation=disambig)
 
     @app.post("/api/video/search_image")
     def video_search_image():

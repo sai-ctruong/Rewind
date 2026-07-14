@@ -960,6 +960,25 @@
             sug.append(chip); });
           box.append(sug);
         }
+        // F1: KISC-cho-video — hệ CHỦ ĐỘNG hỏi lại khi mơ hồ, chọn ảnh giống ý nhất.
+        if (j.disambiguation && j.disambiguation.length) {
+          const dp = el("div");
+          dp.style.cssText = "width:100%;margin:2px 0 8px;padding:8px;border:1px dashed var(--accent);border-radius:10px";
+          dp.innerHTML = "<div style='font-size:12.5px;color:var(--accent);margin-bottom:6px'>🗣️ Chưa chắc ý bạn — <b>cái nào giống nhất?</b> (bấm 1 ảnh để thu hẹp)</div>";
+          const row = el("div"); row.style.cssText = "display:flex;gap:6px;flex-wrap:wrap"; dp.append(row);
+          j.disambiguation.forEach(f => { const c = el("div");
+            c.style.cssText = "cursor:pointer;text-align:center;font:10px var(--mono);color:var(--faint)";
+            c.innerHTML = "<img src='" + f.image + "' loading='lazy' style='width:112px;height:74px;object-fit:cover;border-radius:6px'><div>t=" + f.timestamp + "s</div>";
+            c.addEventListener("click", async () => {
+              box.innerHTML = "<div class='empty'>Đang thu hẹp theo ảnh bạn chọn…</div>";
+              try { const s = await (await fetch("/api/video/similar/" + encodeURIComponent(f.id))).json();
+                if (s.error) { box.innerHTML = "<div class='empty'>" + s.error + "</div>"; return; }
+                renderResultCards(box, s.results || [], countEl, "🗣️ Thu hẹp");
+              } catch (e) { box.innerHTML = "<div class='empty'>Lỗi thu hẹp.</div>"; }
+            });
+            row.append(c); });
+          box.append(dp);
+        }
         // GOM CỤM theo video (khi kết quả xuyên nhiều video) — đỡ tràn frame giống nhau.
         const groups = {};
         j.results.forEach((r, i) => { (groups[r.video_id || ""] = groups[r.video_id || ""] || []).push([r, i]); });

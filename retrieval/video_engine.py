@@ -42,6 +42,15 @@ DEFAULT_ENCODERS = (
     "google/siglip-base-patch16-256-multilingual",
 )
 
+# Q5 — preset ENCODER MẠNH hơn để NÂNG TRẦN recall (hit@5 ~0.68 hiện bị chặn bởi
+# encoder base). siglip2-large-384: chính xác hơn nhưng NẶNG (nhiều VRAM/chậm). Dùng:
+#   VideoSearchEngine(encoder_names=HQ_ENCODERS)  — cân nhắc VRAM 6GB (có thể phải
+#   dùng 1 encoder large thay vì ensemble 2). Đo lại bằng bench_retrieval để thấy lợi.
+HQ_ENCODERS = (
+    "google/siglip2-large-patch16-384",
+    "google/siglip-base-patch16-256-multilingual",
+)
+
 # Biến thể prompt cho query ensemble (Mục 4.2). Trộn Anh + Việt vì cả 2 encoder đều
 # đa ngôn ngữ; template "a photo of" khớp phân phối caption model được huấn luyện.
 QUERY_TEMPLATES = (
@@ -294,7 +303,21 @@ class VideoSearchEngine:
 
     # ------------------------------------------------------------- captioner
     def _get_captioner(self):
+        """Q5: TỰ CHỌN captioner. Có ANTHROPIC_API_KEY -> ClaudeCaptioner (chất lượng
+        cao, KHÔNG tốn VRAM, gọi song song -> phá trần recall) ; không có -> Qwen local
+        (chậm, kẹt VRAM 6GB). Nhờ vậy khi user có key chỉ cần set biến môi trường là caption
+        'xịn' bật ngay, không đổi code."""
         if self._captioner is None:
+            import os
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                try:
+                    from ingestion.llm_captioning import ClaudeCaptioner
+                    self._captioner = ClaudeCaptioner()
+                    print("[video_engine] Caption: dùng Claude API (có ANTHROPIC_API_KEY).",
+                          flush=True)
+                    return self._captioner
+                except Exception as e:  # pragma: no cover - thiếu sdk/key lỗi -> về local
+                    print(f"[video_engine] Claude caption lỗi ({e!r}); dùng Qwen local.")
             from ingestion.llm_captioning import QwenVLCaptioner
             self._captioner = QwenVLCaptioner(model_name=self.caption_model)
         return self._captioner
@@ -672,6 +695,41 @@ class VideoSearchEngine:
                 if len(tok) >= 3 and tok not in qtok and tok not in self._STOPWORDS:
                     cnt[tok] += 1
         return [w for w, _ in cnt.most_common(top_n)]
+
+    def _diverse_pick(self, entry: VideoIndexEntry, ids: list[str], k: int) -> list[str]:
+        """Chọn `k` id ĐA DẠNG nhất bằng greedy farthest-point trên embedding (bắt đầu
+        từ id đầu = top-1). Cho tập lựa chọn 'khác nhau rõ' để hỏi lại hiệu quả."""
+        idx = entry.index
+        vecs = {i: idx.mean_embedding([i], "clip") for i in ids}
+        ids = [i for i in ids if vecs[i] is not None]
+        if not ids:
+            return []
+        picked = [ids[0]]
+        while len(picked) < min(k, len(ids)):
+            best, best_d = None, -1.0
+            for i in ids:
+                if i in picked:
+                    continue
+                d = min(float(np.linalg.norm(vecs[i] - vecs[p])) for p in picked)
+                if d > best_d:
+                    best_d, best = d, i
+            picked.append(best)
+        return picked
+
+    def disambiguation(
+        self, entry: VideoIndexEntry, candidates: list, k: int = 4,
+        score_gap: float = 0.02,
+    ) -> Optional[list[str]]:
+        """F1 (KISC cho video thật): khi kết quả CÒN MƠ HỒ, CHỦ ĐỘNG chọn `k` ứng viên
+        ĐA DẠNG để hỏi người dùng 'cái nào giống ý bạn nhất?' — thu hẹp bằng phản hồi
+        hình ảnh (không cần thuộc tính, chỉ embedding). Trả None nếu đã đủ tự tin
+        (ít ứng viên, hoặc top-1 nổi trội — tái dùng ý is_confident_enough của KISC)."""
+        if len(candidates) <= k:
+            return None
+        top = sorted(candidates, key=lambda c: float(c.score), reverse=True)
+        if len(top) >= 2 and (float(top[0].score) - float(top[1].score)) >= score_gap:
+            return None
+        return self._diverse_pick(entry, [c.keyframe_id for c in top], k)
 
     def explore(
         self, entry: VideoIndexEntry, per_video: int = 3, limit: int = 30,

@@ -81,12 +81,16 @@ TUYẾN** sang `search_temporal` khi phát hiện thứ tự → UI hiện "🧠
 metadata đó (cần object-detection hoặc caption) — chỉ temporal là dùng được ngay.
 **File:** `retrieval/video_engine.py`, `retrieval/query_understanding.py`, `ui/app.py`, `ui/index.html`
 
-### 🔲 Q5. Nâng TRẦN recall (hit@5 ~0.68 bị chặn bởi encoder)
-Benchmark cho thấy tinh chỉnh BM25/sample KHÔNG phá được trần. Hai đường:
-- **LLM captioning qua API** (hoàn tất B5 khi có `ANTHROPIC_API_KEY`) — bắt quan hệ ngữ nghĩa.
-- **Encoder mạnh hơn** (siglip2-large-384) hoặc **ensemble CLIP** (B6, blueprint Mục 2.1) —
-  lưu ý CLIP yếu tiếng Việt, cân nhắc.
-**File:** `ingestion/llm_captioning.py`, `retrieval/video_engine.py`, `ingestion/embed_clip.py`
+### 🟡 Q5. Nâng TRẦN recall — TURNKEY sẵn, chờ tài nguyên (2026-07-14)
+Trần hit@5 ~0.68 bị chặn bởi encoder. **Đã nối turnkey (chỉ cần bật):**
+- **Caption Claude tự bật:** `_get_captioner()` tự chọn `ClaudeCaptioner` khi có
+  `ANTHROPIC_API_KEY` (chất lượng cao, KHÔNG tốn VRAM → hết kẹt như Qwen local), else Qwen.
+  → Có key + bật Caption là caption 'xịn' vào BM25 → nâng recall query quan hệ. Test auto-select.
+- **Preset encoder mạnh:** hằng `HQ_ENCODERS` (siglip2-large-384). Dùng
+  `VideoSearchEngine(encoder_names=HQ_ENCODERS)` — nặng VRAM, đo lại bằng bench_retrieval.
+**CÒN LẠI (cần tài nguyên user):** đặt API key để dùng caption Claude; hoặc chạy encoder
+large trên GPU đủ khoẻ rồi benchmark để xác nhận lợi.
+**File:** `retrieval/video_engine.py`, `ingestion/llm_captioning.py`
 
 ---
 
@@ -118,10 +122,16 @@ tìm cảnh tương tự. Test explore phủ nhiều video + similar cùng màu.
 **KISC** (`kisc_module/`): hội thoại hỏi lại, entropy/information-gain — đúng tinh thần
 "khám phá (exploration) ↔ khai phá (exploitation)". NHƯNG chạy trên **data mẫu**.
 
-### 🔲 F1. Nối KISC vào TÌM VIDEO THẬT  ⭐ (khoảng trống lớn)
-Hiện KISC dùng `build_dataset()` giả. Cho KISC chạy trên keyframe video thật (khi độ tự
-tin thấp → hỏi lại thu hẹp). Cần cầu nối attribute ↔ keyframe video.
-**File:** `retrieval/kisc_adapter.py`, `retrieval/video_engine.py`, `ui/app.py`
+### ✅ F1. KISC cho video thật (hỏi lại bằng hình ảnh)  ĐÃ XONG (2026-07-14)
+KISC gốc hỏi theo THUỘC TÍNH — keyframe video chưa có metadata đó (bị chặn). **Giải bằng
+cách khác, không cần thuộc tính:** `disambiguation(entry, candidates)` — khi kết quả CÒN
+MƠ HỒ (nhiều ứng viên, top-1 chưa nổi trội — tái dùng ý `is_confident_enough` của KISC),
+hệ CHỦ ĐỘNG chọn `k` ảnh ĐA DẠNG (greedy farthest-point trên embedding) hỏi "cái nào
+giống ý bạn nhất?"; bấm 1 ảnh → `search_similar` thu hẹp. Vòng khám phá↔khai phá chạy
+THẲNG trên embedding. Endpoint search trả `disambiguation`; UI panel "🗣️ Thu hẹp". Test
+đa dạng + đủ-tự-tin-thì-thôi.
+**CÒN LẠI:** KISC theo THUỘC TÍNH (áo màu gì/ở đâu) cần object-detection hoặc caption.
+**File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
 ### ✅ F2. Relevance feedback trên tab tìm chính  ĐÃ XONG (2026-07-14)
 **Đã làm:** `search_with_feedback` (Rocchio: q' = α·q + β·mean(pos) − γ·mean(neg), chuẩn

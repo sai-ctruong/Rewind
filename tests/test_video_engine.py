@@ -484,6 +484,37 @@ def test_explore_and_search_similar(tmp_path) -> None:
     assert sim[0].timestamp >= 2.0                          # cảnh đỏ thứ hai (cùng màu)
 
 
+def test_disambiguation_picks_diverse(tmp_path) -> None:
+    """F1: khi nhiều ứng viên mơ hồ -> chọn k ảnh ĐA DẠNG (không trùng nhau) để hỏi lại;
+    ít ứng viên -> None (đủ tự tin)."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=60, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    entry = engine.index_video(video, tmp_path / "frames")
+
+    # Câu trung tính -> nhiều ứng viên điểm sát nhau -> hỏi lại.
+    cands = engine.search(entry, "khong-mau-gi", top_k=8)
+    dis = engine.disambiguation(entry, cands, k=3)
+    assert dis is not None and len(dis) <= 3 and len(set(dis)) == len(dis)
+    assert all(i in {c.keyframe_id for c in cands} for i in dis)
+    # Ít ứng viên -> đủ tự tin, không hỏi.
+    assert engine.disambiguation(entry, cands[:2], k=3) is None
+
+
+def test_get_captioner_prefers_claude_when_key(tmp_path, monkeypatch) -> None:
+    """Q5: có ANTHROPIC_API_KEY -> chọn ClaudeCaptioner (turnkey, không tốn VRAM)."""
+    import ingestion.llm_captioning as cap
+
+    class FakeClaude:
+        def __init__(self, *a, **k): pass
+        def caption(self, raw): return "x"
+    monkeypatch.setattr(cap, "ClaudeCaptioner", FakeClaude)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    engine = VideoSearchEngine(enable_ocr=False)
+    assert isinstance(engine._get_captioner(), FakeClaude)
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)
