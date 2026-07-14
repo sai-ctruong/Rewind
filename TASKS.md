@@ -110,10 +110,12 @@ Hiện KISC dùng `build_dataset()` giả. Cho KISC chạy trên keyframe video 
 tin thấp → hỏi lại thu hẹp). Cần cầu nối attribute ↔ keyframe video.
 **File:** `retrieval/kisc_adapter.py`, `retrieval/video_engine.py`, `ui/app.py`
 
-### 🔲 F2. Relevance feedback trên tab tìm chính (mới từ slide)
-Bấm "giống/không giống" trên kết quả → tinh chỉnh truy vấn (đẩy embedding về phía ảnh
-được thích — Rocchio/PRF). Cân bằng khám phá (mở rộng) ↔ khai phá (tách video giống nhau).
-**File:** `retrieval/video_engine.py` (feedback vector), `ui/`
+### ✅ F2. Relevance feedback trên tab tìm chính  ĐÃ XONG (2026-07-14)
+**Đã làm:** `search_with_feedback` (Rocchio: q' = α·q + β·mean(pos) − γ·mean(neg), chuẩn
+hoá) + `KeyframeIndex.mean_embedding`. Chạy THẲNG trên embedding (không cần thuộc tính).
+Endpoint search nhận `positive`/`negative`. UI: nút 👍/👎 mỗi card + thanh "🔁 Lọc lại theo
+phản hồi"; reset khi đổi câu. Test: mark xanh lá → top-1 về xanh lá.
+**File:** `retrieval/video_engine.py`, `ingestion/build_index.py`, `ui/app.py`, `ui/index.html`
 
 ### ✅ F3. Gợi ý concept liên quan  ĐÃ XONG (2026-07-14)
 **Đã làm:** `engine.suggest_concepts()` đếm từ khoá hay gặp trong caption/OCR/ASR của
@@ -135,7 +137,7 @@ Test gợi ý + loại từ query.
 | A3 | Decode backend (decord/NVDEC nếu cài, else cv2 chỉ decode frame mẫu) | ✅ (cần `pip install decord` bản CUDA để có NVDEC thật) |
 | A4 | Song song decode ‖ embed (queue giới hạn) | ✅ |
 | **A5** | **IVF-PQ + sharding** khi > vài triệu vector | 🔲 đo RAM thật trước (blueprint Mục 2.2) |
-| **A6** | **Progress bar** khi index dataset lớn (SSE/polling + ETA) | 🔲 |
+| **A6** | Progress bar khi index (poll /api/video/progress, threaded server) | ✅ (count+fps+elapsed; UI poll 900ms) |
 | A7 | Load ảnh 1 lần cho cả 2 encoder + log device/tiến độ | ✅ (giảm decode 2×; phát hiện chạy nhầm CPU) |
 
 ---
