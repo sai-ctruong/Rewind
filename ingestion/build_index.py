@@ -140,6 +140,21 @@ class KeyframeIndex:
     def has_encoder(self, encoder: EncoderName) -> bool:
         return self._index(encoder) is not None
 
+    def mean_embedding(
+        self, ids: "Sequence[str]", encoder: EncoderName
+    ) -> Optional[np.ndarray]:
+        """Trung bình embedding (đã L2-norm) của các keyframe `ids` cho 1 encoder.
+
+        Dùng cho relevance feedback (Rocchio): dịch vector truy vấn về phía các ảnh
+        người dùng đánh dấu. Trả None nếu encoder chưa dựng hoặc không id nào hợp lệ."""
+        matrix = self._matrix(encoder)
+        if matrix is None:
+            return None
+        rows = [self._id_to_row[i] for i in ids if i in self._id_to_row]
+        if not rows:
+            return None
+        return matrix[rows].mean(axis=0)
+
     def dense_search(
         self, query_vec: np.ndarray, encoder: EncoderName, top_k: int
     ) -> list[tuple[int, float]]:

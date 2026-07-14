@@ -831,27 +831,43 @@
       } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp thư mục."; }
       fbtn.disabled = false;
     });
-    q("form").addEventListener("submit", async (e) => {
-      e.preventDefault();
+    // F2: trạng thái phản hồi liên quan (👍/👎) — reset khi đổi câu (ý định mới).
+    const fb = { pos: new Set(), neg: new Set() };
+    let fbBtn = null;
+    const updateBar = () => { if (fbBtn) {
+      fbBtn.textContent = "🔁 Lọc lại theo phản hồi (👍" + fb.pos.size + " 👎" + fb.neg.size + ")";
+      fbBtn.disabled = fb.pos.size === 0 && fb.neg.size === 0; } };
+
+    q("form").addEventListener("submit", (e) => {
+      e.preventDefault(); fb.pos.clear(); fb.neg.clear(); runSearch(false);
+    });
+
+    async function runSearch(useFeedback) {
       const query = q("query").value.trim(); if (!query) return;
-      const name = q("select").value, vid = name ? stem(name) : "";
+      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
       const rerankEl = $("#" + cfg.key + "-rerank");
       const rerank = !!(rerankEl && rerankEl.checked);
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
       box.innerHTML = "<div class='empty'>" +
         (rerank ? "Đang rerank bằng VLM (đọc từng ảnh + hiểu câu — chậm trên CPU, chờ chút)…"
-                : "Đang tìm…") + "</div>";
+                : (useFeedback ? "Đang lọc lại theo phản hồi…" : "Đang tìm…")) + "</div>";
       if (countEl) countEl.textContent = "";
+      const body = { video: vid, query, topk: cfg.topk, rerank };
+      if (useFeedback) { body.positive = [...fb.pos]; body.negative = [...fb.neg]; }
       try {
         const j = await (await fetch("/api/video/search", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video: vid, query, topk: cfg.topk, rerank }) })).json();
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
         box.innerHTML = "";
         if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
         if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length) +
           (j.reranked ? " · <b>VLM rerank</b>" : "");
+        // F2: thanh 'Lọc lại theo phản hồi' — bấm 👍/👎 trên kết quả rồi lọc lại.
+        const bar = el("div"); bar.style.cssText = "display:flex;gap:8px;align-items:center;margin:2px 0 8px";
+        fbBtn = el("button", "btn"); fbBtn.type = "button";
+        fbBtn.addEventListener("click", () => runSearch(true));
+        bar.append(fbBtn); box.append(bar); updateBar();
         // F3: chip GỢI Ý CONCEPT — bấm để thêm vào câu và tìm lại (thu hẹp/mở rộng).
         if (j.suggestions && j.suggestions.length) {
           const sug = el("div");
@@ -886,13 +902,25 @@
               "<div class='cap'><span class='rank" + (win ? " top1" : "") + "'>" +
               (win ? "★ TOP-1" : "#" + (i + 1)) + "</span><span class='t'>t=" + r.timestamp + "s</span></div>" +
               vidlbl + cap + ocr + asr + why +
-              "<button class='btn ghost nb' type='button' style='margin-top:6px;font-size:11px'>🎞 Lân cận</button>";
+              "<div style='display:flex;gap:6px;margin-top:6px'>" +
+              "<button class='btn ghost up' type='button' style='font-size:12px'>👍</button>" +
+              "<button class='btn ghost dn' type='button' style='font-size:12px'>👎</button>" +
+              "<button class='btn ghost nb' type='button' style='font-size:11px'>🎞 Lân cận</button></div>";
             box.append(c);
             c.querySelector(".nb").addEventListener("click", () => toggleNeighbors(c, r.id));
+            // F2: đánh dấu LIÊN QUAN 👍 / KHÔNG 👎 (loại trừ nhau) -> Rocchio khi lọc lại.
+            const up = c.querySelector(".up"), dn = c.querySelector(".dn");
+            const paint = () => { up.style.background = fb.pos.has(r.id) ? "var(--accent-soft)" : "";
+              dn.style.background = fb.neg.has(r.id) ? "var(--accent-soft)" : ""; };
+            up.addEventListener("click", () => { fb.neg.delete(r.id);
+              fb.pos.has(r.id) ? fb.pos.delete(r.id) : fb.pos.add(r.id); paint(); updateBar(); });
+            dn.addEventListener("click", () => { fb.pos.delete(r.id);
+              fb.neg.has(r.id) ? fb.neg.delete(r.id) : fb.neg.add(r.id); paint(); updateBar(); });
+            paint();
           });
         }
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm kiếm.</div>"; }
-    });
+    }
 
     // D1: mở/đóng dải keyframe LÂN CẬN (cùng video, trước/sau) để định vị bối cảnh.
     async function toggleNeighbors(card, frameId) {

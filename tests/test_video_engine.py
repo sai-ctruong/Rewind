@@ -407,6 +407,19 @@ def test_suggest_concepts_from_captions(tmp_path) -> None:
     assert engine.suggest_concepts(entry, [], query="x") == []
 
 
+def test_search_with_feedback_shifts_toward_positive(engine_and_entry) -> None:
+    """F2: đánh dấu 1 keyframe XANH LÁ là 'liên quan' -> Rocchio dịch truy vấn trung
+    tính về phía xanh lá -> top-1 rơi vào cảnh xanh lá (~[1,2)s)."""
+    engine, entry = engine_and_entry
+    green_id = next(i for i in entry.index.ids if 1.0 <= entry.raws[i].timestamp < 2.0)
+    # Câu TRUNG TÍNH (mock không nhận màu) -> phản hồi quyết định hướng.
+    res = engine.search_with_feedback(entry, "khong-mau-gi",
+                                      positive_ids=[green_id], top_k=3)
+    assert res and 1.0 <= res[0].timestamp < 2.0
+    # Không phản hồi -> giữ nguyên hành vi search thường (không lỗi).
+    assert engine.search_with_feedback(entry, "màu đỏ", top_k=3)[0].timestamp < 1.0
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

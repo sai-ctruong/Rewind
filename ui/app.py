@@ -291,8 +291,14 @@ def create_app() -> Flask:
         if not query:
             return jsonify(error="Nhập câu mô tả cần tìm."), 400
         rerank = bool(data.get("rerank", False))
-        cands = video_state["engine"].search(
-            entry, query, top_k=int(data.get("topk", 6)), rerank=rerank)
+        pos = [i for i in (data.get("positive") or []) if i]
+        neg = [i for i in (data.get("negative") or []) if i]
+        topk = int(data.get("topk", 6))
+        if pos or neg:  # F2: relevance feedback (Rocchio) — dịch truy vấn theo phản hồi
+            cands = video_state["engine"].search_with_feedback(
+                entry, query, positive_ids=pos, negative_ids=neg, top_k=topk, rerank=rerank)
+        else:
+            cands = video_state["engine"].search(entry, query, top_k=topk, rerank=rerank)
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
                     "score": round(float(c.score), 3), "video_id": c.video_id,
                     "explanation": getattr(c, "explanation", None),

@@ -681,6 +681,14 @@ class VideoSearchEngine:
         nhưng chính xác về tổ hợp từ/ngữ cảnh.
         """
         qvecs = self.encode_query(query)
+        return self._run_search(entry, qvecs, query, top_k, rerank)
+
+    def _run_search(
+        self, entry: VideoIndexEntry, qvecs: list[np.ndarray], query: str,
+        top_k: int, rerank: bool,
+    ) -> list:
+        """Chạy coarse (dense qvecs + BM25 theo `query`) rồi rerank (nếu bật). Tách ra
+        để `search` và `search_with_feedback` DÙNG CHUNG — feedback chỉ đổi qvecs."""
         retriever = CoarseRetriever(entry.index)
         pool = max(top_k, self.rerank_pool) if rerank else top_k
         # Trọng số BM25 theo LOẠI query (benchmark: chữ cần cao, thị giác cần thấp).
@@ -689,26 +697,48 @@ class VideoSearchEngine:
         coarse = retriever.search(
             query_clip_vec=qvecs[0],
             query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
-            # query text -> BM25 trên OCR/objects/caption: khớp CHỮ trên biển hiệu.
-            # RRF gộp dense (hình ảnh) + sparse (chữ) -> tìm được cả cảnh lẫn text.
             query_text=query,
             top_k=pool,
             weights={"bm25": bm25_w},
         )
         if not rerank or not coarse:
             return coarse[:top_k]
-
-        # VLM rerank: context = RawKeyframe (VLM cần "nhìn" ảnh — lấy từ RAM/đĩa).
         context = {c.keyframe_id: entry.raws[c.keyframe_id]
                    for c in coarse if c.keyframe_id in entry.raws}
         try:
             reranked = self._get_reranker().rerank(query, coarse, context)
             return reranked[:top_k]
         except Exception as e:  # pragma: no cover - fallback khi VLM lỗi/thiếu model
-            # VLM lỗi (chưa tải xong model, thiếu RAM...) -> KHÔNG làm vỡ tìm kiếm,
-            # trả kết quả coarse SigLIP (vẫn tốt). Log để người dùng biết.
             print(f"[video_engine] VLM rerank lỗi ({e!r}); dùng kết quả coarse.")
             return coarse[:top_k]
+
+    def search_with_feedback(
+        self, entry: VideoIndexEntry, query: str,
+        positive_ids: Sequence[str] = (), negative_ids: Sequence[str] = (),
+        top_k: int = 8, rerank: bool = False,
+        alpha: float = 1.0, beta: float = 0.75, gamma: float = 0.15,
+    ) -> list:
+        """RELEVANCE FEEDBACK (Rocchio) — slide Buổi 2, trụ cột phản hồi người dùng.
+
+        Người dùng đánh dấu kết quả LIÊN QUAN (positive) / KHÔNG (negative). Ta dịch vector
+        truy vấn về phía trung bình embedding các ảnh 'thích' và ra xa các ảnh 'không
+        thích': q' = α·q + β·mean(pos) − γ·mean(neg), chuẩn hoá lại. Đây là vòng khám
+        phá↔khai phá chạy THẲNG trên embedding (không cần thuộc tính). Câu chữ giữ nguyên
+        (BM25 không đổi), chỉ tín hiệu THỊ GIÁC dịch theo phản hồi."""
+        slots = ["clip", "siglip"]
+        qvecs = self.encode_query(query)
+        adjusted: list[np.ndarray] = []
+        for i, v in enumerate(qvecs):
+            enc = slots[i] if i < len(slots) else slots[-1]
+            vv = alpha * np.asarray(v, dtype=np.float32)
+            pos = entry.index.mean_embedding(positive_ids, enc)
+            neg = entry.index.mean_embedding(negative_ids, enc)
+            if pos is not None:
+                vv = vv + beta * pos
+            if neg is not None:
+                vv = vv - gamma * neg
+            adjusted.append(l2_normalize(vv.reshape(1, -1))[0])
+        return self._run_search(entry, adjusted, query, top_k, rerank)
 
     def search_temporal(
         self, entry: VideoIndexEntry, events: Sequence[str], *,
