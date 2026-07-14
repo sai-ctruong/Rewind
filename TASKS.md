@@ -177,24 +177,26 @@ Test gợi ý + loại từ query.
 
 ---
 
-## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, đo trên 37 nhãn — chi tiết `evaluation/benchmarks/`)
+## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, **51 nhãn** — chi tiết `evaluation/benchmarks/`)
 
-> LƯU Ý: các số dưới đo trên bộ **37 nhãn**; bộ nhãn đã mở rộng lên **51** (C1) nhưng
-> CHƯA chạy lại benchmark trên 51. Chạy lại để cập nhật: `python -m evaluation.bench_retrieval --labels evaluation/labels.json`.
+**Bảng chính (index có OCR, sample 1.0):**
+| cấu hình | hit@1 | hit@5 | MRR |
+|---|---|---|---|
+| coarse fixed bm25=1.0 | 0.275 | 0.647 | 0.438 |
+| coarse fixed bm25=3.0 | 0.314 | **0.529 ↓** | 0.408 |
+| **coarse adaptive** ✅ | 0.333 | 0.647 | 0.477 |
+| **adaptive + VLM rerank (KIS)** ✅ | **0.549** | **0.667** | **0.604** |
 
 **Cấu hình đã chốt (ghi ở `configs/settings.yaml` mục 11 + default `video_engine.py`):**
-- `bm25_weight = 1.0` + **adaptive** (query IN HOA → 3.0). Sweep: 1.0 cho hit@5 **0.72** (cao nhất);
-  3.0 hại recall (0.52); 0 dense-only (0.68).
-- `sample_every_s = 1.0` (hit@5 phẳng 0.68 mọi mức; 0.5 tăng hit@1). Recall bị chặn bởi **encoder**.
-- **VLM rerank cho KIS** (không cho AVS): ~24s/query.
+- `bm25_weight = 1.0` + **adaptive** (query IN HOA → 3.0): adaptive giữ recall CAO NHẤT
+  (hit@5 0.647) mà tăng hit@1; bm25=3.0 HẠI recall (0.529). (Sweep 37 nhãn: 1.0 cho hit@5 0.72.)
+- `sample_every_s = 1.0` (recall phẳng qua mọi mức — bị chặn bởi **encoder**).
+- **VLM rerank cho KIS** (~24s/query): kéo hit@1 **0.333 → 0.549** (+0.22, cú nhảy lớn nhất). KHÔNG cho AVS.
 
-**Cấu hình tốt nhất cho KIS — dense-coarse + rerank:** hit@1 **0.595**, hit@5 0.676, MRR 0.623.
-
-**Adaptive BM25 thắng cố định (coarse):** adaptive hit@1 0.351 / hit@5 0.649 > fixed-1.0
-(0.297/0.649) và fixed-3.0 (0.324/0.514 — recall tụt).
-
-**⚠️ Độ nhiễu:** hit@1 dao động ±0.1 giữa các lần (bộ 37 nhãn còn ít); **hit@5 ổn định**.
-Đừng chốt trên chênh hit@1 <0.1. Đã tăng lên **51 nhãn** (C1) để giảm nhiễu — chạy lại benchmark để thấy.
+**Đối chiếu 37↔51 nhãn:** kết luận GIỐNG HỆT (adaptive thắng, bm25=3.0 hại recall, rerank
++hit@1 mạnh). Số 51 nhãn hơi thấp hơn 37 (adaptive+rerank hit@1 0.549 vs 0.595) vì 14 nhãn
+mới KHÓ hơn (mục tiêu Seoul đặc thù/thoáng qua). **hit@5 ~0.65 cực ổn định** qua mọi lần chạy.
+**⚠️** hit@1 vẫn nhiễu ±0.05 giữa các lần; hit@5 mới là thước đo recall đáng tin.
 
 ---
 
