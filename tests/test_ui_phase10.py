@@ -171,3 +171,5 @@ def test_index_html_exists_and_wires_apis() -> None:
         assert hook in html
     # Có bản mô phỏng dự phòng cho chế độ Artifact (không backend).
     assert "simSession" in html and "data-theme" in html
+    # Q1/Q2: ô tải ảnh + canvas phác hoạ (đều tìm qua /api/video/search_image).
+    assert 'id="video-imgfile"' in html and 'id="video-sketch"' in html

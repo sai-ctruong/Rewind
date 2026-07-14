@@ -430,6 +430,23 @@
           <label class="rerank-tog" title="Tìm khung hình GIỐNG một ảnh mẫu. Nếu Ô TÌM ở trên CÓ CHỮ, sẽ kết hợp CHỮ + ẢNH (multimodal).">🖼️ Ảnh mẫu:
             <input type="file" id="video-imgfile" accept="image/*" style="max-width:220px"></label>
           <button class="btn ghost" id="video-imgbtn" type="button" title="Chỉ ảnh, hoặc ảnh + câu ở ô tìm (multimodal)">Tìm theo ảnh (+chữ)</button>
+          <button class="btn ghost" id="video-sketch-toggle" type="button" title="Vẽ phác hoạ rồi tìm khung giống — kết hợp câu ở ô tìm nếu có">✏️ Phác hoạ</button>
+        </div>
+        <div class="controls" id="video-sketch-panel" style="display:none;flex-wrap:wrap;align-items:flex-start;margin-top:6px">
+          <canvas id="video-sketch" width="320" height="180"
+            style="background:#fff;border:1px solid var(--border);border-radius:8px;touch-action:none;cursor:crosshair"></canvas>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;gap:5px;align-items:center">
+              <span style="font-size:12px;color:var(--faint)">Màu:</span>
+              <button class="btn ghost" type="button" data-color="#000" style="width:24px;height:24px;background:#000;padding:0"></button>
+              <button class="btn ghost" type="button" data-color="#e00" style="width:24px;height:24px;background:#e00;padding:0"></button>
+              <button class="btn ghost" type="button" data-color="#0a0" style="width:24px;height:24px;background:#0a0;padding:0"></button>
+              <button class="btn ghost" type="button" data-color="#06f" style="width:24px;height:24px;background:#06f;padding:0"></button>
+            </div>
+            <button class="btn ghost" id="video-sketch-clear" type="button" style="font-size:12px">🧹 Xoá</button>
+            <button class="btn" id="video-sketch-go" type="button" style="font-size:12px">Tìm theo phác hoạ</button>
+            <span style="font-size:11px;color:var(--faint);max-width:150px">Mẹo: vẽ khối màu thô (SigLIP hợp ảnh thật hơn nét vẽ). Có câu ở ô tìm → kết hợp.</span>
+          </div>
         </div>
         <div class="video-results" id="video-results"></div>
       </div>
@@ -955,28 +972,24 @@
       } catch (e) { strip.textContent = "Lỗi tải lân cận."; }
     }
 
-    // Q1: tìm bằng ẢNH mẫu (chỉ tab nào có ô upload).
-    const imgbtn = q("imgbtn");
-    if (imgbtn) imgbtn.addEventListener("click", async () => {
+    // Q1/Q2/Q3: tìm bằng ẢNH (upload hoặc phác hoạ). imgData = File | Blob.
+    async function runImageSearch(imgData, srcLabel) {
       const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
-      const file = q("imgfile").files[0];
       const text = q("query").value.trim();   // Q3: có chữ -> multimodal (chữ + ảnh)
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
-      if (!file) { box.innerHTML = "<div class='empty'>Chọn một ảnh mẫu trước.</div>"; return; }
-      box.innerHTML = "<div class='empty'>" +
-        (text ? "Đang tìm theo ẢNH + CHỮ (multimodal)…" : "Đang tìm khung hình giống ảnh…") + "</div>";
+      box.innerHTML = "<div class='empty'>Đang tìm theo " + srcLabel +
+        (text ? " + CHỮ (multimodal)" : "") + "…</div>";
       if (countEl) countEl.textContent = "";
       try {
         const fd = new FormData();
-        fd.append("video", vid); fd.append("image", file); fd.append("topk", cfg.topk);
+        fd.append("video", vid); fd.append("image", imgData, "query.png"); fd.append("topk", cfg.topk);
         if (text) fd.append("query", text);
         const j = await (await fetch("/api/video/search_image", { method: "POST", body: fd })).json();
         box.innerHTML = "";
         if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
         if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
-        if (countEl) countEl.innerHTML = (text ? "🖼️+📝 " : "🖼️ ") + j.results.length +
-          (text ? " khung khớp ẢNH + CHỮ" : " khung giống ảnh mẫu");
+        if (countEl) countEl.innerHTML = srcLabel + (text ? " + 📝" : "") + " · " + j.results.length + " khung";
         j.results.forEach((r, i) => {
           const c = el("div", "vcard");
           const cap = r.caption ? "<div class='ocr'>💬 " + r.caption.slice(0, 120) + "</div>" : "";
@@ -987,7 +1000,38 @@
           box.append(c);
         });
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi tìm bằng ảnh.</div>"; }
+    }
+
+    const imgbtn = q("imgbtn");
+    if (imgbtn) imgbtn.addEventListener("click", () => {
+      const file = q("imgfile").files[0];
+      if (!file) { q("results").innerHTML = "<div class='empty'>Chọn một ảnh mẫu trước.</div>"; return; }
+      runImageSearch(file, "🖼️ ảnh");
     });
+
+    // Q2: PHÁC HOẠ (sketch) -> xuất canvas thành ảnh -> tìm như ảnh mẫu (Q1/Q3).
+    const sk = q("sketch");
+    if (sk) {
+      const ctx = sk.getContext("2d");
+      const clearCanvas = () => { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, sk.width, sk.height); };
+      clearCanvas();
+      let drawing = false, color = "#000";
+      const pos = (e) => { const r = sk.getBoundingClientRect();
+        return [(e.clientX - r.left) * sk.width / r.width, (e.clientY - r.top) * sk.height / r.height]; };
+      sk.addEventListener("pointerdown", (e) => { drawing = true; const [x, y] = pos(e);
+        ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(x, y); sk.setPointerCapture(e.pointerId); });
+      sk.addEventListener("pointermove", (e) => { if (!drawing) return; const [x, y] = pos(e);
+        ctx.lineTo(x, y); ctx.stroke(); });
+      sk.addEventListener("pointerup", () => { drawing = false; });
+      q("sketch-toggle").addEventListener("click", () => { const p = q("sketch-panel");
+        p.style.display = p.style.display === "none" ? "flex" : "none"; });
+      q("sketch-clear").addEventListener("click", clearCanvas);
+      q("sketch-panel").querySelectorAll("[data-color]").forEach(b =>
+        b.addEventListener("click", () => { color = b.dataset.color; }));
+      q("sketch-go").addEventListener("click", () =>
+        sk.toBlob(b => { if (b) runImageSearch(b, "✏️ phác hoạ"); }, "image/png"));
+    }
 
     const inst = { refresh };
     VTABS[cfg.key] = inst;

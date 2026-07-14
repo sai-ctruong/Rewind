@@ -55,10 +55,13 @@ ensemble thuần, không BM25). Endpoint `/api/video/search_image` (multipart) +
 nút "Tìm theo ảnh" tab Video. Test: ảnh đỏ→cảnh đỏ, ảnh xanh→cảnh xanh.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
-### 🔲 Q2. Truy vấn bằng SKETCH / ảnh sinh từ mô tả (mới từ slide)
-Slide nêu "truy vấn bằng ảnh sinh ra từ sketch". Cho phép vẽ phác/tạo ảnh từ text rồi
-dùng làm image-query (dựa trên Q1). Bước sau Q1.
-**File:** `ui/` (canvas sketch), tái dùng Q1.
+### ✅ Q2. Truy vấn bằng SKETCH (phác hoạ)  ĐÃ XONG (2026-07-14)
+Slide: "truy vấn bằng ảnh sinh ra từ sketch". **Đã làm:** canvas vẽ phác (màu/xoá) trong
+tab Video → `canvas.toBlob` → dùng lại endpoint ảnh (Q1) / multimodal (Q3, kết hợp câu ở
+ô tìm). Thuần frontend, không đổi engine. `runImageSearch(blob|file)` dùng chung upload+sketch.
+**LƯU Ý:** SigLIP hợp ẢNH THẬT hơn nét vẽ → sketch thô chất lượng hạn chế; "ảnh sinh từ
+sketch" chuẩn cần model generative (sketch→ảnh thật) — để sau nếu có.
+**File:** `ui/index.html`
 
 ### ✅ Q3. Kết hợp NHIỀU KIỂU truy vấn (multi-modal) ĐÃ XONG (2026-07-14)
 Slide: *"cơ chế kết hợp nhiều kiểu truy vấn"*. **Đã làm:** `search_multimodal(query_text,
