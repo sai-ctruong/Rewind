@@ -869,6 +869,47 @@
       fbBtn.textContent = "🔁 Lọc lại theo phản hồi (👍" + fb.pos.size + " 👎" + fb.neg.size + ")";
       fbBtn.disabled = fb.pos.size === 0 && fb.neg.size === 0; } };
 
+    const el2 = (t, c, txt) => { const e = el(t, c); e.textContent = txt; return e; };
+
+    // Q4: tóm tắt cấu trúc câu đã hiểu (đối tượng/hành động/thứ tự…), null nếu rỗng.
+    function parsedSummary(p) {
+      if (!p) return null;
+      const parts = [];
+      if (p.query_type) parts.push("loại: " + p.query_type);
+      if (p.objects && p.objects.length) parts.push("đối tượng: " + p.objects.join(", "));
+      if (p.actions && p.actions.length) parts.push("hành động: " + p.actions.join(", "));
+      if (p.attributes && p.attributes.color) parts.push("màu: " + p.attributes.color.join(", "));
+      if (p.location) parts.push("nơi: " + p.location);
+      if (p.time_constraint) parts.push("thời gian: " + p.time_constraint);
+      if (p.temporal_order && p.temporal_order.length >= 2)
+        parts.push("thứ tự: " + p.temporal_order.map(e => e.event).join(" → "));
+      if (!parts.length) return null;
+      const d = el("div");
+      d.style.cssText = "font-size:12px;color:var(--muted);background:var(--surface-2);border-radius:8px;padding:6px 10px;margin:2px 0 8px";
+      d.innerHTML = "🧠 <b>Hiểu câu</b> · " + parts.join(" · ");
+      return d;
+    }
+
+    // Q4: hiển thị các CHUỖI thời gian (khi câu có 'A trước B') — dùng chung kiểu tab Chuỗi.
+    function renderChains(box, chains, events) {
+      const banner = el("div"); banner.style.cssText = "font-size:12.5px;color:var(--accent);margin:2px 0 6px";
+      banner.innerHTML = "⏱️ Phát hiện <b>thứ tự thời gian</b>: " + events.join(" → ") + " — hiển thị chuỗi.";
+      box.append(banner);
+      if (!chains.length) { box.append(el2("div", "empty", "Không có chuỗi đúng thứ tự.")); return; }
+      chains.forEach((m, i) => { const row = el("div");
+        row.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)";
+        const head = el("div"); head.style.cssText = "width:100%;font:12px var(--mono);color:var(--muted)";
+        head.innerHTML = "Chuỗi #" + (i + 1) + " · 🎬 " + m.video_id; row.append(head);
+        m.steps.forEach((s, k) => { if (k > 0) { const ar = el("div"); ar.textContent = "→";
+            ar.style.cssText = "font-size:22px;color:var(--accent);font-weight:700"; row.append(ar); }
+          const c = el("div", "vcard"); c.style.width = "185px";
+          c.innerHTML = "<img loading='lazy' src='" + s.image + "' alt='cảnh'>" +
+            "<div class='cap'><span class='rank'>#" + (k + 1) + "</span><span class='t'>t=" + s.timestamp + "s</span></div>" +
+            "<div class='vid'>" + s.event + "</div>";
+          row.append(c); });
+        box.append(row); });
+    }
+
     q("form").addEventListener("submit", (e) => {
       e.preventDefault(); fb.pos.clear(); fb.neg.clear(); runSearch(false);
     });
@@ -891,7 +932,11 @@
           headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
         box.innerHTML = "";
         if (j.error) { box.innerHTML = "<div class='empty'>" + j.error + "</div>"; return; }
-        if (!j.results.length) { box.innerHTML = "<div class='empty'>Không có kết quả.</div>"; return; }
+        // Q4: hiện CẤU TRÚC ĐÃ HIỂU (nếu có gì đáng kể).
+        const pe = parsedSummary(j.parsed); if (pe) box.append(pe);
+        // Q4: câu có THỨ TỰ THỜI GIAN -> tự hiển thị CHUỖI (không phải lưới phẳng).
+        if (j.temporal) { renderChains(box, j.temporal, j.events); return; }
+        if (!j.results.length) { box.append(el2("div", "empty", "Không có kết quả.")); return; }
         if (countEl && cfg.countMsg) countEl.innerHTML = cfg.countMsg(j.results.length) +
           (j.reranked ? " · <b>VLM rerank</b>" : "");
         // F2: thanh 'Lọc lại theo phản hồi' — bấm 👍/👎 trên kết quả rồi lọc lại.

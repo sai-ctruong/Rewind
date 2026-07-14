@@ -452,6 +452,17 @@ def test_search_multimodal_combines_text_and_image(engine_and_entry, tmp_path) -
     assert engine.search_multimodal(entry, "", bbytes, top_k=3)[0].timestamp >= 2.0
 
 
+def test_understand_and_temporal_routing() -> None:
+    """Q4: hiểu câu -> StructuredQuery; câu có 'A TRƯỚC KHI B' -> temporal_events tách
+    2 sự kiện đúng thứ tự; câu thường -> None (không auto-route)."""
+    engine = VideoSearchEngine(enable_ocr=False)
+    st = engine.understand("cởi mũ trước khi vào phòng")
+    assert st.temporal_order and len(st.temporal_order) == 2
+    events = engine.temporal_events("cởi mũ trước khi vào phòng")
+    assert events == ["cởi mũ", "vào phòng"]           # đúng thứ tự
+    assert engine.temporal_events("một người đi bộ trên phố") is None  # câu thường
+
+
 def test_single_encoder_mode(tmp_path) -> None:
     video = tmp_path / "v.mp4"
     _make_video(video, [(0, 0, 255), (255, 0, 0)], frames_per_color=8)

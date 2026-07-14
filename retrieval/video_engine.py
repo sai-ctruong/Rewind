@@ -185,6 +185,7 @@ class VideoSearchEngine:
         self._ocr = None                        # EasyOCR, nạp lười
         self._asr = None                        # Whisper (ASR cấp-video), nạp lười
         self._captioner = None                  # Qwen2-VL captioner, nạp lười
+        self._understander = None               # query understanding, nạp lười
 
     # ------------------------------------------------------------- encoders
     def _load_encoders(self) -> list:
@@ -251,6 +252,32 @@ class VideoSearchEngine:
         """Bơm OCR engine ngoài (mock trong test). Bật enable_ocr."""
         self._ocr = ocr
         self.enable_ocr = True
+
+    # ------------------------------------------------------ query understanding
+    def _get_understander(self):
+        if self._understander is None:
+            from retrieval.query_understanding import MockQueryUnderstander
+            self._understander = MockQueryUnderstander()
+        return self._understander
+
+    def set_query_understander(self, understander) -> None:
+        """Bơm bộ hiểu câu ngoài (ClaudeQueryUnderstander khi có API / mock trong test)."""
+        self._understander = understander
+
+    def understand(self, query: str):
+        """Parse câu tự nhiên -> StructuredQuery (Mục 4.1). Dùng để (a) HIỆN cấu trúc đã
+        hiểu cho người dùng, (b) TỰ ĐỊNH TUYẾN sang tìm chuỗi khi có thứ tự thời gian.
+        Mặc định heuristic mock (không cần API); nối Claude khi có key."""
+        return self._get_understander().parse(query)
+
+    def temporal_events(self, query: str) -> Optional[list[str]]:
+        """Nếu câu có ≥2 sự kiện theo thứ tự (vd 'A TRƯỚC KHI B') -> trả danh sách sự
+        kiện đã sắp; ngược lại None. Dùng để auto-route sang search_temporal."""
+        st = self.understand(query)
+        order = st.temporal_order
+        if order and len(order) >= 2:
+            return [e["event"] for e in sorted(order, key=lambda x: x["order"])]
+        return None
 
     # ------------------------------------------------------------------- asr
     def _get_asr(self):

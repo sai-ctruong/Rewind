@@ -71,11 +71,15 @@ nhận thêm `query` → có chữ thì multimodal, không thì ảnh thuần. U
 (+chữ)" tự lấy câu ở ô tìm. Test: lệch chữ→theo chữ, lệch ảnh→theo ảnh.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
-### 🔲 Q4. Query understanding → pre-filter (B2 cũ)
-Parse câu → `StructuredQuery {objects, actions, location, time, temporal_order}` trước
-search → thu hẹp, tăng precision + tự động route sang temporal khi câu có "trước/sau".
-`retrieval/query_understanding.py` có sẵn (mock/Claude) nhưng **chưa nối** vào video_engine.
-**File:** `retrieval/video_engine.py`, `retrieval/query_understanding.py`
+### 🟡 Q4. Query understanding + auto-route temporal  PHẦN LỚN XONG (2026-07-14)
+**Đã làm:** nối `query_understanding.py` (mock heuristic, không cần API) vào engine:
+`understand(query)` → StructuredQuery; `temporal_events(query)` → tách sự kiện khi câu có
+"A TRƯỚC/SAU KHI B". Endpoint search trả `parsed` (hiện cấu trúc đã hiểu) + **TỰ ĐỊNH
+TUYẾN** sang `search_temporal` khi phát hiện thứ tự → UI hiện "🧠 Hiểu câu" + banner + chuỗi.
+`set_query_understander` để cắm Claude khi có key. Test understand + routing.
+**CÒN LẠI:** pre-filter theo object/location/time CHƯA hữu ích vì keyframe video chưa có
+metadata đó (cần object-detection hoặc caption) — chỉ temporal là dùng được ngay.
+**File:** `retrieval/video_engine.py`, `retrieval/query_understanding.py`, `ui/app.py`, `ui/index.html`
 
 ### 🔲 Q5. Nâng TRẦN recall (hit@5 ~0.68 bị chặn bởi encoder)
 Benchmark cho thấy tinh chỉnh BM25/sample KHÔNG phá được trần. Hai đường:

@@ -323,11 +323,34 @@ def create_app() -> Flask:
         pos = [i for i in (data.get("positive") or []) if i]
         neg = [i for i in (data.get("negative") or []) if i]
         topk = int(data.get("topk", 6))
+        eng = video_state["engine"]
+
+        # Q4: HIỂU CÂU (không khi đang lọc theo phản hồi F2). Parse -> hiện cấu trúc +
+        # TỰ ĐỊNH TUYẾN sang tìm chuỗi nếu câu có thứ tự thời gian ("A trước khi B").
+        parsed = None
+        if not (pos or neg) and data.get("understand", True):
+            st = eng.understand(query)
+            parsed = {"objects": st.objects, "actions": st.actions,
+                      "location": st.location, "attributes": st.attributes,
+                      "time_constraint": st.time_constraint,
+                      "temporal_order": st.temporal_order, "query_type": st.query_type}
+            events = eng.temporal_events(query)
+            if events:  # có thứ tự thời gian -> trả CHUỖI thay vì danh sách phẳng
+                matches = eng.search_temporal(entry, events, max_results=topk)
+                chains = [{
+                    "video_id": m.video_id, "total_score": round(float(m.total_score), 3),
+                    "steps": [{"event": events[i], "timestamp": round(s.timestamp, 1),
+                               "image": f"/api/video/frame/{s.keyframe_id}"}
+                              for i, s in enumerate(m.steps)],
+                } for m in matches]
+                return jsonify(video=vid, query=query, parsed=parsed,
+                               temporal=chains, events=events, results=[])
+
         if pos or neg:  # F2: relevance feedback (Rocchio) — dịch truy vấn theo phản hồi
-            cands = video_state["engine"].search_with_feedback(
+            cands = eng.search_with_feedback(
                 entry, query, positive_ids=pos, negative_ids=neg, top_k=topk, rerank=rerank)
         else:
-            cands = video_state["engine"].search(entry, query, top_k=topk, rerank=rerank)
+            cands = eng.search(entry, query, top_k=topk, rerank=rerank)
         results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
                     "score": round(float(c.score), 3), "video_id": c.video_id,
                     "explanation": getattr(c, "explanation", None),
@@ -336,9 +359,9 @@ def create_app() -> Flask:
                     "caption": entry.caption_by_id.get(c.keyframe_id),
                     "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
         # F3: gợi ý concept liên quan từ top kết quả (khám phá/khai phá).
-        suggestions = video_state["engine"].suggest_concepts(
+        suggestions = eng.suggest_concepts(
             entry, [c.keyframe_id for c in cands], query)
-        return jsonify(video=vid, query=query, reranked=rerank,
+        return jsonify(video=vid, query=query, reranked=rerank, parsed=parsed,
                        results=results, suggestions=suggestions)
 
     @app.post("/api/video/search_image")
