@@ -256,12 +256,18 @@ Slide 30–31: vòng **observe → reason → act**. **Đã làm:** `Planner` (A
 4 nhánh định tuyến, bước finish, + ClaudePlanner loop bằng fake client, dừng max_steps,
 đòi API key). Định vị: Agent là "smart path" — KHÔNG thay `engine.search` "fast path".
 
-### 🟡 G3. Session Memory (episodic + semantic) — trí nhớ xuyên lượt
-Slide "Memory": **episodic** (append-only event stream của phiên: đã hỏi gì, kết quả,
-👍/👎) + **semantic** (facts đã chốt: "mục tiêu = móc khoá đỏ"). Hiện KISC chỉ nhớ 1
-lượt; cache chỉ có embedding. Ghi log phiên + carry facts vào Planner (G2) và Rocchio
-(F2) qua nhiều lượt — đúng "observation space = lịch sử trò chuyện nhiều lượt" (slide 31).
-**File mới:** `retrieval/session_memory.py` · **Test:** 2 lượt, lượt 2 dùng lại fact/filter lượt 1.
+### ✅ G3. Session Memory (episodic + semantic) — trí nhớ xuyên lượt  ĐÃ XONG (2026-07-15)
+Slide "Memory": **episodic** (append-only) + **semantic** (feedback tích luỹ + facts).
+**Đã làm:** `SessionMemory` + `Turn`:
+- **episodic** `list[Turn]` append-only, đọc theo độ mới (`recent`/`recent_queries`).
+- **semantic** — feedback 👍/👎 TÍCH LUỸ (`note_feedback`, quy tắc *phản hồi mới thắng*)
+  + `facts` dict (tri thức tự do). `feedback_context()` bơm vào `ToolRegistry.context`.
+- **Nối G2:** `SearchAgent.chat()` (lượt CÓ trí nhớ, khác `run()` fast-path độc lập) —
+  gấp phản hồi lượt trước → Planner định tuyến qua **`search_with_feedback` (Rocchio)** ở
+  lượt sau ("lượt 2 nhớ lượt 1") → ghi Turn → đính `summary` vào `run.meta`. Thêm tool
+  `search_with_feedback` vào registry (G1).
+**File:** `retrieval/session_memory.py`, `search_agent.py`, `agent_tools.py` · **Test:**
+`tests/test_session_memory.py` (6) + 3 test tích hợp (feedback blue→Rocchio kéo lên đầu).
 
 ### ✅ G4. RAG Reader — sinh đáp án có dẫn chứng (MemoriEase 3.0)  ĐÃ XONG (2026-07-15)
 Slide 31: sau Rerank là **Reader** tổng hợp câu trả lời. **Đã làm:** thêm `Reader` (ABC),

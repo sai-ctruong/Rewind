@@ -138,10 +138,15 @@ class ToolRegistry:
         res.items                        # [{keyframe_id, video_id, timestamp, score}, ...]
     """
 
-    def __init__(self, engine, entry, images: Optional[dict[str, bytes]] = None):
+    def __init__(self, engine, entry, images: Optional[dict[str, bytes]] = None,
+                 context: Optional[dict] = None):
         self.engine = engine
         self.entry = entry
         self.images: dict[str, bytes] = dict(images or {})
+        # `context`: trạng thái phiên do Agent/Memory bơm vào (vd feedback tích luỹ
+        # {"positive_ids": [...], "negative_ids": [...]}) — Planner đọc để đổi hành vi
+        # (định tuyến qua search_with_feedback). Nền cho G3 Session Memory.
+        self.context: dict = dict(context or {})
         self._tools: dict[str, Tool] = {}
         self._register_all()
 
@@ -196,6 +201,39 @@ class ToolRegistry:
             return ToolResult(ok=True, tool="search",
                               items=norm_candidates(cands),
                               meta={"query": query, "rerank": rerank})
+
+        # 1b) search_with_feedback — Rocchio dùng phản hồi TÍCH LUỸ (G3)
+        def _search_fb(query: str, positive_ids: Sequence[str] = (),
+                       negative_ids: Sequence[str] = (), top_k: int = 8,
+                       rerank: bool = False) -> ToolResult:
+            cands = eng.search_with_feedback(
+                entry, query, positive_ids=list(positive_ids),
+                negative_ids=list(negative_ids), top_k=top_k, rerank=rerank)
+            return ToolResult(ok=True, tool="search_with_feedback",
+                              items=norm_candidates(cands),
+                              meta={"query": query, "n_pos": len(positive_ids),
+                                    "n_neg": len(negative_ids)})
+
+        self.register(Tool(
+            name="search_with_feedback",
+            description=(
+                "Nhu 'search' nhung DICH truy van theo PHAN HOI da co (Rocchio): keo ket "
+                "qua ve phia cac keyframe nguoi dung THICH (positive_ids) va ra xa cac "
+                "keyframe KHONG THICH (negative_ids). Dung khi da co phan hoi tich luy tu "
+                "cac luot truoc trong phien."),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "positive_ids": {"type": "array", "items": {"type": "string"}},
+                    "negative_ids": {"type": "array", "items": {"type": "string"}},
+                    "top_k": {"type": "integer", "default": 8},
+                    "rerank": {"type": "boolean", "default": False},
+                },
+                "required": ["query"],
+            },
+            fn=_search_fb,
+        ))
 
         self.register(Tool(
             name="search",
@@ -448,6 +486,7 @@ class ToolRegistry:
         ))
 
 
-def build_registry(engine, entry, images: Optional[dict[str, bytes]] = None) -> ToolRegistry:
-    """Tạo Action Space (ToolRegistry) cho một (engine, entry). Điểm vào cho G2."""
-    return ToolRegistry(engine, entry, images=images)
+def build_registry(engine, entry, images: Optional[dict[str, bytes]] = None,
+                   context: Optional[dict] = None) -> ToolRegistry:
+    """Tạo Action Space (ToolRegistry) cho một (engine, entry). Điểm vào cho G2/G3."""
+    return ToolRegistry(engine, entry, images=images, context=context)

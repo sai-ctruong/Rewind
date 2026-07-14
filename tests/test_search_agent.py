@@ -163,3 +163,33 @@ def test_reader_does_not_override_claude_answer(agent) -> None:
     agent.reader = MockReader()
     run = agent.run("cảnh màu đỏ")
     assert run.answer == "Câu trả lời của Claude."   # Reader KHÔNG ghi đè
+
+
+# ------------------------------- G3 Session Memory tích hợp -------------------
+def test_chat_creates_and_accumulates_memory(agent) -> None:
+    r1 = agent.chat("cảnh màu đỏ")
+    assert agent.memory is not None and agent.memory.num_turns == 1
+    assert "memory" in r1.meta
+    r2 = agent.chat("cảnh màu xanh lá")
+    assert agent.memory.num_turns == 2
+    assert agent.memory.recent_queries(2) == ["cảnh màu đỏ", "cảnh màu xanh lá"]
+
+
+def test_chat_carries_feedback_into_rocchio_next_turn(agent) -> None:
+    # id keyframe cảnh xanh dương (để đánh dấu 'thích' ở lượt sau).
+    blue_id = agent.engine.search(agent.entry, "xanh dương", top_k=1)[0].keyframe_id
+
+    # lượt 1: truy vấn trung tính 'cảnh' -> nhánh search thường (chưa có phản hồi).
+    r1 = agent.chat("cảnh")
+    assert "search" in r1.tools_used() and "search_with_feedback" not in r1.tools_used()
+
+    # lượt 2: đánh dấu blue là 'thích' (phản hồi cho lượt trước) + hỏi lại 'cảnh'.
+    r2 = agent.chat("cảnh", positive_ids=[blue_id])
+    assert "search_with_feedback" in r2.tools_used()     # Rocchio được kích hoạt
+    assert r2.results and r2.results[0]["timestamp"] >= 2.0  # blue bị kéo lên đầu
+    assert blue_id in agent.memory.positive_ids           # nhớ xuyên lượt
+
+
+def test_run_does_not_touch_memory(agent) -> None:
+    agent.run("cảnh màu đỏ")           # run() là fast-path, không tạo memory
+    assert agent.memory is None

@@ -38,9 +38,10 @@ import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from retrieval.agent_tools import ToolRegistry, ToolResult, build_registry
+from retrieval.session_memory import SessionMemory, Turn
 
 # ----------------------------------------------------------------------------- types
 
@@ -157,16 +158,28 @@ class MockPlanner(Planner):
                               "chi co ANH -> image-to-video")
             r = registry.call("search_by_image", image_ref=img_ref)
         else:
-            act = AgentAction("call", "search", {"query": query, "rerank": False},
-                              "mo ta bang CHU -> tim thuong")
-            r = registry.call("search", query=query, rerank=False)
+            # G3: nếu phiên đã có phản hồi tích luỹ -> dịch truy vấn bằng Rocchio.
+            ctx = getattr(registry, "context", {}) or {}
+            pos = list(ctx.get("positive_ids") or [])
+            neg = list(ctx.get("negative_ids") or [])
+            if pos or neg:
+                act = AgentAction("call", "search_with_feedback",
+                                  {"query": query, "positive_ids": pos,
+                                   "negative_ids": neg},
+                                  "co PHAN HOI tich luy tu luot truoc -> Rocchio")
+                r = registry.call("search_with_feedback", query=query,
+                                  positive_ids=pos, negative_ids=neg)
+            else:
+                act = AgentAction("call", "search", {"query": query, "rerank": False},
+                                  "mo ta bang CHU -> tim thuong")
+                r = registry.call("search", query=query, rerank=False)
         record(act, r)
 
         results = r.items if r.ok else []
         meta: dict[str, Any] = {"route": act.tool}
 
         # -- bước 3: kiểm mơ hồ (chỉ cho nhánh tìm-chữ có candidate) -------
-        if act.tool in ("search", "search_multimodal") and results:
+        if act.tool in ("search", "search_multimodal", "search_with_feedback") and results:
             cands = [{"keyframe_id": it["keyframe_id"],
                       "score": it.get("score") or 0.0} for it in results]
             d = registry.call("disambiguation", candidates=cands)
@@ -280,15 +293,18 @@ class SearchAgent:
     thì giữ nguyên), Reader TỔNG HỢP câu trả lời grounded có trích dẫn keyframe — đúng
     mắt xích "Rerank -> Reader" của MemoriEase 3.0 (slide 31)."""
 
-    def __init__(self, engine, entry, planner: Optional[Planner] = None, reader=None):
+    def __init__(self, engine, entry, planner: Optional[Planner] = None, reader=None,
+                 memory: Optional["SessionMemory"] = None):
         self.engine = engine
         self.entry = entry
         self.planner: Planner = planner or MockPlanner()
         self.reader = reader
+        self.memory = memory                           # G3: trí nhớ phiên (tuỳ chọn)
 
-    def run(self, query: str, images: Optional[dict[str, bytes]] = None,
-            max_steps: int = 6) -> AgentRun:
-        registry = build_registry(self.engine, self.entry, images or {})
+    def _execute(self, query: str, images: Optional[dict[str, bytes]],
+                 max_steps: int, context: Optional[dict]) -> AgentRun:
+        """Chạy 1 lượt: dựng registry (kèm context phiên) -> Planner lái -> Reader đọc."""
+        registry = build_registry(self.engine, self.entry, images or {}, context=context)
         steps: list[AgentStep] = []
 
         def record(action: AgentAction, result: Optional[ToolResult]) -> None:
@@ -302,4 +318,32 @@ class SearchAgent:
             ra = self.reader.read(query, run.results, self.entry)
             run.answer = ra.answer
             run.meta["cited_frame_ids"] = ra.cited_frame_ids
+        return run
+
+    def run(self, query: str, images: Optional[dict[str, bytes]] = None,
+            max_steps: int = 6) -> AgentRun:
+        """Một lượt ĐỘC LẬP (không dùng trí nhớ). 'Fast path' của Agent."""
+        return self._execute(query, images, max_steps, context=None)
+
+    def chat(self, query: str, images: Optional[dict[str, bytes]] = None,
+             positive_ids: Sequence[str] = (), negative_ids: Sequence[str] = (),
+             max_steps: int = 6) -> AgentRun:
+        """Một lượt CÓ TRÍ NHỚ (G3): mang phản hồi/tri thức xuyên các lượt.
+
+        `positive_ids`/`negative_ids` là phản hồi 👍/👎 cho KẾT QUẢ LƯỢT TRƯỚC. Ta gấp
+        vào SessionMemory (ngữ nghĩa) rồi bơm phản hồi TÍCH LUỸ vào registry.context để
+        Planner định tuyến qua search_with_feedback (Rocchio) — 'lượt 2 nhớ lượt 1'.
+        Cuối lượt, ghi Turn vào chuỗi episodic và đính summary vào run.meta."""
+        if self.memory is None:
+            self.memory = SessionMemory()
+        self.memory.note_feedback(positive_ids, negative_ids)
+        run = self._execute(query, images, max_steps,
+                            context=self.memory.feedback_context())
+        self.memory.record(Turn(
+            query=query, route=run.meta.get("route"),
+            result_ids=[it["keyframe_id"] for it in run.results],
+            positive_ids=list(positive_ids), negative_ids=list(negative_ids),
+            answer=run.answer,
+        ))
+        run.meta["memory"] = self.memory.summary()
         return run
