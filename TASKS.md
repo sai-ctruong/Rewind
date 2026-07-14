@@ -244,14 +244,17 @@ Output CHUẨN HOÁ (`norm_candidates/raws/temporal`) → JSON-friendly cho G2/R
 **File:** `retrieval/agent_tools.py` · **Test:** `tests/test_agent_tools.py` (12 test:
 đăng ký đủ 9 tool · schema 2 SDK · call thành công từng tool · 3 đường lỗi self-reflect).
 
-### 🔴 G2. Search Agent (Orchestrator loop) — STAR / MemoriEase
-Slide 30–31: vòng **observe → reason → act → observe**. Planner nhận query, tự quyết
-chuỗi tool (vd: `understand` → nếu có temporal thì `search_temporal`, nếu là ảnh thì
-`search_by_image`, rồi `rerank`, nếu mơ hồ thì `disambiguation`). Thay pipeline cứng
-bằng vòng lặp có điều phối. `MockPlanner` (luật: map query_type → chuỗi tool cố định,
-đủ để test) + `ClaudePlanner` (function-calling thật).
-**File mới:** `retrieval/search_agent.py` · **Test:** query temporal → planner tự gọi
-`search_temporal`; query ảnh → `search_by_image`; đo số bước hội tụ.
+### ✅ G2. Search Agent (Orchestrator loop) — STAR / MemoriEase  ĐÃ XONG (2026-07-15)
+Slide 30–31: vòng **observe → reason → act**. **Đã làm:** `Planner` (ABC) + `SearchAgent`
+(dựng registry G1 rồi giao Planner tự lái, trả `AgentRun` truy vết đủ bước/tool).
+- `MockPlanner` (offline, tất định): `understand` (định tuyến) → chọn nhánh
+  `search_temporal` / `search_by_image` / `search_multimodal` / `search` theo cấu trúc
+  câu + có ảnh không → nếu tìm-chữ và có kết quả thì `disambiguation` (cờ mơ hồ) → finish.
+- `ClaudePlanner` (thật, lazy): Anthropic tool-use loop — `specs("anthropic")` làm tools,
+  vòng tool_use→tool_result→text cuối; cho tiêm `client` để test offline.
+**File:** `retrieval/search_agent.py` · **Test:** `tests/test_search_agent.py` (9 test:
+4 nhánh định tuyến, bước finish, + ClaudePlanner loop bằng fake client, dừng max_steps,
+đòi API key). Định vị: Agent là "smart path" — KHÔNG thay `engine.search` "fast path".
 
 ### 🟡 G3. Session Memory (episodic + semantic) — trí nhớ xuyên lượt
 Slide "Memory": **episodic** (append-only event stream của phiên: đã hỏi gì, kết quả,
