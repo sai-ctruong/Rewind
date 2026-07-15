@@ -133,6 +133,20 @@ THẲNG trên embedding. Endpoint search trả `disambiguation`; UI panel "🗣�
 **CÒN LẠI:** KISC theo THUỘC TÍNH (áo màu gì/ở đâu) cần object-detection hoặc caption.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
+### ✅ F4. Bộ lọc ẢNH hội thoại — thay tab KISC  ĐÃ XONG (2026-07-15)
+**Vấn đề:** tab KISC chạy `build_dataset()` — 200 bản ghi lifelog TỔNG HỢP (`embedding=0`,
+KHÔNG có ảnh) → chỉ hiện được text `kf_0102 (video_0020, t=500s)`. **Giải:** cho vòng thu
+hẹp chạy trên **video THẬT** (đã có ảnh qua `/api/video/frame/<id>`).
+- `ImageFilterSession` (`retrieval/image_filter.py`): giữ **pool** ứng viên, mỗi lượt xếp
+  hạng lại *trong pool* rồi cắt theo `shrink=0.5` (sàn `min_k`) → số ảnh **đảm bảo giảm**.
+  Thu hẹp bằng **3 tín hiệu dùng đồng thời**: thêm mô tả (truy vấn cộng dồn) · 👍/👎
+  (Rocchio) · chọn ảnh đại diện (`pick` → 👍, `others` → 👎). Tái dùng `SessionMemory` (G3).
+- Endpoints `/api/filter/start|refine|reset`; UI tab KISC = lưới ảnh + panel "cái nào gần
+  ý nhất?" + thanh 🔁 lọc theo phản hồi + ô "20 → 8". Gỡ sạch cụm mô phỏng KISC offline.
+- **Đo thật** (walking.mp4, 11 keyframe): start 11 ảnh → +"xe cộ" 6 → 👍 3, ảnh 👍 lên top.
+**File:** `retrieval/image_filter.py`, `ui/app.py`, `ui/index.html` · **Test:**
+`tests/test_image_filter.py` (11) + 4 test UI.
+
 ### ✅ F2. Relevance feedback trên tab tìm chính  ĐÃ XONG (2026-07-14)
 **Đã làm:** `search_with_feedback` (Rocchio: q' = α·q + β·mean(pos) − γ·mean(neg), chuẩn
 hoá) + `KeyframeIndex.mean_embedding`. Chạy THẲNG trên embedding (không cần thuộc tính).

@@ -20,6 +20,8 @@ Góc trên có:
 
 > 💡 **Nên bắt đầu ở tab `🎥 Video`** — đây là tab đầy đủ nhất (tìm chữ, ảnh, sketch,
 > phản hồi, duyệt lân cận). Các tab khác là phiên bản rút gọn cho từng kiểu bài toán.
+> Riêng tab **`KISC`** giờ là **bộ lọc ảnh** (mục 7) — hay nhất khi bạn khó mô tả đủ
+> trong một câu: cứ nói đại khái rồi thu hẹp dần bằng ảnh.
 
 ---
 
@@ -145,18 +147,32 @@ trên một **video demo sẵn có** ("video sinh nhật") để minh hoạ — 
 
 ---
 
-## 7. Tab `KISC` — tìm bằng hội thoại
+## 7. Tab `KISC` — 🎯 Bộ lọc ảnh (thu hẹp dần)
 
-Dùng khi bạn **khó mô tả một câu cho đủ** — cứ nói đại khái, trợ lý sẽ **hỏi lại** để
-thu hẹp.
+Dùng khi bạn **khó mô tả một câu cho đủ**. Thay vì đọc danh sách chữ, bạn **nhìn ảnh thật
+và thu hẹp dần** cho tới khi còn đúng khoảnh khắc cần tìm.
 
-1. Gõ mô tả khoảnh khắc (VD: *"Tôi gặp một người bạn cũ vào tuần trước…"*).
-2. Bấm **Gửi**.
-3. Trợ lý đặt **một câu hỏi thu hẹp** (VD: "Lúc đó trong nhà hay ngoài trời?"). Bạn trả
-   lời → **bộ đếm ứng viên** giảm dần theo thời gian thực.
-4. Lặp lại vài lượt cho tới khi khoanh vùng đủ hẹp. Thường **hội tụ sau ~2 lượt**.
+1. Chọn video ở dropdown → bấm **Nạp video** (dùng chung cache với tab 🎥 Video, đã nạp
+   rồi thì tức thì).
+2. Gõ mô tả thô (VD: *"người đi bộ trên phố"*) → **Gửi**.
+   → Hiện **lưới ảnh keyframe thật** (VD 11 ảnh). Ô **Còn lại** đếm số ảnh.
+3. Thu hẹp bằng **3 cách, dùng lẫn nhau tuỳ ý**:
 
-Các **chip** hiển thị thuộc tính đã chốt qua hội thoại; **track** ghi lại diễn tiến.
+| Cách | Thao tác | Kết quả |
+|---|---|---|
+| **Thêm chi tiết** | gõ tiếp *"xe cộ"* → Gửi | truy vấn cộng dồn, lưới co lại (11 → 6) |
+| **👍 / 👎** | bấm nút dưới mỗi ảnh, rồi **🔁 Lọc theo phản hồi** | kéo về ảnh thích, tránh xa ảnh không thích (6 → 3) |
+| **Chọn ảnh gần ý nhất** | khi hệ hỏi, bấm 1 ảnh trong panel trên cùng | thu hẹp quanh ảnh đó; các ảnh còn lại thành 👎 |
+
+4. Lặp cho tới khi còn 1 ảnh — ô **Còn lại** chuyển xanh: *"Đã còn 1 — đúng khoảnh khắc"*.
+
+Ô **20 → 8** cạnh tiêu đề cho thấy lưới vừa co bao nhiêu; **chip Truy vấn** hiện câu đã
+cộng dồn; **thanh bên phải** ghi lại diễn tiến hội thoại.
+
+> ↺ **Lọc lại từ đầu** — xoá phiên và bắt đầu lại. Cần dùng khi mô tả ban đầu sai hướng:
+> bộ lọc chỉ thu hẹp (ảnh đã bị loại **không** quay lại), giống mọi bộ lọc.
+
+> ⚠️ Tab này **cần backend thật** (`python -m ui.app`) vì phải lấy ảnh keyframe.
 
 ---
 

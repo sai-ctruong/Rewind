@@ -168,6 +168,25 @@
     display: inline-flex; gap: 6px; align-items: center; animation: pop .25s ease; }
   .chip b { color: var(--accent); font-weight: 650; }
   .chip .k { color: var(--faint); font-weight: 500; }
+  /* --- Bộ lọc ảnh (tab KISC): lưới ảnh THẬT co dần mỗi lượt --- */
+  .fgrid { padding: 12px; display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .fgrid .empty { grid-column: 1 / -1; color: var(--muted); padding: 20px; text-align: center; }
+  .fcard { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+    background: var(--surface); position: relative; animation: pop .25s ease; }
+  .fcard img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: var(--surface-2); }
+  .fcard .fmeta { display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    padding: 6px 8px; font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+  .fcard .fb { display: flex; gap: 4px; padding: 0 8px 8px; }
+  .fcard .fb button { flex: 1; font-size: 12px; padding: 4px 0; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); }
+  .fcard.up { border-color: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 16%, transparent); }
+  .fcard.down { opacity: .45; }
+  .fcard .fb button.on { background: var(--accent); color: #1b1300; border-color: var(--accent); }
+  .fgrid.pick .fcard { cursor: pointer; }
+  .fgrid.pick .fcard:hover { border-color: var(--accent); }
+  .shrink { font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
+  .fbbar { padding: 0 12px 14px; }
   .cands { padding: 6px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .cand { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
     border: 1px solid var(--border); background: var(--surface); }
@@ -280,34 +299,60 @@
     <!-- ================= KISC ================= -->
     <section class="view active" id="view-kisc" role="tabpanel">
       <div class="hero">
-        <h1>Trợ lý <em>chủ động hỏi lại</em> để tìm đúng khoảnh khắc</h1>
-        <p>Mô tả điều bạn nhớ. Khi còn mơ hồ, trợ lý đặt câu hỏi thu hẹp dần —
-           theo dõi số ứng viên giảm ở bảng bên phải cho tới khi tìm ra.</p>
+        <h1><em>Bộ lọc ảnh</em> — thu hẹp dần tới đúng khoảnh khắc</h1>
+        <p>Mô tả điều bạn nhớ → hiện lưới ảnh thật. Mỗi lượt: thêm chi tiết, bấm
+           👍/👎, hoặc chọn ảnh gần ý nhất — lưới ảnh co lại cho tới khi còn đúng cái bạn tìm.</p>
       </div>
-      <div class="grid-kisc">
-        <div class="card convo">
-          <div class="thread" id="thread"></div>
-          <form class="composer" id="kisc-form">
-            <input id="kisc-input" autocomplete="off"
-              placeholder="VD: Tôi gặp một người bạn cũ vào tuần trước…" />
-            <button class="btn" type="submit" id="kisc-send">Gửi</button>
-          </form>
+      <div id="kisc-offline" style="display:none">
+        <div class="card" style="padding:18px">Bộ lọc ảnh cần backend thật (để lấy ảnh
+          keyframe). Chạy <code>python -m ui.app</code> rồi mở lại trang.</div>
+      </div>
+      <div id="kisc-live">
+        <div class="controls">
+          <select class="vsel" id="kisc-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="kisc-load">Nạp video</button>
+          <span class="vstatus" id="kisc-status"></span>
+          <button class="btn ghost" id="kisc-reset" title="Xoá phiên lọc, bắt đầu lại từ đầu">↺ Lọc lại từ đầu</button>
         </div>
-        <aside class="panel">
-          <div class="card">
-            <div class="counter">
-              <div class="eyebrow">Ứng viên còn lại</div>
-              <div class="num" id="count">—</div>
-              <div class="lab" id="count-lab">Bắt đầu bằng một mô tả</div>
-              <div class="track"><i id="track"></i></div>
+        <div class="grid-kisc">
+          <div>
+            <div class="card" id="kisc-pick-card" style="display:none;margin-bottom:14px">
+              <div class="hd"><span class="eyebrow" id="kisc-question">Cái nào gần ý bạn nhất?</span></div>
+              <div class="fgrid pick" id="kisc-pick"></div>
             </div>
-            <div class="chips" id="chips"></div>
+            <div class="card">
+              <div class="hd">
+                <span class="eyebrow">Ứng viên còn lại</span>
+                <span class="shrink" id="kisc-shrink"></span>
+              </div>
+              <div class="fgrid" id="kisc-grid">
+                <div class="empty">Chọn video, nạp, rồi mô tả khoảnh khắc để bắt đầu lọc.</div>
+              </div>
+              <div class="fbbar" id="kisc-fbbar" style="display:none">
+                <button class="btn" id="kisc-apply" type="button">🔁 Lọc theo phản hồi</button>
+              </div>
+            </div>
           </div>
-          <div class="card">
-            <div class="hd"><span class="eyebrow">Ứng viên hàng đầu</span></div>
-            <div class="cands" id="cands"><div class="empty">Chưa có dữ liệu</div></div>
-          </div>
-        </aside>
+          <aside class="panel">
+            <div class="card">
+              <div class="counter">
+                <div class="eyebrow">Còn lại</div>
+                <div class="num" id="count">—</div>
+                <div class="lab" id="count-lab">Bắt đầu bằng một mô tả</div>
+                <div class="track"><i id="track"></i></div>
+              </div>
+              <div class="chips" id="chips"></div>
+            </div>
+            <div class="card convo">
+              <div class="thread" id="thread"></div>
+              <form class="composer" id="kisc-form">
+                <input id="kisc-input" autocomplete="off"
+                  placeholder="VD: cảnh đường phố… rồi thêm 'áo trắng'" />
+                <button class="btn" type="submit" id="kisc-send">Gửi</button>
+              </form>
+            </div>
+          </aside>
+        </div>
       </div>
     </section>
 
@@ -532,111 +577,9 @@
   }
 
   /* =====================================================================
-     BẢN MÔ PHỎNG (khi không có backend) — port gọn logic KISC/search/VQA.
+     BẢN MÔ PHỎNG (khi không có backend) — chỉ còn VQA. Bộ lọc ảnh của tab
+     KISC cần backend thật (ảnh keyframe), nên không mô phỏng offline.
      ===================================================================== */
-  const SPACE = {
-    location_type: ["indoor", "outdoor"],
-    location_desc: ["coffee_shop", "restaurant", "park", "home", "office", "street", "mall"],
-    gender: ["male", "female"],
-    clothing_color: ["blue", "red", "white", "black", "green", "yellow"],
-    activity: ["talking", "walking", "eating", "sitting", "shopping"],
-    time_period: ["last_week", "yesterday", "this_month", "two_weeks_ago"],
-  };
-  const CAND_ATTRS = ["time_period", "location_type", "location_desc", "gender", "clothing_color", "activity"];
-  const TARGET = { location_type: "outdoor", location_desc: "coffee_shop", gender: "male",
-    clothing_color: "blue", activity: "talking", time_period: "last_week" };
-  const VI = {
-    location_type: { outdoor: "ngoài trời", indoor: "trong nhà" },
-    location_desc: { coffee_shop: "quán cà phê", restaurant: "nhà hàng", park: "công viên",
-      home: "ở nhà", office: "văn phòng", street: "trên đường", mall: "trung tâm thương mại" },
-    gender: { male: "người đàn ông", female: "người phụ nữ" },
-    clothing_color: { blue: "áo xanh dương", red: "áo đỏ", white: "áo trắng", black: "áo đen",
-      green: "áo xanh lá", yellow: "áo vàng" },
-    activity: { talking: "nói chuyện", walking: "đi bộ", eating: "đang ăn", sitting: "ngồi", shopping: "mua sắm" },
-    time_period: { last_week: "tuần trước", yesterday: "hôm qua", this_month: "tháng này", two_weeks_ago: "hai tuần trước" },
-  };
-  const KEYWORDS = {
-    location_type: { "ngoài trời": "outdoor", "trong nhà": "indoor" },
-    location_desc: { "cà phê": "coffee_shop", "nhà hàng": "restaurant", "công viên": "park",
-      "văn phòng": "office", "đường": "street", "trung tâm thương mại": "mall", "nhà": "home" },
-    gender: { "anh ấy": "male", " nam ": "male", "cô ấy": "female", " nữ ": "female" },
-    clothing_color: { "xanh dương": "blue", "xanh biển": "blue", "đỏ": "red", "trắng": "white",
-      "đen": "black", "xanh lá": "green", "vàng": "yellow" },
-    activity: { "nói chuyện": "talking", "trò chuyện": "talking", "đi bộ": "walking", "ăn": "eating",
-      "ngồi": "sitting", "mua sắm": "shopping" },
-    time_period: { "tuần trước": "last_week", "hôm qua": "yesterday", "hai tuần trước": "two_weeks_ago",
-      "tháng này": "this_month" },
-  };
-  const QTPL = {
-    location_type: "Khoảnh khắc đó diễn ra trong nhà hay ngoài trời?",
-    location_desc: "Bạn có nhớ địa điểm cụ thể là ở đâu không (quán cà phê, công viên, nhà hàng...)?",
-    gender: "Người đó là nam hay nữ?",
-    clothing_color: "Người đó mặc trang phục màu gì?",
-    activity: "Lúc đó mọi người đang làm gì (nói chuyện, ăn uống, đi bộ...)?",
-    time_period: "Sự việc đó xảy ra khi nào (tuần trước, hôm qua, tháng này...)?",
-  };
-  function mulberry32(a) { return function () {
-    a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  const DATA = (function () {
-    const rng = mulberry32(42); const rows = [];
-    const pick = (arr) => arr[Math.floor(rng() * arr.length)];
-    for (let i = 0; i < 200; i++) {
-      rows.push({ id: "kf_" + String(i).padStart(4, "0"), video: "video_" + String((i / 5) | 0).padStart(4, "0"),
-        t: Math.floor(rng() * 3600), a: {
-          location_type: pick(SPACE.location_type), location_desc: pick(SPACE.location_desc),
-          gender: pick(SPACE.gender), clothing_color: pick(SPACE.clothing_color),
-          activity: pick(SPACE.activity), time_period: pick(SPACE.time_period) } });
-    }
-    rows[0].a = Object.assign({}, TARGET);
-    rows.forEach(r => { r.cap = CAND_ATTRS.map(k => (VI[k][r.a[k]] || r.a[k])).join(" "); });
-    return rows;
-  })();
-  function extractSlots(text) {
-    const low = " " + text.toLowerCase() + " "; const out = {};
-    for (const attr in KEYWORDS) for (const kw in KEYWORDS[attr])
-      if (low.includes(kw)) { out[attr] = KEYWORDS[attr][kw]; break; }
-    return out;
-  }
-  function entropy(cands, attr) {
-    const c = {}; cands.forEach(x => { const v = x.a[attr]; c[v] = (c[v] || 0) + 1; });
-    const n = cands.length; let h = 0; for (const k in c) { const p = c[k] / n; h -= p * Math.log2(p); }
-    return h;
-  }
-  function bestAttr(cands, asked) {
-    let best = null, be = 0;
-    for (const a of CAND_ATTRS) { if (asked.includes(a)) continue; const e = entropy(cands, a);
-      if (e > be) { be = e; best = a; } }
-    return best;
-  }
-  function simSession() {
-    const st = { filters: {}, asked: [], turn: 0, finished: false };
-    return {
-      step(text) {
-        const nf = extractSlots(text); Object.assign(st.filters, nf);
-        let cands = DATA.filter(r => Object.entries(st.filters).every(([k, v]) => r.a[k] === v));
-        const gap = cands.length >= 2;
-        let response, done = false;
-        if (cands.length === 0) { response = "Không tìm thấy khoảnh khắc nào khớp. Bạn mô tả lại chi tiết vừa nêu nhé?"; }
-        else if (cands.length <= 5 || st.turn >= 4) { done = true;
-          response = "Đã thu hẹp còn " + cands.length + " ứng viên. Đây là kết quả khớp nhất."; }
-        else { const a = bestAttr(cands, st.asked); if (!a) { done = true; response = "Đã thu hẹp còn " + cands.length + " ứng viên."; }
-          else { st.asked.push(a); response = QTPL[a]; } }
-        st.turn++; st.finished = done;
-        cands.sort(() => 0); // giữ thứ tự
-        const top = cands.slice(0, 5).map((r, i) => ({ id: r.id, video_id: r.video, timestamp: r.t,
-          score: (cands.length <= 5 ? 5 - i * .01 : 1 + Math.random() * .05), attributes: r.a }));
-        return { response, count: cands.length, finished: done, filters: Object.assign({}, st.filters), top };
-      }
-    };
-  }
-  function simSearch(query, topk = 24) {
-    const q = query.toLowerCase();
-    const scored = DATA.map(r => { let s = 0; for (const w of q.split(/\s+/)) if (w && r.cap.includes(w)) s++; return { r, s }; })
-      .filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, topk);
-    return { results: scored.map(x => ({ id: x.r.id, video_id: x.r.video, timestamp: x.r.t,
-      score: x.s, attributes: x.r.a, caption: x.r.cap })) };
-  }
   const VQA_FRAMES = [
     { id: "p/0", t: 0, cap: "Mọi người quây quần quanh bàn tiệc sinh nhật." },
     { id: "p/1", t: 5, cap: "Một chiếc bánh sinh nhật với 5 ngọn nến đang cháy." },
@@ -657,22 +600,16 @@
   }
 
   /* ---------- API layer: chọn real vs sim ---------- */
+  const post = (url, body) => fetch(url, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
   const api = {
-    async kiscStart(query) { if (LIVE) return (await fetch("/api/kisc/start",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) })).json();
-      SESSION = simSession(); return SESSION.step(query); },
-    async kiscRespond(answer) { if (LIVE) return (await fetch("/api/kisc/respond",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer }) })).json();
-      return SESSION.step(answer); },
-    async search(query, topk = 24) { if (LIVE) return (await fetch("/api/search",
-      { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, top_k: topk }) })).json();
-      return simSearch(query, topk); },
-    async vqa(question) { if (LIVE) return (await fetch("/api/vqa",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) })).json();
+    // Bộ lọc ảnh (tab KISC) — CHỈ chạy backend thật vì cần ảnh keyframe.
+    filterStart: (video, query) => post("/api/filter/start", { video, query }),
+    filterRefine: (payload) => post("/api/filter/refine", payload),
+    filterReset: () => post("/api/filter/reset", {}),
+    async vqa(question) { if (LIVE) return post("/api/vqa", { question });
       return simVqa(question); },
   };
-  let SESSION = null;
 
   /* ===================== KISC UI ===================== */
   const thread = $("#thread");
@@ -695,41 +632,165 @@
       const e = 1 - Math.pow(1 - p, 3); node.textContent = Math.round(from + (to - from) * e);
       if (p < 1) requestAnimationFrame(tick); else node.textContent = to; })(t0);
   }
-  function renderState(s) {
-    const solved = s.finished; const node = $("#count"); node.classList.toggle("solved", solved && s.count <= 5);
-    animateCount(s.count);
-    $("#count-lab").textContent = solved ? (s.count <= 5 ? "Đã đủ tự tin — khoá kết quả" : "Kết thúc phiên")
-      : "Trợ lý sẽ hỏi thêm để thu hẹp";
-    const total = 200; $("#track").style.width = Math.max(2, Math.min(100, (s.count / total) * 100)) + "%";
-    const chips = $("#chips"); chips.innerHTML = "";
-    Object.entries(s.filters || {}).forEach(([k, v]) => { const c = el("span", "chip");
-      c.innerHTML = "<span class='k'>" + labelVi(k) + "</span> <b>" + (VI[k] && VI[k][v] || v) + "</b>"; chips.append(c); });
-    const cands = $("#cands"); cands.innerHTML = "";
-    if (!s.top || !s.top.length) { cands.innerHTML = "<div class='empty'>Chưa có ứng viên</div>"; return; }
-    s.top.forEach((c, i) => { const d = el("div", "cand" + (solved && i === 0 && s.count <= 5 ? " win" : ""));
-      d.innerHTML = "<div><div class='id'>" + c.id + (solved && i === 0 && s.count <= 5 ? " ✓" : "") +
-        "</div><div class='meta'>" + c.video_id + " · " + c.timestamp + "s</div></div>" +
-        "<span class='sc'>" + (typeof c.score === "number" ? c.score.toFixed(2) : c.score) + "</span>";
-      cands.append(d); });
-  }
-  function labelVi(k) { return ({ location_type: "Nơi chốn", location_desc: "Địa điểm", gender: "Giới tính",
-    clothing_color: "Màu áo", activity: "Hoạt động", time_period: "Thời điểm" })[k] || k; }
+  // Trạng thái phiên lọc phía client: đã bắt đầu chưa, phản hồi đang chờ, ảnh đại
+  // diện đang hỏi, và mốc số ảnh ban đầu (để vẽ thanh co lại).
+  const F = { started: false, fb: { pos: new Set(), neg: new Set() }, pick: [], max: 0 };
 
-  async function kiscSend(text, isStart) {
-    bubble("user", text); const t = typing(); $("#kisc-send").disabled = true;
-    if (!reduce) await sleep(420);
-    const s = isStart ? await api.kiscStart(text) : await api.kiscRespond(text);
-    t.remove(); bubble("bot", s.response); renderState(s);
-    $("#kisc-send").disabled = false;
-    STARTED = true; if (s.finished) STARTED = "done";
+  function fbBarSync() {
+    const n = F.fb.pos.size + F.fb.neg.size;
+    $("#kisc-fbbar").style.display = n ? "block" : "none";
+    $("#kisc-apply").textContent = "🔁 Lọc theo phản hồi (👍" + F.fb.pos.size + " 👎" + F.fb.neg.size + ")";
   }
-  let STARTED = false;
-  $("#kisc-form").addEventListener("submit", async (e) => {
-    e.preventDefault(); const inp = $("#kisc-input"); const v = inp.value.trim(); if (!v) return;
-    inp.value = ""; const first = !STARTED || STARTED === "done";
-    if (STARTED === "done") { thread.innerHTML = ""; prevCount = null; }
-    await kiscSend(v, first);
+
+  /* Một thẻ ẢNH THẬT. opts.pick=true -> thẻ trong panel "chọn ảnh gần ý nhất". */
+  function frameCard(it, opts) {
+    const c = el("div", "fcard");
+    const img = el("img"); img.src = it.image; img.alt = it.id; img.loading = "lazy";
+    const meta = el("div", "fmeta");
+    meta.innerHTML = "<span>" + it.video_id + " · " + it.timestamp + "s</span>" +
+      (typeof it.score === "number" ? "<span>" + it.score.toFixed(2) + "</span>" : "");
+    c.append(img, meta);
+    if (opts && opts.pick) { c.addEventListener("click", () => applyPick(it.id)); return c; }
+    const fb = el("div", "fb");
+    const up = el("button"), dn = el("button");
+    up.type = dn.type = "button"; up.textContent = "👍"; dn.textContent = "👎";
+    const sync = () => {
+      up.classList.toggle("on", F.fb.pos.has(it.id)); dn.classList.toggle("on", F.fb.neg.has(it.id));
+      c.classList.toggle("up", F.fb.pos.has(it.id)); c.classList.toggle("down", F.fb.neg.has(it.id));
+      fbBarSync();
+    };
+    up.addEventListener("click", () => { F.fb.neg.delete(it.id);
+      F.fb.pos.has(it.id) ? F.fb.pos.delete(it.id) : F.fb.pos.add(it.id); sync(); });
+    dn.addEventListener("click", () => { F.fb.pos.delete(it.id);
+      F.fb.neg.has(it.id) ? F.fb.neg.delete(it.id) : F.fb.neg.add(it.id); sync(); });
+    fb.append(up, dn); c.append(fb); sync();
+    return c;
+  }
+
+  function renderFilter(s) {
+    F.started = true;
+    F.fb.pos.clear(); F.fb.neg.clear(); fbBarSync();
+    if (!F.max || s.count_before === 0) F.max = s.count;   // mốc để vẽ thanh thu hẹp
+    animateCount(s.count);
+    $("#count").classList.toggle("solved", !!s.finished);
+    $("#count-lab").textContent = s.finished ? "Đã còn 1 — đúng khoảnh khắc"
+      : "Thêm chi tiết, bấm 👍/👎, hoặc chọn ảnh gần ý nhất";
+    $("#track").style.width = Math.max(2, Math.min(100, (s.count / Math.max(F.max, 1)) * 100)) + "%";
+    $("#kisc-shrink").textContent = s.count_before ? s.count_before + " → " + s.count + " ảnh"
+      : s.count + " ảnh";
+    const chips = $("#chips"); chips.innerHTML = "";
+    if ((s.query || "").trim()) { const c = el("span", "chip");
+      c.innerHTML = "<span class='k'>Truy vấn</span> <b>" + s.query + "</b>"; chips.append(c); }
+    const g = $("#kisc-grid"); g.innerHTML = "";
+    if (!s.results || !s.results.length)
+      g.innerHTML = "<div class='empty'>Không còn ảnh nào khớp. Bấm '↺ Lọc lại từ đầu'.</div>";
+    else s.results.forEach(it => g.append(frameCard(it)));
+    // Panel hỏi lại (F1): vài ảnh KHÁC nhau -> bấm chọn cái gần ý nhất.
+    const pc = $("#kisc-pick-card"), pg = $("#kisc-pick");
+    F.pick = (s.disambiguation || []).map(d => d.id);
+    if (s.question && F.pick.length) {
+      $("#kisc-question").textContent = s.question;
+      pg.innerHTML = ""; s.disambiguation.forEach(d => pg.append(frameCard(d, { pick: true })));
+      pc.style.display = "";
+    } else pc.style.display = "none";
+  }
+
+  /* Một lượt lọc: hiện "đang gõ" -> gọi API -> báo kết quả -> vẽ lại lưới ảnh. */
+  async function filterTurn(call, note) {
+    const t = typing(); $("#kisc-send").disabled = true;
+    let s;
+    try { s = await call(); } catch (e) { s = { error: "Lỗi kết nối backend." }; }
+    t.remove(); $("#kisc-send").disabled = false;
+    if (!s || s.error) { bubble("bot", (s && s.error) || "Có lỗi xảy ra."); return; }
+    bubble("bot", note(s)); renderFilter(s);
+  }
+
+  async function applyPick(id) {
+    bubble("user", "→ chọn ảnh gần ý nhất");
+    await filterTurn(() => api.filterRefine({ pick: id, others: F.pick }),
+      s => "Đã thu hẹp quanh ảnh bạn chọn — còn " + s.count + " ảnh.");
+  }
+
+  function currentVideoKey() {
+    const v = $("#kisc-select").value || "";
+    return v === "__dataset__" ? "__dataset__" : stem(v);
+  }
+
+  $("#kisc-apply").addEventListener("click", async () => {
+    const pos = [...F.fb.pos], neg = [...F.fb.neg];
+    if (!pos.length && !neg.length) return;
+    bubble("user", "👍 " + pos.length + " · 👎 " + neg.length);
+    await filterTurn(() => api.filterRefine({ positive: pos, negative: neg }),
+      s => "Đã lọc theo phản hồi — còn " + s.count + " ảnh.");
   });
+
+  $("#kisc-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const inp = $("#kisc-input"), v = inp.value.trim();
+    if (!v) return;
+    const key = currentVideoKey();
+    if (!key) { bubble("bot", "Chọn video rồi bấm 'Nạp video' trước."); return; }
+    inp.value = ""; bubble("user", v);
+    if (!F.started) {
+      F.max = 0; prevCount = null;
+      await filterTurn(() => api.filterStart(key, v),
+        s => "Tìm được " + s.count + " ảnh. Thu hẹp bằng cách thêm chi tiết, bấm 👍/👎, "
+           + "hoặc chọn ảnh gần ý nhất.");
+    } else {
+      await filterTurn(() => api.filterRefine({ text: v }),
+        s => "Đã thêm “" + v + "” — còn " + s.count + " ảnh.");
+    }
+  });
+
+  $("#kisc-reset").addEventListener("click", async () => {
+    try { await api.filterReset(); } catch (e) { /* vẫn dọn phía client */ }
+    F.started = false; F.max = 0; prevCount = null;
+    F.fb.pos.clear(); F.fb.neg.clear(); fbBarSync();
+    thread.innerHTML = ""; $("#chips").innerHTML = "";
+    $("#kisc-pick-card").style.display = "none";
+    $("#count").textContent = "—"; $("#count").classList.remove("solved");
+    $("#count-lab").textContent = "Bắt đầu bằng một mô tả";
+    $("#kisc-shrink").textContent = ""; $("#track").style.width = "100%";
+    $("#kisc-grid").innerHTML = "<div class='empty'>Mô tả khoảnh khắc để bắt đầu lọc.</div>";
+  });
+
+  /* Chọn + nạp video cho tab lọc ảnh (dùng chung API với các tab khác). */
+  function setupFilterTab() {
+    if (!LIVE) { $("#kisc-live").style.display = "none"; $("#kisc-offline").style.display = "block"; return; }
+    const sel = $("#kisc-select"), st = $("#kisc-status");
+    const sync = () => { const k = currentVideoKey();
+      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — mô tả khoảnh khắc để lọc." : ""; };
+    const refresh = async () => {
+      try {
+        const j = await (await fetch("/api/video/list")).json();
+        (j.indexed || []).forEach(v => INDEXED.add(v));
+        const cur = sel.value; sel.innerHTML = "";
+        if (!j.videos || !j.videos.length) {
+          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
+          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
+        }
+        const od = el("option"); od.value = "__dataset__";
+        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
+          + (INDEXED.has("__dataset__") ? " ✓" : "");
+        sel.append(od);
+        j.videos.forEach(v => { const o = el("option"); o.value = v;
+          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+        if (cur) sel.value = cur;
+        sync();
+      } catch (e) { st.textContent = "Không tải được danh sách video."; }
+    };
+    sel.addEventListener("change", sync);
+    $("#kisc-load").addEventListener("click", async () => {
+      const name = sel.value; if (!name) return;
+      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
+      const j = await post("/api/video/index", { video: name });
+      if (j.error) { st.textContent = "✗ " + j.error; return; }
+      INDEXED.add(j.video);
+      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — mô tả để bắt đầu lọc.";
+      refresh();
+    });
+    refresh();
+  }
 
   /* KIS/AVS giờ tìm trên VIDEO THẬT — xử lý chung ở setupVideoTab bên dưới. */
 
@@ -1229,7 +1290,9 @@
       $("#mode-note").innerHTML = "<code>Chế độ: API thật (Flask + pipeline)</code>"; }
     else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
       $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }
-    bubble("bot", "Chào bạn! Hãy mô tả khoảnh khắc bạn muốn tìm. Nếu còn mơ hồ, mình sẽ hỏi thêm để thu hẹp dần.");
+    bubble("bot", "Chào bạn! Chọn video rồi bấm “Nạp video”, sau đó mô tả khoảnh khắc — "
+      + "mình sẽ hiện lưới ảnh và thu hẹp dần theo mỗi lượt.");
+    setupFilterTab();   // tab KISC = bộ lọc ảnh trên video thật
     // Khởi tạo 3 tab tìm-trên-video (chia sẻ cache): Video (tự do), KIS (Top-5), AVS (tất cả).
     setupVideoTab({ key: "video", topk: 8, highlightTop: false });
     setupVideoTab({ key: "kis", topk: 5, highlightTop: true,

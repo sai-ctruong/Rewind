@@ -171,15 +171,43 @@ def test_index_folder_empty_dir_errors(client, tmp_path) -> None:
     assert r.status_code == 404   # thư mục hợp lệ nhưng không có video
 
 
+# --------------------- Bộ lọc ảnh hội thoại (/api/filter/*) -------------------
+# Luồng thu hẹp ĐẦY ĐỦ được test ở tests/test_image_filter.py (engine mock, offline).
+# Ở đây chỉ kiểm tầng HTTP: guard khi chưa nạp video / chưa có phiên, và reset.
+def test_filter_start_requires_loaded_video(client) -> None:
+    r = client.post("/api/filter/start", json={"video": "chua_nap", "query": "phố"})
+    assert r.status_code == 400
+    assert "Nạp video" in r.get_json()["error"]
+
+
+def test_filter_refine_without_session_errors(client) -> None:
+    r = client.post("/api/filter/refine", json={"text": "áo trắng"})
+    assert r.status_code == 400
+
+
+def test_filter_reset_ok_even_without_session(client) -> None:
+    assert client.post("/api/filter/reset", json={}).get_json()["ok"] is True
+
+
 # ------------------------------- Frontend asset ------------------------------
 def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-    for hook in ("/api/health", "/api/kisc/start", "/api/search", "/api/vqa",
-                 "/api/video/list", "/api/video/search", "/api/video/index_folder",
-                 "/api/video/temporal", "/api/video/search_image",
-                 "/api/video/neighbors/"):
+    for hook in ("/api/health", "/api/vqa", "/api/video/list", "/api/video/search",
+                 "/api/video/index_folder", "/api/video/temporal",
+                 "/api/video/search_image", "/api/video/neighbors/",
+                 "/api/filter/start", "/api/filter/refine", "/api/filter/reset"):
         assert hook in html
-    # Có bản mô phỏng dự phòng cho chế độ Artifact (không backend).
-    assert "simSession" in html and "data-theme" in html
+    assert "data-theme" in html
     # Q1/Q2: ô tải ảnh + canvas phác hoạ (đều tìm qua /api/video/search_image).
     assert 'id="video-imgfile"' in html and 'id="video-sketch"' in html
+
+
+def test_kisc_tab_is_image_filter_not_text_list() -> None:
+    """Tab KISC phải hiện LƯỚI ẢNH thật (thu hẹp dần), không còn danh sách text."""
+    html = (UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="kisc-grid"' in html and 'id="kisc-pick"' in html   # lưới ảnh + panel chọn
+    # Thẻ ảnh dựng từ URL server trả về (it.image -> /api/video/frame/<id>).
+    assert "frameCard" in html and "img.src = it.image" in html
+    assert 'id="kisc-shrink"' in html                              # hiện "20 → 8"
+    # Bảng ứng viên dạng text cũ và bản mô phỏng KISC offline đã bị gỡ.
+    assert 'id="cands"' not in html and "simSession" not in html

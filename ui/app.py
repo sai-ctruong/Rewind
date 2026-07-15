@@ -481,6 +481,67 @@ def create_app() -> Flask:
                 } for r in raws])
         return jsonify(error="Không thấy keyframe."), 404
 
+    # ============ BỘ LỌC ẢNH HỘI THOẠI (thu hẹp dần trên video THẬT) ============
+    # Thay cho KISC-trên-dữ-liệu-tổng-hợp: mỗi lượt trả về LƯỚI ẢNH THẬT co lại dần.
+    # Thu hẹp bằng 3 tín hiệu dùng đồng thời: thêm mô tả · 👍/👎 (Rocchio) · chọn ảnh
+    # đại diện khi hệ hỏi lại. Logic ở retrieval/image_filter.py (test offline được).
+    from retrieval.image_filter import ImageFilterSession
+
+    filter_state: dict = {"session": None}
+
+    def _filter_json(res) -> dict:
+        """Gắn URL ảnh thật vào từng ứng viên để UI vẽ lưới ảnh."""
+        d = res.to_dict()
+        for it in d["results"]:
+            it["image"] = f"/api/video/frame/{it['id']}"
+        for it in d["disambiguation"]:
+            it["image"] = f"/api/video/frame/{it['id']}"
+        return d
+
+    @app.post("/api/filter/start")
+    def filter_start():
+        data = request.json or {}
+        vid = data.get("video", "")
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        query = (data.get("query", "") or "").strip()
+        if not query:
+            return jsonify(error="Nhập mô tả để bắt đầu lọc."), 400
+        sess = ImageFilterSession(video_state["engine"], entry,
+                                  start_k=int(data.get("k", 20)))
+        try:
+            res = sess.start(query)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        filter_state["session"] = sess
+        return jsonify(_filter_json(res))
+
+    @app.post("/api/filter/refine")
+    def filter_refine():
+        sess = filter_state["session"]
+        if sess is None:
+            return jsonify(error="Chưa có phiên lọc. Hãy mô tả để bắt đầu."), 400
+        data = request.json or {}
+        try:
+            res = sess.refine(
+                text=(data.get("text") or "").strip() or None,
+                positive=[i for i in (data.get("positive") or []) if i],
+                negative=[i for i in (data.get("negative") or []) if i],
+                pick=data.get("pick") or None,
+                others=[i for i in (data.get("others") or []) if i],
+            )
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(_filter_json(res))
+
+    @app.post("/api/filter/reset")
+    def filter_reset():
+        if filter_state["session"] is not None:
+            filter_state["session"].reset()
+        filter_state["session"] = None
+        return jsonify(ok=True)
+
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
         from ingestion.schemas import load_cv2_image

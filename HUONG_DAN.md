@@ -80,7 +80,8 @@ python -m ui.app          # mở http://127.0.0.1:5000
 Trang web có các tab:
 - **Video** — index video, tìm bằng chữ / ảnh / sketch, bật OCR·ASR·Caption·Rerank,
   xem lân cận, gom cụm, explore, phản hồi 👍/👎, gợi ý concept.
-- **Hội thoại (KISC)** — mô tả khoảnh khắc, trợ lý hỏi lại thu hẹp dần.
+- **KISC (bộ lọc ảnh)** — mô tả khoảnh khắc → lưới **ảnh thật** thu nhỏ dần mỗi lượt
+  (thêm chi tiết · 👍/👎 · chọn ảnh gần ý nhất). Xem `HUONG_DAN_GIAO_DIEN.md` mục 7.
 - **Hỏi–đáp (VQA)** — đặt câu hỏi trên cửa sổ keyframe.
 
 ### B. Dòng lệnh (CLI) — nhanh, không viết code
@@ -116,7 +117,8 @@ python -m kisc_module.demo
 | Tinh chỉnh bằng 👍/👎 | `engine.search_with_feedback(entry, "câu", positive_ids=[…])` |
 | Gợi ý từ khoá thu hẹp | `engine.suggest_concepts(entry, ids, "câu")` |
 | Hỏi–đáp trên video | `VqaModule().answer("câu hỏi?", records)` |
-| Hội thoại thu hẹp | `python -m kisc_module.demo` / tab KISC |
+| **Lọc ảnh thu hẹp dần** (hội thoại) | `ImageFilterSession(engine, entry)` → `.start()` / `.refine()` · tab KISC |
+| Hỏi lại theo thuộc tính (Information Gain) | `python -m kisc_module.demo` |
 | **Để hệ tự quyết mọi thứ** | `SearchAgent(engine, entry).run("câu")` |
 | **Hội thoại có trí nhớ** | `agent.chat("câu", positive_ids=[…])` |
 
@@ -264,15 +266,32 @@ Trả lời có suy luận: **đếm số lượng**, **xác định ai làm gì
 
 ### 5.10 Hội thoại thu hẹp (KISC)
 
-Trợ lý **chủ động hỏi lại** để khoanh vùng khi mô tả còn mơ hồ — chọn câu hỏi tối đa
-hoá Information Gain (giảm entropy nhanh nhất).
+**(a) Bộ lọc ảnh trên video thật** — cách dùng chính, có trên UI (tab KISC). Mô tả thô →
+lưới **ảnh thật** → thu hẹp mỗi lượt bằng 3 tín hiệu (dùng lẫn nhau tuỳ ý):
 
-```powershell
-python -m kisc_module.demo          # bản mẫu, hội tụ trung bình ~2 lượt
+```python
+from retrieval.image_filter import ImageFilterSession
+
+s = ImageFilterSession(engine, entry, start_k=20)
+r = s.start("người đi bộ trên phố")          # → 20 ảnh
+r = s.refine(text="xe cộ")                   # thêm chi tiết  → ~10 ảnh
+r = s.refine(positive=["walking/7"])         # 👍 (Rocchio)    → ~5 ảnh
+r = s.refine(pick="walking/7", others=[...]) # chọn ảnh gần ý nhất
+print(r.count_before, "->", r.count, r.finished)
+s.reset()                                    # lọc lại từ đầu
 ```
 
-Nối KISC vào retriever thật: xem `retrieval/kisc_adapter.py` và
-`retrieval/kisc_real_demo.py`.
+Mỗi lượt chỉ xếp hạng lại **trong tập ứng viên hiện tại (pool)** nên số ảnh **đảm bảo
+giảm dần** — đúng mô hình "bộ lọc". Đánh đổi: ảnh đã loại không quay lại → dùng `reset()`.
+
+**(b) Hỏi lại theo THUỘC TÍNH (Information Gain)** — bản gốc trên dữ liệu lifelog có
+thuộc tính (chọn câu hỏi giảm entropy nhanh nhất, hội tụ ~2 lượt):
+
+```powershell
+python -m kisc_module.demo
+```
+
+Nối vào retriever thật: `retrieval/kisc_adapter.py`, `retrieval/kisc_real_demo.py`.
 
 ---
 
