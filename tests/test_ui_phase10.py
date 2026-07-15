@@ -50,16 +50,23 @@ def test_synthetic_kisc_endpoints_are_gone(client) -> None:
     assert client.post("/api/search", json={"query": "x"}).status_code == 404
 
 
-# ------------------------------- VQA -----------------------------------------
-def test_vqa_counts_candles(client) -> None:
-    r = client.post("/api/vqa", json={"question": "Có bao nhiêu ngọn nến trên bánh?"})
-    body = r.get_json()
-    assert body["value"] == 5
+# ------------------------------- VQA (trên video thật) ------------------------
+# Suy luận VQA (đếm nến, ai tặng quà) được phủ ở tests/test_vqa_phase7.py; cầu nối
+# vào index video thật ở tests/test_vqa_on_video.py. Ở đây chỉ kiểm guard HTTP.
+def test_video_vqa_requires_loaded_video(client) -> None:
+    r = client.post("/api/video/vqa", json={"video": "chua_nap", "question": "mấy người?"})
+    assert r.status_code == 400
+    assert "Nạp video" in r.get_json()["error"]
 
 
-def test_vqa_identifies_gift_giver(client) -> None:
-    r = client.post("/api/vqa", json={"question": "Ai là người tặng quà?"})
-    assert "người đàn ông" in r.get_json()["answer"].lower()
+def test_video_vqa_requires_question(client) -> None:
+    r = client.post("/api/video/vqa", json={"video": "x", "question": "  "})
+    assert r.status_code == 400
+
+
+def test_old_canned_vqa_endpoint_is_gone(client) -> None:
+    """Bộ keyframe 'sinh nhật' cứng + /api/vqa đã gỡ: tab VQA giờ chạy video thật."""
+    assert client.post("/api/vqa", json={"question": "x"}).status_code == 404
 
 
 # ------------------------------- Video (thật) --------------------------------
@@ -173,12 +180,15 @@ def test_agent_reset_ok(client) -> None:
 # ------------------------------- Frontend asset ------------------------------
 def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-    for hook in ("/api/health", "/api/vqa", "/api/video/list", "/api/video/search",
+    for hook in ("/api/health", "/api/video/vqa", "/api/video/list", "/api/video/search",
                  "/api/video/index_folder", "/api/video/temporal",
                  "/api/video/search_image", "/api/video/neighbors/",
                  "/api/filter/start", "/api/filter/refine", "/api/filter/reset",
                  "/api/agent/ask", "/api/agent/reset"):
         assert hook in html
+    # Tab VQA chạy trên video thật: có chọn/nạp video + dải ảnh thật (không phải mô phỏng).
+    assert 'id="vqa-select"' in html and 'id="vqa-load"' in html
+    assert "simVqa" not in html and "VQA_FRAMES" not in html
 
 
 def test_agent_tab_shows_tool_trace_and_memory() -> None:

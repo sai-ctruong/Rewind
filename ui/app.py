@@ -3,7 +3,8 @@
   - Tìm kiếm video (chữ / ảnh / sketch / đa phương thức / chuỗi thời gian), rerank VLM,
     relevance feedback, gợi ý concept, duyệt lân cận  ->  /api/video/*
   - Bộ lọc ẢNH hội thoại (thu hẹp dần)               ->  /api/filter/*
-  - Hỏi–đáp VQA (demo trên bộ keyframe mẫu)          ->  /api/vqa
+  - Agent tự điều phối công cụ (smart path)          ->  /api/agent/*
+  - Hỏi–đáp VQA trên video đã nạp                    ->  /api/video/vqa
 
 MỌI thứ chạy trên index của video THẬT (video_state["videos"]) — không còn dataset
 lifelog tổng hợp. Demo hội thoại theo THUỘC TÍNH (Information Gain) nằm ở
@@ -19,12 +20,9 @@ import os
 from io import BytesIO
 from pathlib import Path
 
-import numpy as np
 from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) sớm nhất
-from ingestion.schemas import KeyframeRecord
-from retrieval.vqa_module import VqaModule
 
 _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
@@ -33,23 +31,8 @@ FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
 INDEX_DIR = _ROOT / "artifacts" / "index"      # nơi lưu index (A2 — nạp lại, không embed lại)
 
 
-def build_vqa_records() -> list[KeyframeRecord]:
-    def rec(kf_id, ts, cap, objs):
-        return KeyframeRecord(id=kf_id, video_id="party", timestamp=ts,
-                              clip_embedding=np.zeros(4, dtype=np.float32),
-                              objects=objs, llm_caption=cap)
-    return [
-        rec("p/0", 0.0, "Mọi người quây quần quanh bàn tiệc sinh nhật.", ["người"]),
-        rec("p/1", 5.0, "Một chiếc bánh sinh nhật với 5 ngọn nến đang cháy.", ["bánh", "nến"]),
-        rec("p/2", 12.0, "Người đàn ông áo xanh đang tặng quà cho cô gái.", ["người", "quà"]),
-        rec("p/3", 18.0, "Cô gái mở hộp quà và mỉm cười.", ["quà"]),
-    ]
-
-
 def create_app() -> Flask:
     app = Flask(__name__)
-    vqa_records = build_vqa_records()
-    vqa = VqaModule()
 
     @app.get("/")
     def home():
@@ -71,17 +54,6 @@ def create_app() -> Flask:
         vids = video_state["videos"]
         return jsonify(ok=True, videos=len(vids),
                        dataset_size=sum(e.num_indexed for e in vids.values()))
-
-    @app.post("/api/vqa")
-    def vqa_answer():
-        question = (request.json or {}).get("question", "").strip()
-        if not question:
-            return jsonify(error="Nhập câu hỏi."), 400
-        ans = vqa.answer(question, vqa_records)
-        return jsonify(
-            answer=ans.answer, value=ans.value, reasoning=ans.reasoning,
-            used_frame_ids=ans.used_frame_ids,
-        )
 
     # ===================== TÌM KIẾM TRÊN VIDEO THẬT (SigLIP) ==================
     # VideoSearchEngine (retrieval/video_engine.py): ensemble SigLIP2 + SigLIP
@@ -541,26 +513,50 @@ def create_app() -> Flask:
         agent_state["video"] = None
         return jsonify(ok=True)
 
+    # ===================== VQA TRÊN VIDEO THẬT ==============================
+    # Trước đây tab VQA chỉ chạy trên bộ keyframe mẫu "sinh nhật" (chữ cứng). Giờ hỏi
+    # thẳng trên video người dùng nạp: tìm cửa sổ thời gian khớp câu hỏi rồi mới trả lời
+    # (blueprint bước [6]) — xem retrieval/vqa_module.answer_on_video.
+    @app.post("/api/video/vqa")
+    def video_vqa():
+        from retrieval.vqa_module import answer_on_video
+
+        data = request.json or {}
+        entry = video_state["videos"].get(data.get("video", ""))
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        question = (data.get("question") or "").strip()
+        if not question:
+            return jsonify(error="Nhập câu hỏi."), 400
+        try:
+            ans, info = answer_on_video(
+                video_state["engine"], entry, question,
+                window_s=float(data.get("window", 8.0)))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        frames = [{"id": i, "image": f"/api/video/frame/{i}",
+                   "timestamp": round(entry.raws[i].timestamp, 1)}
+                  for i in info["frame_ids"] if i in entry.raws]
+        # Nhắc thật: mock suy luận trên CHỮ -> không bật OCR/ASR/Caption thì gần như
+        # không có gì để suy luận. Nói thẳng cho người dùng thay vì trả lời rỗng.
+        has_text = bool(entry.caption_by_id or entry.ocr_by_id or entry.asr_by_id)
+        return jsonify(
+            answer=ans.answer, value=ans.value, reasoning=ans.reasoning,
+            used_frame_ids=ans.used_frame_ids, frames=frames,
+            center_time=info["center_time"], video_id=info["video_id"],
+            claude=bool(os.environ.get("ANTHROPIC_API_KEY")), has_text=has_text)
+
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
-        from ingestion.schemas import load_cv2_image
+        from ingestion.schemas import frame_jpeg_bytes
+
         for entry in video_state["videos"].values():
             raw = entry.raws.get(frame_id)
-            if not raw:
+            if raw is None:
                 continue
-            # Ảnh giữ trong RAM (mặc định — không ghi đĩa): phục vụ thẳng từ bytes.
-            if raw.image_bytes is not None:
-                return send_file(BytesIO(raw.image_bytes), mimetype="image/jpeg")
-            # Index nạp từ đĩa (không còn bytes) hoặc có file: dựng lại ảnh rồi encode.
-            try:
-                img = load_cv2_image(raw)      # đĩa hoặc decode lại từ video gốc
-            except ValueError:
-                img = None
-            if img is not None:
-                import cv2
-                ok, buf = cv2.imencode(".jpg", img)
-                if ok:
-                    return send_file(BytesIO(buf.tobytes()), mimetype="image/jpeg")
+            data = frame_jpeg_bytes(raw)   # RAM -> đĩa -> decode lại từ video gốc
+            if data:
+                return send_file(BytesIO(data), mimetype="image/jpeg")
         return jsonify(error="Không thấy keyframe."), 404
 
     return app

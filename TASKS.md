@@ -133,6 +133,22 @@ THẲNG trên embedding. Endpoint search trả `disambiguation`; UI panel "🗣�
 **CÒN LẠI:** KISC theo THUỘC TÍNH (áo màu gì/ở đâu) cần object-detection hoặc caption.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
+### ✅ C2. VQA trên VIDEO THẬT  ĐÃ XONG (2026-07-15)
+Trước: tab VQA chỉ chạy trên 4 keyframe "sinh nhật" cứng trong `ui/app.py` (chữ bịa sẵn).
+**Đã làm:** `answer_on_video(engine, entry, question)` — dùng **chính câu hỏi** để định vị
+cửa sổ keyframe liên quan (blueprint bước [6]: retrieve window rồi mới hỏi), `entry_records()`
+gộp caption/OCR/ASR của entry thành `KeyframeRecord`, `default_answerer()` tự chọn Claude
+vision khi có key / Mock khi không. Endpoint `/api/video/vqa` + tab VQA có chọn-nạp video,
+hiện **dải ảnh thật** đã dùng để suy luận (highlight frame được dùng).
+**BUG THẬT phát hiện:** `ClaudeVqaAnswerer` đọc `f.image_path` — mà `KeyframeRecord` KHÔNG
+có field đó (Mục 7) → **chưa bao giờ gửi được ảnh nào** cho Claude. Sửa: ảnh đi qua map
+`images` (id → JPEG bytes); thêm `frame_jpeg_bytes()` dùng chung cho cả endpoint ảnh.
+**Trung thực về giới hạn:** không có API key thì mock suy luận trên CHỮ → video chưa bật
+Caption/OCR/ASR gần như không trả lời được; UI **nói thẳng** điều này thay vì trả lời rỗng.
+**Gỡ kèm:** `/api/vqa` + `build_vqa_records()` (không còn UI gọi).
+**File:** `retrieval/vqa_module.py`, `ingestion/schemas.py`, `ui/app.py`, `ui/index.html`
+**Test:** `tests/test_vqa_on_video.py` (7) + guard HTTP.
+
 ### ✅ F5. Tab 🧠 Agent — đưa lớp Agentic (G1–G4) lên UI  ĐÃ XONG (2026-07-15)
 Trước: G1–G4 xong ở tầng code + test nhưng `ui/app.py` KHÔNG import `search_agent`/
 `session_memory`/`Reader` — người dùng giao diện không chạm tới được. **Đã làm:**

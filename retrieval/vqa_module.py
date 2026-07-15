@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 from ingestion.build_index import tokenize
-from ingestion.schemas import KeyframeRecord
+from ingestion.schemas import KeyframeRecord, frame_jpeg_bytes
 
 # Số đếm tiếng Việt dạng chữ (cho MockVqaAnswerer). "năm" cũng nghĩa là year nhưng
 # trong ngữ cảnh đếm vật thể thì hiểu là 5 — chấp nhận cho mock.
@@ -86,10 +86,15 @@ def _as_number(token: str) -> Optional[int]:
 
 
 class VqaAnswerer(ABC):
-    """Interface: trả lời câu hỏi dựa trên các frame trong cửa sổ thời gian."""
+    """Interface: trả lời câu hỏi dựa trên các frame trong cửa sổ thời gian.
+
+    `images` (tuỳ chọn): map keyframe_id -> JPEG bytes. Cần vì `KeyframeRecord` CỐ Ý
+    không mang ảnh (Mục 7), trong khi answerer dùng vision (Claude) phải NHÌN được ảnh.
+    Answerer suy luận trên chữ (Mock) bỏ qua tham số này."""
 
     @abstractmethod
-    def answer(self, question: str, frames: Sequence[KeyframeRecord]) -> VqaAnswer:
+    def answer(self, question: str, frames: Sequence[KeyframeRecord],
+               images: Optional[dict] = None) -> VqaAnswer:
         ...
 
 
@@ -100,7 +105,8 @@ class MockVqaAnswerer(VqaAnswerer):
     LVLM sinh lúc indexing — Mục 2.4) để trả lời đếm/nhận diện. Đây là lý do caption
     tự nhiên quan trọng: nó mã hoá sẵn quan hệ ngữ nghĩa để suy luận downstream."""
 
-    def answer(self, question: str, frames: Sequence[KeyframeRecord]) -> VqaAnswer:
+    def answer(self, question: str, frames: Sequence[KeyframeRecord],
+               images: Optional[dict] = None) -> VqaAnswer:
         intent = _detect_intent(question)
         used = [f.id for f in frames]
         if intent == "count":
@@ -199,12 +205,13 @@ class VqaModule:
         video_id: Optional[str] = None,
         center_time: Optional[float] = None,
         window_s: float = 10.0,
+        images: Optional[dict] = None,
     ) -> VqaAnswer:
         frames = retrieve_temporal_window(records, center_time, window_s, video_id)
         if not frames:
             return VqaAnswer(answer="không có dữ liệu",
                              reasoning="Cửa sổ thời gian không có frame nào.")
-        return self.answerer.answer(question, frames)
+        return self.answerer.answer(question, frames, images)
 
 
 # --------------------------------------------------------------------- Claude
@@ -224,7 +231,14 @@ class ClaudeVqaAnswerer(VqaAnswerer):
         api_key_env: str = "ANTHROPIC_API_KEY",
         max_frames: int = 8,
         max_tokens: int = 400,
+        client=None,
     ):
+        self.model = model
+        self.max_frames = max_frames
+        self.max_tokens = max_tokens
+        if client is not None:      # tiêm client (test offline, không cần key/mạng)
+            self._client = client
+            return
         try:
             import anthropic
         except ImportError as e:  # pragma: no cover
@@ -235,30 +249,39 @@ class ClaudeVqaAnswerer(VqaAnswerer):
         api_key = os.environ.get(api_key_env)
         if not api_key:
             raise RuntimeError(f"Thiếu API key: đặt biến môi trường {api_key_env}.")
-        self.model = model
-        self.max_frames = max_frames
-        self.max_tokens = max_tokens
         self._client = anthropic.Anthropic(api_key=api_key)
 
-    def answer(self, question: str, frames: Sequence[KeyframeRecord]) -> VqaAnswer:  # pragma: no cover
+    def _build_content(self, question: str, chosen: Sequence[KeyframeRecord],
+                       images: Optional[dict]) -> list[dict]:
+        """Ghép ảnh + mô tả từng frame + câu hỏi. Ảnh lấy từ `images` (map id -> bytes);
+        KeyframeRecord không mang ảnh nên KHÔNG có `images` là không nhìn được gì —
+        khi đó vẫn hỏi trên phần chữ (caption/OCR) thay vì gửi request rỗng."""
         import base64
-        from pathlib import Path
 
+        content: list[dict] = []
+        for f in chosen:
+            raw = (images or {}).get(f.id)
+            if raw:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg",
+                               "data": base64.standard_b64encode(raw).decode("ascii")},
+                })
+            note = " · ".join(t for t in (f.llm_caption, f.ocr_text, f.asr_text) if t)
+            content.append({"type": "text",
+                            "text": f"[{f.id}] t={f.timestamp:.1f}s"
+                                    + (f" — {note}" if note else "")})
+        content.append({"type": "text", "text": VQA_PROMPT.format(question=question)})
+        return content
+
+    def answer(self, question: str, frames: Sequence[KeyframeRecord],
+               images: Optional[dict] = None) -> VqaAnswer:
         # Lấy đều max_frames frame trong cửa sổ (tránh gửi quá nhiều ảnh -> tốn độ trễ).
         chosen = list(frames)
         if len(chosen) > self.max_frames:
             step = len(chosen) / self.max_frames
             chosen = [chosen[int(i * step)] for i in range(self.max_frames)]
-        content: list[dict] = []
-        for f in chosen:
-            if not getattr(f, "image_path", None):
-                continue
-            b64 = base64.standard_b64encode(Path(f.image_path).read_bytes()).decode("ascii")
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-            })
-        content.append({"type": "text", "text": VQA_PROMPT.format(question=question)})
+        content = self._build_content(question, chosen, images)
         msg = self._client.messages.create(
             model=self.model, max_tokens=self.max_tokens,
             messages=[{"role": "user", "content": content}],
@@ -448,3 +471,91 @@ class ClaudeReader(Reader):
                        if getattr(b, "type", None) == "text").strip()
         return ReaderAnswer(answer=text, cited_frame_ids=cited,
                             reasoning="Claude vision tổng hợp top-K keyframe.")
+
+
+# ============================================================================
+# VQA TRÊN VIDEO THẬT (nối VqaModule vào index video người dùng nạp)
+# ============================================================================
+#
+# BÀI TOÁN: `VqaModule` cần một danh sách `KeyframeRecord` có caption/objects và một
+# CỬA SỔ THỜI GIAN. Index video thật lại giữ `RawKeyframe` (ảnh) + các map
+# caption/ocr/asr rời trong `VideoIndexEntry`. Hai chỗ này phải được bắc cầu:
+#
+#   1. TÌM CỬA SỔ: dùng chính máy tìm kiếm (SigLIP) để định vị keyframe khớp câu hỏi
+#      nhất -> lấy đó làm TÂM cửa sổ. Đây đúng bước [6] VQA của blueprint: "retrieve
+#      temporal window rồi mới hỏi LVLM" — hỏi trên cả video vừa chậm vừa loãng.
+#   2. DỰNG RECORD: gộp caption/OCR/ASR của entry vào KeyframeRecord + lấy JPEG bytes
+#      kèm theo (map riêng) cho answerer vision.
+#
+# GIỚI HẠN TRUNG THỰC: `MockVqaAnswerer` suy luận trên CHỮ. Video thật chỉ có chữ nếu
+# bật OCR/ASR/Caption lúc index. Không bật gì -> mock gần như không trả lời được; khi
+# đó cần `ClaudeVqaAnswerer` (nhìn ảnh) — xem `default_answerer()`.
+
+
+def default_answerer() -> VqaAnswerer:
+    """Chọn answerer theo tài nguyên sẵn có: có ANTHROPIC_API_KEY -> Claude vision
+    (nhìn được ảnh, không cần caption); không có -> Mock (suy luận trên caption/OCR/ASR)."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            return ClaudeVqaAnswerer()
+        except Exception as e:  # pragma: no cover - thiếu SDK/key hỏng -> lùi về mock
+            print(f"[vqa] Không dùng được Claude ({e!r}); dùng MockVqaAnswerer.")
+    return MockVqaAnswerer()
+
+
+def entry_records(entry, video_id: Optional[str] = None) -> list[KeyframeRecord]:
+    """Dựng KeyframeRecord từ VideoIndexEntry (gộp caption/OCR/ASR đã có của entry)."""
+    import numpy as _np
+
+    out: list[KeyframeRecord] = []
+    for kid, raw in entry.raws.items():
+        if video_id is not None and raw.video_id != video_id:
+            continue
+        out.append(KeyframeRecord(
+            id=kid, video_id=raw.video_id, timestamp=raw.timestamp,
+            clip_embedding=_np.zeros(1, dtype=_np.float32),  # VQA không dùng embedding
+            objects=list(raw.objects),
+            ocr_text=entry.ocr_by_id.get(kid),
+            asr_text=entry.asr_by_id.get(kid),
+            llm_caption=entry.caption_by_id.get(kid),
+        ))
+    return sorted(out, key=lambda r: r.timestamp)
+
+
+def answer_on_video(engine, entry, question: str, *, window_s: float = 8.0,
+                    answerer: Optional[VqaAnswerer] = None,
+                    max_images: int = 8) -> tuple[VqaAnswer, dict]:
+    """Trả lời `question` trên VIDEO THẬT đã index.
+
+    Luồng: search(question) -> tâm cửa sổ -> gom frame quanh tâm (cùng video) -> lấy
+    ảnh -> answerer trả lời.
+
+    Returns:
+        (VqaAnswer, info) — `info` gồm cửa sổ đã dùng để UI hiện dải ảnh:
+        {"video_id", "center_time", "window_s", "frame_ids"}.
+    """
+    question = (question or "").strip()
+    if not question:
+        raise ValueError("Cần một câu hỏi.")
+    hits = engine.search(entry, question, top_k=1)
+    if not hits:
+        return (VqaAnswer(answer="không tìm thấy cảnh liên quan",
+                          reasoning="Máy tìm kiếm không trả về keyframe nào."),
+                {"video_id": None, "center_time": None, "window_s": window_s,
+                 "frame_ids": []})
+    center = hits[0]
+    records = entry_records(entry, video_id=center.video_id)
+    frames = retrieve_temporal_window(records, center.timestamp, window_s,
+                                      center.video_id)
+    images: dict[str, bytes] = {}
+    for f in frames[:max_images]:
+        raw = entry.raws.get(f.id)
+        if raw is not None:
+            b = frame_jpeg_bytes(raw)
+            if b:
+                images[f.id] = b
+    ans = VqaModule(answerer or default_answerer()).answer(
+        question, records, video_id=center.video_id,
+        center_time=center.timestamp, window_s=window_s, images=images)
+    return ans, {"video_id": center.video_id, "center_time": round(center.timestamp, 1),
+                 "window_s": window_s, "frame_ids": [f.id for f in frames]}

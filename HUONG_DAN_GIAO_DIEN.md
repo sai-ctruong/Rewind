@@ -14,7 +14,7 @@ python -m ui.app
 Mở trình duyệt vào **http://127.0.0.1:5000**.
 
 Góc trên có:
-- **Thanh tab**: `KISC` · `KIS` · `AVS` · `VQA` · `🎥 Video` · `⏱️ Chuỗi`.
+- **Thanh tab**: `KISC` (bộ lọc ảnh) · `KIS` · `AVS` · `VQA` · `🎥 Video` · `⏱️ Chuỗi` · `🧠 Agent`.
 - **◐** — nút đổi giao diện sáng/tối.
 - **Đèn trạng thái** — báo hệ thống sẵn sàng / đang xử lý.
 
@@ -135,15 +135,21 @@ Dùng khi truy vấn là **chuỗi sự kiện có thứ tự** ("A xảy ra **t
 
 ---
 
-## 6. Tab `VQA` — hỏi–đáp trên video
+## 6. Tab `VQA` — hỏi–đáp trên video thật
 
-Dùng để **hỏi một câu và nhận câu trả lời có suy luận**, không phải tìm ảnh. Tab này chạy
-trên một **video demo sẵn có** ("video sinh nhật") để minh hoạ — không cần nạp video.
+Dùng để **hỏi một câu và nhận câu trả lời có suy luận**, không phải tìm ảnh.
 
-1. Gõ câu hỏi, hoặc bấm một **câu hỏi gợi ý** (VD: *"Có bao nhiêu ngọn nến trên bánh?"*).
-2. Bấm **Hỏi**.
-3. Nhận câu trả lời (đếm số lượng, xác định "ai làm gì"…). Bên phải hiện **cửa sổ keyframe**
-   mà trợ lý đã đọc để suy luận.
+1. Chọn video → **Nạp video** (dùng chung cache với các tab khác).
+2. Gõ câu hỏi hoặc bấm **câu hỏi gợi ý** (VD: *"Có bao nhiêu người đi bộ?"*) → **Hỏi**.
+3. Hệ **dùng chính câu hỏi để tìm cửa sổ keyframe liên quan**, rồi trả lời trên cửa sổ đó
+   (thay vì đọc cả video — vừa chậm vừa loãng). Bên phải hiện **dải ảnh thật** đã dùng để
+   suy luận, ảnh được dùng trực tiếp có viền nổi bật.
+
+> ⚠️ **Điều kiện để trả lời được:** hệ cần "nhìn" hoặc "đọc" được nội dung.
+> - **Không có `ANTHROPIC_API_KEY`** → chỉ suy luận trên **chữ** (caption/OCR/ASR). Video
+>   nạp mà **không bật Caption** thì gần như không trả lời được — tab sẽ hiện cảnh báo này.
+>   Cách khắc phục: nạp lại video có tick **Caption** (tab 🎥 Video).
+> - **Có API key** → dùng **Claude vision**, nhìn thẳng ảnh, không cần caption.
 
 ---
 
@@ -176,7 +182,35 @@ cộng dồn; **thanh bên phải** ghi lại diễn tiến hội thoại.
 
 ---
 
-## 8. Vòng làm việc khuyến nghị
+## 8. Tab `🧠 Agent` — để hệ **tự chọn cách tìm**
+
+Các tab trên: *bạn* chọn công cụ (tìm chữ / ảnh / chuỗi…). Tab này: **gõ một câu, Agent tự
+quyết**.
+
+1. Chọn video → **Nạp video**.
+2. Gõ câu bất kỳ → **Hỏi Agent**. Nó tự hiểu và tự định tuyến:
+
+| Bạn gõ | Agent tự làm |
+|---|---|
+| *"người đi bộ trên phố"* | `understand` → `search` → lưới ảnh |
+| *"đi bộ **trước khi** xe chạy qua"* | `understand` → **`search_temporal`** → các chuỗi cảnh đúng thứ tự |
+| bấm 👍/👎 rồi **🔁 Hỏi lại theo phản hồi** | **`search_with_feedback`** (Rocchio) → kéo về ảnh bạn thích |
+| kết quả mơ hồ | Agent **chủ động hỏi lại**: chọn 1 ảnh gần ý nhất |
+
+3. Panel bên phải cho thấy **"Agent đã làm gì"** — từng công cụ đã gọi kèm **lý do** và số
+   kết quả. Đây là điểm khác biệt: bạn *thấy được* nó suy nghĩ, không phải hộp đen.
+4. **Trí nhớ phiên** hiển thị số lượt · 👍/👎 đã tích luỹ · các câu gần đây — Agent **nhớ
+   xuyên lượt**, nên càng trao đổi càng sát ý. **↺ Phiên mới** để quên hết.
+
+Ô **Trả lời** là phần tổng hợp có **trích dẫn keyframe** (`[walking/7]`).
+
+> Không cần API key: mặc định Agent dùng bộ não luật (tất định, chạy offline) — vẫn tự
+> định tuyến đủ 4 nhánh trên. Có `ANTHROPIC_API_KEY` thì tự nâng lên **Claude**
+> (function-calling) để suy luận linh hoạt hơn.
+
+---
+
+## 9. Vòng làm việc khuyến nghị
 
 ```
 Nạp video (💾 lưu index để tái dùng)

@@ -244,11 +244,15 @@
   .suggest button { font: inherit; font-size: 12.5px; color: var(--muted); background: var(--surface-2);
     border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
   .suggest button:hover { color: var(--ink); border-color: var(--accent); }
-  .film { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
-  .frame { display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-radius: 9px;
-    border: 1px solid var(--border); font-size: 13px; }
-  .frame .t { font-family: var(--mono); font-size: 11.5px; color: var(--faint); flex: none; width: 42px; }
-  .frame.used { border-color: var(--accent); background: var(--accent-soft); }
+  /* Cửa sổ keyframe VQA: dải ẢNH THẬT hệ đã đọc để trả lời (highlight ảnh đã dùng). */
+  .film { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px; padding: 14px; max-height: 460px; overflow-y: auto; }
+  .film .empty { grid-column: 1 / -1; color: var(--muted); padding: 16px; text-align: center; }
+  .frame { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; position: relative; }
+  .frame img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: var(--surface-2); }
+  .frame .t { position: absolute; left: 4px; bottom: 4px; font-family: var(--mono); font-size: 10.5px;
+    color: #fff; background: rgba(0,0,0,.6); padding: 1px 5px; border-radius: 4px; }
+  .frame.used { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 
   /* ---------------- Video thật ---------------- */
   .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
@@ -443,24 +447,35 @@
     <section class="view" id="view-vqa" role="tabpanel">
       <div class="hero">
         <h1>Hỏi–đáp trên video <em>VQA</em></h1>
-        <p>Đặt câu hỏi có suy luận (đếm số lượng, xác định ai làm gì). Trợ lý đọc
-           cửa sổ keyframe liên quan để trả lời.</p>
+        <p>Đặt câu hỏi có suy luận (đếm số lượng, xác định ai làm gì) trên video bạn nạp.
+           Hệ tìm cửa sổ keyframe liên quan tới câu hỏi rồi mới trả lời.</p>
       </div>
-      <div class="vqa-grid">
-        <div>
-          <form class="search-bar" id="vqa-form">
-            <input id="vqa-input" autocomplete="off" placeholder="VD: Có bao nhiêu ngọn nến trên bánh?" />
-            <button class="btn" type="submit">Hỏi</button>
-          </form>
-          <div class="suggest" id="vqa-suggest"></div>
-          <div class="card ans" id="vqa-ans" style="margin-top:16px">
-            <div class="big" id="vqa-big">—</div>
-            <div class="why" id="vqa-why">Chọn một câu hỏi gợi ý hoặc tự nhập.</div>
-          </div>
+      <div class="notice" id="vqa-offline" style="display:none">
+        VQA trên video thật cần <b>backend</b>. Chạy <code>python -m ui.app</code>.
+      </div>
+      <div id="vqa-live">
+        <div class="controls">
+          <select class="vsel" id="vqa-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="vqa-load">Nạp video</button>
+          <span class="vstatus" id="vqa-status"></span>
         </div>
-        <div class="card">
-          <div class="hd"><span class="eyebrow">Cửa sổ keyframe (video sinh nhật)</span></div>
-          <div class="film" id="vqa-film"></div>
+        <div class="vqa-grid">
+          <div>
+            <form class="search-bar" id="vqa-form">
+              <input id="vqa-input" autocomplete="off" placeholder="VD: Có bao nhiêu người đi bộ?" />
+              <button class="btn" type="submit">Hỏi</button>
+            </form>
+            <div class="suggest" id="vqa-suggest"></div>
+            <div class="card ans" id="vqa-ans" style="margin-top:16px">
+              <div class="big" id="vqa-big">—</div>
+              <div class="why" id="vqa-why">Nạp video rồi đặt câu hỏi.</div>
+            </div>
+            <div class="notice" id="vqa-hint" style="display:none;margin-top:12px"></div>
+          </div>
+          <div class="card">
+            <div class="hd"><span class="eyebrow" id="vqa-window">Cửa sổ keyframe</span></div>
+            <div class="film" id="vqa-film"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -653,42 +668,19 @@
     return null;
   }
 
-  /* =====================================================================
-     BẢN MÔ PHỎNG (khi không có backend) — chỉ còn VQA. Bộ lọc ảnh của tab
-     KISC cần backend thật (ảnh keyframe), nên không mô phỏng offline.
-     ===================================================================== */
-  const VQA_FRAMES = [
-    { id: "p/0", t: 0, cap: "Mọi người quây quần quanh bàn tiệc sinh nhật." },
-    { id: "p/1", t: 5, cap: "Một chiếc bánh sinh nhật với 5 ngọn nến đang cháy." },
-    { id: "p/2", t: 12, cap: "Người đàn ông áo xanh đang tặng quà cho cô gái." },
-    { id: "p/3", t: 18, cap: "Cô gái mở hộp quà và mỉm cười." },
-  ];
-  function simVqa(q) {
-    const low = q.toLowerCase();
-    if (low.includes("bao nhiêu") || low.includes("đếm") || low.includes("mấy")) {
-      for (const f of VQA_FRAMES) { const m = f.cap.match(/(\d+)\s+ngọn nến/); if (m && low.includes("nến"))
-        return { answer: m[1], value: +m[1], reasoning: "Đếm từ mô tả: “" + f.cap + "”", used_frame_ids: [f.id] }; }
-    }
-    if (low.startsWith("ai") || low.includes("người nào")) {
-      for (const f of VQA_FRAMES) { const m = f.cap.match(/(.*?)\s+đang tặng/); if (m)
-        return { answer: m[1], reasoning: "Chủ ngữ trước hành động 'tặng' trong: “" + f.cap + "”", used_frame_ids: [f.id] }; }
-    }
-    return { answer: VQA_FRAMES.map(f => f.cap).slice(0, 2).join(" "), reasoning: "Tổng hợp mô tả cửa sổ.", used_frame_ids: VQA_FRAMES.map(f => f.id) };
-  }
-
-  /* ---------- API layer: chọn real vs sim ---------- */
+  /* ---------- API layer ----------
+     MỌI tab giờ chạy trên video THẬT (cần ảnh keyframe từ backend) nên không còn
+     bản mô phỏng trong trình duyệt; không có backend thì các tab hiện thông báo. */
   const post = (url, body) => fetch(url, { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
   const api = {
-    // Bộ lọc ảnh (tab KISC) — CHỈ chạy backend thật vì cần ảnh keyframe.
+    // Bộ lọc ảnh (tab KISC) — thu hẹp dần trên video thật.
     filterStart: (video, query) => post("/api/filter/start", { video, query }),
     filterRefine: (payload) => post("/api/filter/refine", payload),
     filterReset: () => post("/api/filter/reset", {}),
     // Agent (smart path): tự chọn tool + nhớ xuyên lượt + đáp án có dẫn chứng.
     agentAsk: (payload) => post("/api/agent/ask", payload),
     agentReset: () => post("/api/agent/reset", {}),
-    async vqa(question) { if (LIVE) return post("/api/vqa", { question });
-      return simVqa(question); },
   };
 
   /* ===================== KISC UI ===================== */
@@ -1036,24 +1028,90 @@
 
   /* KIS/AVS giờ tìm trên VIDEO THẬT — xử lý chung ở setupVideoTab bên dưới. */
 
-  /* ===================== VQA UI ===================== */
-  const SUGG = ["Có bao nhiêu ngọn nến trên bánh?", "Ai là người tặng quà?", "Chuyện gì đang diễn ra?"];
-  const sg = $("#vqa-suggest");
-  SUGG.forEach(q => { const b = el("button"); b.textContent = q;
-    b.onclick = () => { $("#vqa-input").value = q; $("#vqa-form").requestSubmit(); }; sg.append(b); });
-  function renderFilm(used) {
-    const f = $("#vqa-film"); f.innerHTML = "";
-    VQA_FRAMES.forEach(fr => { const d = el("div", "frame" + (used && used.includes(fr.id) ? " used" : ""));
-      d.innerHTML = "<span class='t'>" + fr.t + "s</span><span>" + fr.cap + "</span>"; f.append(d); });
+  /* ===================== VQA UI (trên VIDEO THẬT) =====================
+     Hỏi thẳng trên video người dùng nạp: backend tìm cửa sổ keyframe khớp câu hỏi
+     rồi mới trả lời, và trả về CHÍNH các ảnh đã dùng để suy luận. */
+  const SUGG = ["Có bao nhiêu người đi bộ?", "Chuyện gì đang diễn ra?", "Ai đang cầm ô?"];
+
+  function vqaVideoKey() {
+    const v = $("#vqa-select").value || "";
+    return v === "__dataset__" ? "__dataset__" : stem(v);
   }
-  renderFilm([]);
-  $("#vqa-form").addEventListener("submit", async (e) => {
-    e.preventDefault(); const v = $("#vqa-input").value.trim(); if (!v) return;
-    $("#vqa-big").textContent = "…"; $("#vqa-why").textContent = "";
-    const a = await api.vqa(v);
-    $("#vqa-big").textContent = a.value != null ? a.value : a.answer;
-    $("#vqa-why").textContent = a.reasoning || ""; renderFilm(a.used_frame_ids || []);
-  });
+
+  function renderFilm(frames, used) {
+    const f = $("#vqa-film"); f.innerHTML = "";
+    if (!frames || !frames.length) { f.innerHTML = "<div class='empty'>Chưa có cửa sổ nào.</div>"; return; }
+    frames.forEach(fr => {
+      const d = el("div", "frame" + (used && used.includes(fr.id) ? " used" : ""));
+      d.innerHTML = "<img src='" + fr.image + "' alt='' loading='lazy'>"
+        + "<span class='t'>" + fr.timestamp + "s</span>";
+      f.append(d);
+    });
+  }
+
+  function setupVqaTab() {
+    if (!LIVE) { $("#vqa-live").style.display = "none"; $("#vqa-offline").style.display = "block"; return; }
+    const sel = $("#vqa-select"), st = $("#vqa-status");
+    const sg = $("#vqa-suggest");
+    SUGG.forEach(q => { const b = el("button"); b.textContent = q;
+      b.onclick = () => { $("#vqa-input").value = q; $("#vqa-form").requestSubmit(); }; sg.append(b); });
+    const sync = () => { const k = vqaVideoKey();
+      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — đặt câu hỏi." : ""; };
+    const refresh = async () => {
+      try {
+        const j = await (await fetch("/api/video/list")).json();
+        (j.indexed || []).forEach(v => INDEXED.add(v));
+        const cur = sel.value; sel.innerHTML = "";
+        if (!j.videos || !j.videos.length) {
+          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
+          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
+        }
+        const od = el("option"); od.value = "__dataset__";
+        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
+          + (INDEXED.has("__dataset__") ? " ✓" : "");
+        sel.append(od);
+        j.videos.forEach(v => { const o = el("option"); o.value = v;
+          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+        if (cur) sel.value = cur;
+        sync();
+      } catch (e) { st.textContent = "Không tải được danh sách video."; }
+    };
+    sel.addEventListener("change", sync);
+    $("#vqa-load").addEventListener("click", async () => {
+      const name = sel.value; if (!name) return;
+      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
+      const j = await post("/api/video/index", { video: name });
+      if (j.error) { st.textContent = "✗ " + j.error; return; }
+      INDEXED.add(j.video);
+      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — đặt câu hỏi.";
+      refresh();
+    });
+    $("#vqa-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const v = $("#vqa-input").value.trim(); if (!v) return;
+      const k = vqaVideoKey();
+      if (!k) { st.textContent = "Chọn video rồi bấm 'Nạp video' trước."; return; }
+      $("#vqa-big").textContent = "…"; $("#vqa-why").textContent = "";
+      const a = await post("/api/video/vqa", { video: k, question: v });
+      if (a.error) { $("#vqa-big").textContent = "—"; $("#vqa-why").textContent = a.error; return; }
+      $("#vqa-big").textContent = a.value != null ? a.value : a.answer;
+      $("#vqa-why").textContent = a.reasoning || "";
+      $("#vqa-window").textContent = "Cửa sổ keyframe quanh " + a.center_time + "s ("
+        + (a.frames || []).length + " khung)";
+      renderFilm(a.frames, a.used_frame_ids || []);
+      // Nói thật về giới hạn: không có API key thì hệ suy luận trên CHỮ, mà video
+      // chưa bật OCR/ASR/Caption thì không có chữ nào để suy luận.
+      const hint = $("#vqa-hint");
+      if (!a.claude && !a.has_text) {
+        hint.innerHTML = "⚠️ Video này chưa có <b>caption/OCR/ASR</b> và chưa có "
+          + "<code>ANTHROPIC_API_KEY</code>. Hệ chỉ suy luận trên CHỮ nên gần như không "
+          + "trả lời được. Hãy nạp lại video có bật <b>Caption</b> (tab 🎥 Video), "
+          + "hoặc đặt API key để dùng Claude vision (nhìn thẳng ảnh).";
+        hint.style.display = "";
+      } else hint.style.display = "none";
+    });
+    refresh();
+  }
 
   /* ============ VIDEO THẬT — dùng chung cho tab Video / KIS / AVS ============ */
   const INDEXED = new Set();        // các video đã index sẵn phía server (chia sẻ)
@@ -1537,6 +1595,7 @@
       + "mình sẽ hiện lưới ảnh và thu hẹp dần theo mỗi lượt.");
     setupFilterTab();   // tab KISC = bộ lọc ảnh trên video thật
     setupAgentTab();    // tab Agent = smart path (tự điều phối tool)
+    setupVqaTab();      // tab VQA  = hỏi–đáp trên video thật
     // Khởi tạo 3 tab tìm-trên-video (chia sẻ cache): Video (tự do), KIS (Top-5), AVS (tất cả).
     setupVideoTab({ key: "video", topk: 8, highlightTop: false });
     setupVideoTab({ key: "kis", topk: 5, highlightTop: true,

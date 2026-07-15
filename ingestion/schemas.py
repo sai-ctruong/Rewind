@@ -152,6 +152,25 @@ def load_cv2_image(raw: "RawKeyframe"):
     )
 
 
+def frame_jpeg_bytes(raw: "RawKeyframe") -> Optional[bytes]:
+    """Trả JPEG bytes của keyframe (RAM → đĩa → decode lại từ video gốc), None nếu chịu.
+
+    VÌ SAO: cả việc PHỤC VỤ ảnh cho web lẫn GỬI ảnh cho LVLM (VQA/Reader) đều cần đúng
+    một thứ — jpeg bytes — bất kể ảnh đang ở RAM, trên đĩa, hay phải dựng lại từ video.
+    Gom về một chỗ để không mỗi nơi tự xoay một kiểu (và quên mất nhánh decode lại)."""
+    if raw.image_bytes is not None:
+        return raw.image_bytes
+    try:
+        img = load_cv2_image(raw)
+    except ValueError:
+        return None
+    if img is None:
+        return None
+    import cv2
+    ok, buf = cv2.imencode(".jpg", img)
+    return buf.tobytes() if ok else None
+
+
 # Các loại bài toán hợp lệ cho query_type (Mục 0 + Mục 7).
 QUERY_TYPES = {"KIS_video", "KIS_textual", "AVS", "VQA", "KISC"}
 

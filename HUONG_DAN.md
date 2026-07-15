@@ -116,7 +116,7 @@ python -m kisc_module.demo
 | Lướt mẫu khắp dataset | `engine.explore(entry)` |
 | Tinh chỉnh bằng 👍/👎 | `engine.search_with_feedback(entry, "câu", positive_ids=[…])` |
 | Gợi ý từ khoá thu hẹp | `engine.suggest_concepts(entry, ids, "câu")` |
-| Hỏi–đáp trên video | `VqaModule().answer("câu hỏi?", records)` |
+| Hỏi–đáp trên video thật | `answer_on_video(engine, entry, "câu hỏi?")` |
 | **Lọc ảnh thu hẹp dần** (hội thoại) | `ImageFilterSession(engine, entry)` → `.start()` / `.refine()` · tab KISC |
 | Hỏi lại theo thuộc tính (Information Gain) | `python -m kisc_module.demo` |
 | **Để hệ tự quyết mọi thứ** | `SearchAgent(engine, entry).run("câu")` |
@@ -253,16 +253,17 @@ engine.suggest_concepts(entry, ids, "phố")     # -> ['đêm', 'mưa', 'taxi', 
 ### 5.9 Hỏi–đáp trên video (VQA)
 
 ```python
-from retrieval.vqa_module import VqaModule
+from retrieval.vqa_module import answer_on_video
 
-# records: danh sách KeyframeRecord (đã có caption/objects). Xem tests/test_vqa_phase7.py
-vqa = VqaModule()                                  # MockVqaAnswerer (offline)
-ans = vqa.answer("Trên bánh có mấy ngọn nến?", records, video_id="birthday")
-print(ans.answer, ans.value, ans.used_frame_ids)   # "5", 5, [...]
+ans, info = answer_on_video(engine, entry, "Có bao nhiêu người đi bộ?", window_s=8.0)
+print(ans.answer, ans.value)
+print(info["center_time"], info["frame_ids"])   # cửa sổ đã dùng để suy luận
 ```
 
-Trả lời có suy luận: **đếm số lượng**, **xác định ai làm gì**, mô tả. Bản thật
-(`ClaudeVqaAnswerer`) gửi ảnh keyframe cho Claude vision.
+Hệ dùng **chính câu hỏi** để định vị cửa sổ keyframe liên quan (blueprint bước [6]), rồi
+mới trả lời trên cửa sổ đó. Answerer tự chọn: có `ANTHROPIC_API_KEY` → **Claude vision**
+(nhìn ảnh thật); không có → `MockVqaAnswerer` suy luận trên **chữ** (caption/OCR/ASR) —
+nên video phải bật **Caption** lúc index thì mock mới có gì để đọc.
 
 ### 5.10 Hội thoại thu hẹp (KISC)
 
