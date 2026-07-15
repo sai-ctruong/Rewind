@@ -185,6 +185,63 @@ def make_labeled_video(path: Path, video_id: str = "gt_scenes"):
 
 
 # ================================== main =====================================
+def encoder_sweep(labels_path: str, out_name: str = "encoder_bench.json",
+                  batch_size: int = 64) -> list[dict]:  # pragma: no cover - model thật
+    """Q5: encoder MẠNH hơn có phá được trần recall không? Đo trên CÙNG bộ nhãn thật.
+
+    Trần hit@5 ~0.65 giữ nguyên qua mọi cấu hình fusion/rerank -> nghi là trần của
+    ENCODER (base). Cách duy nhất để biết chắc: đổi encoder rồi đo lại, chứ không suy
+    diễn. So 3 cấu hình:
+      - base_ensemble : mặc định hiện tại (2 encoder base)
+      - hq_ensemble   : siglip2-LARGE-384 + base-multilingual (nặng VRAM)
+      - hq_single     : CHỈ siglip2-large-384 — dự phòng khi ensemble không vừa 6GB VRAM
+
+    `batch_size` nhỏ hơn mặc định (256) vì ảnh 384x384 của model large ngốn VRAM gấp
+    nhiều lần 256x256.
+    """
+    from retrieval.video_engine import DEFAULT_ENCODERS, HQ_ENCODERS, VideoSearchEngine
+
+    BENCH_DIR.mkdir(parents=True, exist_ok=True)
+    labels = load_labels(labels_path)
+    vids = sorted({l.video_id for l in labels})
+    video_paths = [Path("data/videos") / f"{v}.mp4" for v in vids]
+
+    factories = {
+        "base_ensemble": lambda: VideoSearchEngine(enable_ocr=False),
+        "hq_ensemble": lambda: VideoSearchEngine(
+            encoder_names=HQ_ENCODERS, enable_ocr=False, embed_batch_size=batch_size),
+        "hq_single": lambda: VideoSearchEngine(
+            encoder_names=(HQ_ENCODERS[0],), enable_ocr=False,
+            embed_batch_size=batch_size),
+    }
+    rows: list[dict] = []
+    for name, factory in factories.items():
+        print(f"[encoder] === {name} ===", flush=True)
+        try:
+            rows.extend(sweep_configs({name: factory}, video_paths, labels,
+                                      BENCH_DIR / f"enc_{name}"))
+            r = rows[-1]
+            print(f"[encoder] {name}: hit@1={r.get('hit@1')} hit@5={r.get('hit@5')} "
+                  f"mrr={r.get('mrr')} | index {r['index_seconds']}s | "
+                  f"{r['num_indexed']} kf", flush=True)
+        except Exception as e:      # OOM / thiếu model -> ghi lại, KHÔNG bỏ cả lượt chạy
+            print(f"[encoder] {name} THẤT BẠI: {type(e).__name__}: {str(e)[:200]}",
+                  flush=True)
+            rows.append({"config": name, "error": f"{type(e).__name__}: {str(e)[:300]}"})
+        finally:
+            import gc
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()   # trả VRAM trước khi nạp encoder kế
+
+    out = BENCH_DIR / out_name
+    out.write_text(json.dumps({"n_labels": len(labels), "configs": rows},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[Đã lưu] {out}")
+    return rows
+
+
 def main(  # pragma: no cover - model thật
     labels_path: Optional[str] = None, sweep: bool = False,
 ) -> None:
@@ -240,5 +297,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Benchmark truy xuất video (throughput + accuracy).")
     p.add_argument("--labels", default=None, help="JSON nhãn thật (mặc định: video tổng hợp).")
     p.add_argument("--sweep", action="store_true", help="Quét sample_every_s (0.5/1/2s).")
+    p.add_argument("--encoders", action="store_true",
+                   help="Q5: so encoder base vs LARGE trên cùng nhãn (cần --labels).")
+    p.add_argument("--batch", type=int, default=64, help="embed_batch_size cho encoder large.")
     args = p.parse_args()
-    main(args.labels, sweep=args.sweep)
+    if args.encoders:
+        if not args.labels:
+            p.error("--encoders cần --labels (so encoder phải trên nhãn THẬT).")
+        encoder_sweep(args.labels, batch_size=args.batch)
+    else:
+        main(args.labels, sweep=args.sweep)

@@ -42,10 +42,26 @@ DEFAULT_ENCODERS = (
     "google/siglip-base-patch16-256-multilingual",
 )
 
-# Q5 — preset ENCODER MẠNH hơn để NÂNG TRẦN recall (hit@5 ~0.68 hiện bị chặn bởi
-# encoder base). siglip2-large-384: chính xác hơn nhưng NẶNG (nhiều VRAM/chậm). Dùng:
-#   VideoSearchEngine(encoder_names=HQ_ENCODERS)  — cân nhắc VRAM 6GB (có thể phải
-#   dùng 1 encoder large thay vì ensemble 2). Đo lại bằng bench_retrieval để thấy lợi.
+# ⚠️ Q5 — preset encoder "mạnh hơn". ĐÃ ĐO 2026-07-16 (51 nhãn thật, RTX 3060):
+# GIẢ THUYẾT "encoder to hơn -> phá trần recall" là SAI. Số đo (truy vấn tiếng Anh,
+# cùng ground-truth, `python -m evaluation.bench_retrieval --labels ... --encoders`):
+#
+#   base_ensemble  (2 encoder base)      hit@5 = 0.647   <- TỐT NHẤT, đang là mặc định
+#   hq_ensemble    (large + base-ml)     hit@5 = 0.588   <- thêm large lại KÉM đi
+#   base_single    (1 encoder base)      hit@5 = 0.471
+#   large_single   (1 encoder large)     hit@5 = 0.333   <- kém nhất
+#
+# Đã loại trừ mọi nghi vấn "dùng sai": fp16 cho kết quả Y HỆT fp32, không NaN, norm=1.0,
+# text dùng đúng padding='max_length' (bẫy SigLIP), và dedup KHÔNG xoá mất ground-truth
+# (cả hai index đều 0/51 nhãn mất đáp án, cùng 10.49 keyframe đúng/nhãn).
+#
+# BÀI HỌC: cái tạo ra độ chính xác ở đây là ĐỘ ĐA DẠNG CỦA ENSEMBLE (2 encoder base =
+# 0.647 >> 1 encoder base = 0.471), KHÔNG phải kích thước model — đúng lý do blueprint
+# Mục 2.1 chọn ensemble ("giảm rủi ro CÙNG SAI"). Trần ~0.65 KHÔNG phá được bằng model
+# to hơn; đòn bẩy còn lại là caption LLM (cần ANTHROPIC_API_KEY).
+#
+# GIỮ preset này để tái lập thí nghiệm, KHÔNG khuyến nghị dùng. VRAM: ensemble large
+# vừa 6GB (2.35 GB, nhờ fp16) — không phải rào cản, nhưng cũng chẳng lợi gì.
 HQ_ENCODERS = (
     "google/siglip2-large-patch16-384",
     "google/siglip-base-patch16-256-multilingual",

@@ -81,16 +81,38 @@ TUYẾN** sang `search_temporal` khi phát hiện thứ tự → UI hiện "🧠
 metadata đó (cần object-detection hoặc caption) — chỉ temporal là dùng được ngay.
 **File:** `retrieval/video_engine.py`, `retrieval/query_understanding.py`, `ui/app.py`, `ui/index.html`
 
-### 🟡 Q5. Nâng TRẦN recall — TURNKEY sẵn, chờ tài nguyên (2026-07-14)
-Trần hit@5 ~0.68 bị chặn bởi encoder. **Đã nối turnkey (chỉ cần bật):**
-- **Caption Claude tự bật:** `_get_captioner()` tự chọn `ClaudeCaptioner` khi có
-  `ANTHROPIC_API_KEY` (chất lượng cao, KHÔNG tốn VRAM → hết kẹt như Qwen local), else Qwen.
-  → Có key + bật Caption là caption 'xịn' vào BM25 → nâng recall query quan hệ. Test auto-select.
-- **Preset encoder mạnh:** hằng `HQ_ENCODERS` (siglip2-large-384). Dùng
-  `VideoSearchEngine(encoder_names=HQ_ENCODERS)` — nặng VRAM, đo lại bằng bench_retrieval.
-**CÒN LẠI (cần tài nguyên user):** đặt API key để dùng caption Claude; hoặc chạy encoder
-large trên GPU đủ khoẻ rồi benchmark để xác nhận lợi.
-**File:** `retrieval/video_engine.py`, `ingestion/llm_captioning.py`
+### 🔴 Q5. Nâng TRẦN recall — **giả thuyết "encoder to hơn" ĐÃ BỊ BÁC BỎ** (2026-07-16)
+
+Trần hit@5 ~0.65 giữ nguyên qua mọi cấu hình fusion/rerank → nghi là trần của ENCODER.
+**Đã kiểm bằng thí nghiệm, không suy diễn** (`bench_retrieval.py --encoders`, 51 nhãn thật,
+RTX 3060, truy vấn tiếng Anh để không thiệt cho model chỉ-biết-tiếng-Anh):
+
+| Cấu hình | hit@1 | hit@5 | MRR |
+|---|---|---|---|
+| **base_ensemble** (2 encoder base — mặc định) | 0.353 | **0.647** ✅ | 0.482 |
+| hq_ensemble (large-384 + base-ml) | 0.255 | 0.588 ↓ | 0.399 |
+| base_single (1 encoder base) | 0.333 | 0.471 | 0.388 |
+| large_single (1 encoder large-384) | 0.196 | **0.333** ↓↓ | 0.256 |
+
+**KẾT LUẬN: encoder to hơn KHÔNG phá trần — nó làm KÉM đi.** Cái tạo ra độ chính xác là
+**độ đa dạng của ensemble** (2 base = 0.647 **>>** 1 base = 0.471), không phải kích thước
+model — đúng lý do Mục 2.1 chọn ensemble ("giảm rủi ro *cùng sai*").
+
+**Đã loại trừ mọi khả năng "dùng sai" trước khi kết luận:**
+- fp16 cho kết quả **y hệt** fp32, không NaN, norm = 1.0 → không phải lỗi số học.
+- Text dùng đúng `padding='max_length', max_length=64` (bẫy kinh điển của SigLIP).
+- Dedup **không** xoá mất ground-truth: cả hai index đều **0/51** nhãn mất đáp án, cùng
+  **10.49** keyframe đúng/nhãn → chênh lệch 234 keyframe không phải nguyên nhân.
+- So **song phẳng 1-đối-1** (base_single vs large_single) để không lẫn với lợi thế ensemble.
+- VRAM **không** phải rào cản: ensemble large chỉ tốn **2.35/6 GB** (nhờ fp16 sẵn có).
+
+**Phụ:** truy vấn Việt vs Anh trên base_ensemble gần như bằng nhau (hit@5 0.608 vs 0.647,
+trong sai số của 51 nhãn) → encoder đa ngôn ngữ xử lý tiếng Việt tốt, **dịch truy vấn sang
+Anh cũng không phải đòn bẩy**. Nhãn tiếng Anh lưu ở `evaluation/labels_en.json`.
+
+**CÒN LẠI (đòn bẩy thật, cần tài nguyên):** caption LLM lúc index (`ANTHROPIC_API_KEY`) —
+`_get_captioner()` tự bật `ClaudeCaptioner` khi có key. Đây là hướng duy nhất chưa thử.
+**File:** `retrieval/video_engine.py` (HQ_ENCODERS đã ghi cảnh báo), `evaluation/bench_retrieval.py::encoder_sweep`
 
 ---
 

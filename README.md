@@ -250,7 +250,21 @@ Benchmark trên **51 nhãn thật** (RTX 3060) — *đo, không đoán*:
 
 **Đọc số:** VLM rerank là cú nhảy lớn nhất (**Hit@1 +0.22**). Trọng số BM25 cao *làm hại*
 recall — nên mới có cơ chế **thích ứng theo loại truy vấn**. Hit@5 ~0.65 rất ổn định qua
-mọi lần chạy: đó là **trần của encoder**, chỉ phá được bằng caption LLM / encoder mạnh hơn.
+mọi lần chạy — và ta đã **đo để biết vì sao**:
+
+| Encoder (cùng ground-truth) | Hit@5 |
+|---|:---:|
+| **2 encoder base — ensemble** (mặc định) | **0.647** ✅ |
+| large-384 + base-multilingual | 0.588 ↓ |
+| 1 encoder base | 0.471 |
+| 1 encoder **large**-384 | 0.333 ↓↓ |
+
+> 🔬 **Giả thuyết "encoder to hơn thì recall cao hơn" — đã thử và BÁC BỎ.** Model large
+> làm **kém đi**. Thứ tạo ra độ chính xác là **độ đa dạng của ensemble** (2 base = 0.647
+> ≫ 1 base = 0.471), không phải kích thước model — đúng lý do chọn ensemble ngay từ đầu.
+> Đã loại trừ mọi nghi vấn "dùng sai" trước khi kết luận: fp16 ≡ fp32, không NaN, padding
+> SigLIP đúng, dedup không xoá mất đáp án, và so 1-đối-1 để không lẫn lợi thế ensemble.
+> ⇒ Trần 0.65 **không** phá được bằng model to hơn; đòn bẩy còn lại là **caption LLM**.
 
 ### Còn "sẵn sàng scale" thì sao? — cũng đo, không nói suông
 

@@ -1,0 +1,461 @@
+[
+  {
+    "query": "a person carrying a surfboard on the beach",
+    "video_id": "beach_walking",
+    "time_window": [
+      0.0,
+      1.8
+    ],
+    "query_vi": "người cầm ván lướt sóng trên bãi biển"
+  },
+  {
+    "query": "Sydney Opera House",
+    "video_id": "beach_walking",
+    "time_window": [
+      1.5,
+      5.0
+    ],
+    "query_vi": "nhà hát Opera Sydney"
+  },
+  {
+    "query": "Sydney Opera House by the water",
+    "video_id": "beach_walking",
+    "time_window": [
+      1.5,
+      5.0
+    ],
+    "query_vi": "Sydney Opera House by the water"
+  },
+  {
+    "query": "a red tram on the street",
+    "video_id": "beach_walking",
+    "time_window": [
+      7.0,
+      9.5
+    ],
+    "query_vi": "tàu điện màu đỏ trên phố"
+  },
+  {
+    "query": "Sydney Harbour Bridge",
+    "video_id": "beach_walking",
+    "time_window": [
+      9.0,
+      11.5
+    ],
+    "query_vi": "cầu cảng Sydney Harbour Bridge"
+  },
+  {
+    "query": "a turquoise blue swimming pool",
+    "video_id": "beach_walking",
+    "time_window": [
+      11.0,
+      13.5
+    ],
+    "query_vi": "hồ bơi nước xanh ngọc"
+  },
+  {
+    "query": "a woman in a pink dress walking",
+    "video_id": "beach_walking",
+    "time_window": [
+      13.0,
+      15.0
+    ],
+    "query_vi": "người phụ nữ mặc váy hồng đi bộ"
+  },
+  {
+    "query": "JB HI-FI electronics store",
+    "video_id": "beach_walking",
+    "time_window": [
+      17.0,
+      19.5
+    ],
+    "query_vi": "cửa hàng điện máy JB HI-FI"
+  },
+  {
+    "query": "Raising Cane's restaurant in Times Square",
+    "video_id": "walking",
+    "time_window": [
+      0.0,
+      5.0
+    ],
+    "query_vi": "nhà hàng Raising Cane's ở Quảng trường Thời Đại"
+  },
+  {
+    "query": "a man wearing a brown t-shirt",
+    "video_id": "walking",
+    "time_window": [
+      3.0,
+      5.5
+    ],
+    "query_vi": "người đàn ông mặc áo thun màu nâu"
+  },
+  {
+    "query": "a yellow taxi cab in New York",
+    "video_id": "walking",
+    "time_window": [
+      5.5,
+      10.5
+    ],
+    "query_vi": "taxi màu vàng ở New York"
+  },
+  {
+    "query": "yellow taxi cab in Times Square",
+    "video_id": "walking",
+    "time_window": [
+      5.5,
+      10.5
+    ],
+    "query_vi": "yellow taxi cab in Times Square"
+  },
+  {
+    "query": "a blue LANEIGE advertising billboard",
+    "video_id": "walking",
+    "time_window": [
+      7.0,
+      9.5
+    ],
+    "query_vi": "biển quảng cáo LANEIGE màu xanh"
+  },
+  {
+    "query": "Seoul street at night with neon signs in the rain",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      140.0,
+      165.0
+    ],
+    "query_vi": "phố Seoul ban đêm biển hiệu neon dưới mưa"
+  },
+  {
+    "query": "a crosswalk with many people holding umbrellas",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      440.0,
+      460.0
+    ],
+    "query_vi": "vạch qua đường nhiều người che ô"
+  },
+  {
+    "query": "a person holding a transparent umbrella",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      745.0,
+      758.0
+    ],
+    "query_vi": "người cầm ô trong suốt"
+  },
+  {
+    "query": "a woman holding a red umbrella",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1498.0,
+      1508.0
+    ],
+    "query_vi": "người phụ nữ cầm ô màu đỏ"
+  },
+  {
+    "query": "woman holding a red umbrella in the rain",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1498.0,
+      1508.0
+    ],
+    "query_vi": "woman holding a red umbrella in the rain"
+  },
+  {
+    "query": "a STREET FOOD sign in an alley",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1795.0,
+      1808.0
+    ],
+    "query_vi": "biển hiệu STREET FOOD trong hẻm"
+  },
+  {
+    "query": "a Starbucks store on a wet street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2242.0,
+      2253.0
+    ],
+    "query_vi": "cửa hàng Starbucks bên đường ướt"
+  },
+  {
+    "query": "Starbucks storefront on a rainy street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2242.0,
+      2253.0
+    ],
+    "query_vi": "Starbucks storefront on a rainy street"
+  },
+  {
+    "query": "a yellow and green double-decker bus",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2548.0,
+      2553.0
+    ],
+    "query_vi": "xe buýt hai tầng màu vàng và xanh lá"
+  },
+  {
+    "query": "yellow double-decker bus at a crosswalk",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2548.0,
+      2553.0
+    ],
+    "query_vi": "yellow double-decker bus at a crosswalk"
+  },
+  {
+    "query": "a cafe with a red awning and outdoor tables",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2845.0,
+      2858.0
+    ],
+    "query_vi": "quán cà phê có mái hiên đỏ và bàn ngoài trời"
+  },
+  {
+    "query": "a pink neon sign showing 2021",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      3145.0,
+      3158.0
+    ],
+    "query_vi": "bảng neon màu hồng có chữ 2021"
+  },
+  {
+    "query": "a construction site with cement bags and an OPEN sign",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      293.0,
+      308.0
+    ],
+    "query_vi": "công trường xây dựng có bao xi măng và biển OPEN"
+  },
+  {
+    "query": "a large electronic LED display beside a wet street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1043.0,
+      1058.0
+    ],
+    "query_vi": "bảng đèn LED điện tử lớn bên đường ướt"
+  },
+  {
+    "query": "a SAMSUNG electronics store on the street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1478.0,
+      1493.0
+    ],
+    "query_vi": "cửa hàng điện tử SAMSUNG bên đường"
+  },
+  {
+    "query": "Samsung store sign on a rainy street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1478.0,
+      1493.0
+    ],
+    "query_vi": "Samsung store sign on a rainy street"
+  },
+  {
+    "query": "a person with a blue umbrella walking in the rain",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1343.0,
+      1360.0
+    ],
+    "query_vi": "người che ô màu xanh dương đi trong mưa"
+  },
+  {
+    "query": "a narrow alley with an ATHOME PLACE neon sign",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2093.0,
+      2110.0
+    ],
+    "query_vi": "hẻm hẹp có biển neon ATHOME PLACE"
+  },
+  {
+    "query": "a wide intersection with orange traffic bollards",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2393.0,
+      2410.0
+    ],
+    "query_vi": "ngã tư rộng có cọc tiêu giao thông màu cam"
+  },
+  {
+    "query": "a black BMW SUV parked on the street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2693.0,
+      2710.0
+    ],
+    "query_vi": "xe SUV BMW màu đen đậu bên đường"
+  },
+  {
+    "query": "a plaza with sun loungers",
+    "video_id": "beach_walking",
+    "time_window": [
+      15.3,
+      17.0
+    ],
+    "query_vi": "quảng trường có ghế nằm tắm nắng"
+  },
+  {
+    "query": "a park with many green trees",
+    "video_id": "beach_walking",
+    "time_window": [
+      19.3,
+      21.0
+    ],
+    "query_vi": "công viên nhiều cây xanh"
+  },
+  {
+    "query": "a black sports car on the street",
+    "video_id": "walking",
+    "time_window": [
+      1.5,
+      4.0
+    ],
+    "query_vi": "xe hơi thể thao màu đen trên phố"
+  },
+  {
+    "query": "a crowd crossing the street in Times Square",
+    "video_id": "walking",
+    "time_window": [
+      0.0,
+      3.0
+    ],
+    "query_vi": "đám đông băng qua đường ở Quảng trường Thời Đại"
+  },
+  {
+    "query": "a man in a white shirt standing at the harbour",
+    "video_id": "beach_walking",
+    "time_window": [
+      5.5,
+      7.0
+    ],
+    "query_vi": "người đàn ông áo trắng đứng ở khu bến cảng"
+  },
+  {
+    "query": "a small blue truck parked on a wet street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      68.0,
+      83.0
+    ],
+    "query_vi": "xe tải nhỏ màu xanh dương đậu bên đường ướt"
+  },
+  {
+    "query": "a green TEA advertising stall",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      218.0,
+      233.0
+    ],
+    "query_vi": "quầy quảng cáo trà TEA màu xanh lá"
+  },
+  {
+    "query": "a night street with red neon and many restaurants",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      518.0,
+      533.0
+    ],
+    "query_vi": "phố đêm neon đỏ nhiều nhà hàng"
+  },
+  {
+    "query": "a shop with a red facade and steps",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      668.0,
+      683.0
+    ],
+    "query_vi": "cửa hàng mặt tiền màu đỏ và bậc thang"
+  },
+  {
+    "query": "a person holding a yellow umbrella at a crosswalk",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      968.0,
+      983.0
+    ],
+    "query_vi": "người cầm ô màu vàng ở vạch qua đường"
+  },
+  {
+    "query": "a blue Decathlon advertising flag",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1118.0,
+      1133.0
+    ],
+    "query_vi": "cờ quảng cáo Decathlon màu xanh dương"
+  },
+  {
+    "query": "a red SALE 70 discount sign",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1268.0,
+      1290.0
+    ],
+    "query_vi": "biển giảm giá SALE 70 màu đỏ"
+  },
+  {
+    "query": "a glass skyscraper and an empty wet plaza",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1718.0,
+      1735.0
+    ],
+    "query_vi": "tòa nhà kính chọc trời và quảng trường ướt vắng"
+  },
+  {
+    "query": "a food alley with hanging lanterns at night",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2018.0,
+      2033.0
+    ],
+    "query_vi": "hẻm quán ăn có dây đèn lồng ban đêm"
+  },
+  {
+    "query": "an alley with many parked motorbikes and a person in white",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2168.0,
+      2185.0
+    ],
+    "query_vi": "hẻm có nhiều xe máy đậu, người áo trắng"
+  },
+  {
+    "query": "a green tiled sidewalk with parked motorbikes",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2768.0,
+      2785.0
+    ],
+    "query_vi": "vỉa hè lát gạch xanh lá và xe máy đậu"
+  },
+  {
+    "query": "a white sedan parked on the street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2918.0,
+      2935.0
+    ],
+    "query_vi": "xe sedan màu trắng đậu bên đường"
+  },
+  {
+    "query": "a large portrait poster on glass with orange bollards",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      3068.0,
+      3085.0
+    ],
+    "query_vi": "áp phích chân dung lớn trên kính và cọc tiêu cam"
+  }
+]
