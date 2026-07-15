@@ -205,9 +205,71 @@ Test gợi ý + loại từ query.
 | A2 | Lưu/nạp index ra đĩa (bỏ image_bytes, dựng lại từ video gốc) | ✅ |
 | A3 | Decode backend (decord/NVDEC nếu cài, else cv2 chỉ decode frame mẫu) | ✅ (cần `pip install decord` bản CUDA để có NVDEC thật) |
 | A4 | Song song decode ‖ embed (queue giới hạn) | ✅ |
-| **A5** | **IVF-PQ + sharding** khi > vài triệu vector | 🔲 đo RAM thật trước (blueprint Mục 2.2) |
+| **A5** | **IVF-PQ + sharding** khi > vài triệu vector | 🟡 **ĐÃ ĐO** — xem Mục 5b; ngưỡng kích hoạt giờ có bằng chứng |
+| **A8** | **Benchmark quy mô + tune efSearch** | ✅ **ĐÃ XONG 2026-07-15** — `evaluation/bench_scale.py`; phát hiện lỗi cấu hình thật (Mục 5b) |
 | **A6** | Progress bar khi index (poll /api/video/progress, threaded server) | ✅ (count+fps+elapsed; UI poll 900ms) |
 | A7 | Load ảnh 1 lần cho cả 2 encoder + log device/tiến độ | ✅ (giảm decode 2×; phát hiện chạy nhầm CPU) |
+
+---
+
+## 5b. 📏 BENCHMARK QUY MÔ (A8) — "scale-ready" giờ đã có BẰNG CHỨNG
+
+Trước đây mọi số đo đều trên video ngắn (~50 keyframe) — mà **HNSW ở 50 vector là vô
+nghĩa** (hành xử như brute-force). `evaluation/bench_scale.py` đo trực tiếp ở **768 chiều**
+(số chiều thật), 10k→200k vector, dữ liệu mô phỏng embedding thật (có cụm ngữ nghĩa).
+
+**Tái lập** (JSON kết quả bị `.gitignore` như mọi artifact sinh ra — chạy để có lại):
+```bash
+python -m evaluation.bench_scale --sizes 10000,50000,100000,200000 --dim 768   # tổng quan
+python -m evaluation.bench_scale --sizes 200000 --k 10  --ef 128,256,512,1024,2048  # điểm khuỷu tay
+python -m evaluation.bench_scale --sizes 100000 --k 100 --ef 128,256,1024,2048      # sát coarse thật
+```
+Số dưới đây đo trên **RTX 3060 / 16 GB RAM**, `M=32`, `efConstruction=200`.
+
+### 🔴 Phát hiện 1 — `efSearch=128` đang LÀM MẤT ~54% ứng viên đúng
+
+| efSearch | recall@100 (100k vector) | latency p50 |
+|---|---|---|
+| **128** (giá trị cũ) | **0.465** ❌ | 0.6 ms |
+| 256 | 0.604 | 1.1 ms |
+| 1024 | 0.911 | 4.6 ms |
+| **2048** (đã chốt) | **0.981** ✅ | **11 ms** |
+
+Đây là vi phạm trực tiếp **ràng buộc không thương lượng #2** ("ứng viên bị loại ở coarse
+KHÔNG BAO GIỜ được xét lại"). **Vì sao chọn 2048 chứ không phải "điểm khuỷu tay" 1024:**
+khuỷu tay chỉ đáng theo khi latency khan hiếm — ở đây 11 ms là **0,05% của time_budget
+20s** và nhỏ hơn VLM rerank (~1s/ứng viên) **hai bậc độ lớn**. Mua recall bằng vài ms là
+món hời. **Quy tắc chốt:** `efSearch ≥ ~2× coarse.top_k`.
+→ Đã sửa `configs/settings.yaml` + `IndexConfig` (không còn `[PROVISIONAL]`).
+*Ở quy mô hiện tại (vài nghìn keyframe) thay đổi này là no-op — nó chặn thiệt hại khi
+dữ liệu vượt ~50k.*
+
+### 🔴 Phát hiện 2 — trần RAM thật: **~12 GB cho 1 triệu keyframe**
+
+Đo được **3.343 B/vector** (ổn định mọi cỡ → tuyến tính). Nhưng phải nhân **×2** vì hệ
+dùng **ensemble 2 encoder**, và `KeyframeIndex` giữ **cả index lẫn ma trận gốc**:
+
+| Quy mô | 1 encoder | **×2 encoder (thực tế)** | Trên máy 16 GB |
+|---|---|---|---|
+| 200k keyframe (~80–140 giờ video sau dedup) | 1.2 GB | **~2.4 GB** | ✅ thoải mái |
+| 1M keyframe (~400–700 giờ) | 6.0 GB | **~12 GB** | ❌ **không vừa** |
+
+→ **Ngưỡng kích hoạt A5 (IVF-PQ/sharding) giờ có con số:** khoảng **300–400 giờ video**.
+Dưới mức đó HNSW float là lựa chọn đúng (đúng như blueprint Mục 2.2 dự đoán).
+
+### 🟢 Phát hiện 3 — build index & latency KHÔNG phải nút thắt
+Build 200k vector: **43s** → 1M ước ~4–6 phút. Nhỏ xíu so với **trích embedding**
+(~4–8 frame/s → 200k frame ≈ **7–14 giờ**). Latency coarse **<1 ms** (ef=128) đến **11 ms**
+(ef=2048) ở 200k — tầng coarse không hề là nút thắt; VLM rerank mới là.
+
+### ⚠️ Bài học phương pháp (2 lỗi ĐO ĐẠC tự bắt được)
+1. **Bẫy nhiều chiều:** nhiễu `σ·N(0,I)` ở 768 chiều dài `σ·√768`. Quên chia `√dim` →
+   dữ liệu "có cụm" thực chất **ngẫu nhiên đều** → cả benchmark recall vô nghĩa mà không
+   ai biết. Đã khoá bằng test `test_clustered_vectors_actually_cluster_at_high_dim`.
+2. **recall khớp-ID gây hiểu lầm khi nhiều điểm gần bằng nhau** → thêm `score_ratio`
+   (điểm thu được / điểm exact). Ở ef=2048: recall 0.98 **và** score_ratio 0.999.
+   Vector ngẫu nhiên đều (`--dist random`) là ca **bệnh lý**, giữ lại làm sàn tuyệt đối
+   (`scale_bench_random.json`) nhưng **không dùng để chọn tham số**.
 
 ---
 

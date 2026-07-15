@@ -55,13 +55,18 @@ def l2_normalize(matrix: np.ndarray) -> np.ndarray:
 class IndexConfig:
     """Tham số dựng index. Giá trị mặc định khớp configs/settings.yaml (index.hnsw).
 
-    Đây là các tham số [PROVISIONAL] (Mục 11.3) — phải benchmark efSearch/M ở Phase 3,
-    không chốt bằng cảm tính. Truyền từ settings.yaml khi dùng thật.
+    `ef_search` [ĐO 2026-07-15 — evaluation/bench_scale.py]: 2048, KHÔNG phải 128.
+    Đo trên 768 chiều/dữ liệu mô phỏng embedding thật: ef=128 chỉ lấy được ~46% top-100
+    đúng (0.6ms), ef=2048 lấy 98% (11ms). 11ms là vô nghĩa so với time_budget 20s và
+    VLM rerank ~1s/ứng viên, trong khi ứng viên rớt ở coarse thì mất luôn (Mục 1.2) —
+    nên mua recall bằng vài ms. Quy tắc: ef_search >= ~2x coarse top_k.
+
+    `hnsw_m`/`ef_construction` vẫn là [PROVISIONAL] (chưa quét riêng).
     """
 
     hnsw_m: int = 32
     ef_construction: int = 200
-    ef_search: int = 128
+    ef_search: int = 2048
 
 
 @dataclass

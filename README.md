@@ -252,8 +252,25 @@ Benchmark trên **51 nhãn thật** (RTX 3060) — *đo, không đoán*:
 recall — nên mới có cơ chế **thích ứng theo loại truy vấn**. Hit@5 ~0.65 rất ổn định qua
 mọi lần chạy: đó là **trần của encoder**, chỉ phá được bằng caption LLM / encoder mạnh hơn.
 
-> Mọi tham số `[PROVISIONAL]` trong `configs/settings.yaml` phải qua
-> `evaluation/bench_retrieval.py` trên nhãn thật trước khi chốt.
+### Còn "sẵn sàng scale" thì sao? — cũng đo, không nói suông
+
+`evaluation/bench_scale.py` đo tầng ANN ở **768 chiều** (số chiều thật), tới 200k vector:
+
+| Đo được | Kết quả | Nghĩa là |
+|---|---|---|
+| RAM | **3.343 B/vector** (tuyến tính) | 200k keyframe ≈ **2.4 GB** (×2 encoder) → thoải mái; 1M ≈ **12 GB** → **cần IVF-PQ** |
+| Build index | 200k trong **43 s** | không phải nút thắt — **trích embedding** mới là (200k frame ≈ 7–14 h) |
+| Latency coarse | **<1 ms → 11 ms** @200k | ~0,05% của time budget 20 s; VLM rerank mới chiếm phần lớn |
+| recall@100 vs `efSearch` | 128 → **0.465** · 2048 → **0.981** | 👇 |
+
+> 🔴 **Benchmark này bắt được một lỗi cấu hình thật:** `efSearch=128` **âm thầm đánh mất
+> ~54% ứng viên đúng** ở tầng lọc thô — vi phạm chính ràng buộc "không được mất recall ở
+> coarse". Đã chốt **`efSearch=2048`**: recall **0.98**, trả giá **11 ms** (bằng 0,05%
+> ngân sách). Kết luận vận hành: **HNSW float đúng cho tới ~300–400 giờ video**, quá mức
+> đó mới cần IVF-PQ/sharding.
+
+**Nguyên tắc:** tham số `[PROVISIONAL]` trong `configs/settings.yaml` chỉ được chốt sau khi
+qua `bench_retrieval.py` (accuracy) hoặc `bench_scale.py` (quy mô) — **đo, không đoán**.
 
 <img src="docs/assets/divider.svg" width="100%" alt="">
 

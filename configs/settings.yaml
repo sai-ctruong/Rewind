@@ -66,10 +66,22 @@ index:
     M: 32
     # [PROVISIONAL] efConstruction — độ rộng tìm kiếm lúc build index.
     ef_construction: 200
-    # [PROVISIONAL] efSearch — độ rộng tìm kiếm lúc query. Mục 11.1.2 YÊU CẦU đo
-    # recall@K vs latency với 32/64/128/256, vẽ đường cong, chọn điểm "khuỷu tay".
-    # KHÔNG được chốt số này bằng cảm tính — đây chỉ là seed để benchmark.
-    ef_search: 128
+    # [ĐO 2026-07-15 — evaluation/bench_scale.py, xem benchmarks/scale_ef_sweep.json]
+    # efSearch — độ rộng chùm tìm kiếm lúc query. ĐÃ đo đúng như Mục 11.1.2 yêu cầu
+    # (đường cong recall/latency, 768 chiều, dữ liệu mô phỏng embedding thật):
+    #
+    #   200k vector, k=10:   ef=128 -> recall 0.394 (0.6ms) | ef=1024 -> 0.859 (4.7ms)
+    #                        ef=2048 -> recall 0.967 (11.8ms)
+    #   100k vector, k=100:  ef=128 -> recall 0.465 (0.6ms) | ef=2048 -> 0.981 (11.1ms)
+    #
+    # VÌ SAO 2048 chứ không phải "điểm khuỷu tay" 1024: khuỷu tay chỉ đáng theo khi
+    # latency là tài nguyên khan hiếm — ở đây KHÔNG. 11ms chiếm ~0.05% time_budget 20s,
+    # và nhỏ hơn VLM rerank (~1s/ứng viên) hai bậc độ lớn. Trong khi đó Mục 1.2 nói
+    # ứng viên bị loại ở coarse KHÔNG BAO GIỜ được xét lại -> mua recall bằng vài ms
+    # là món hời. ef=128 cũ làm MẤT ~54% top-100 đúng, vi phạm chính ràng buộc đó.
+    #
+    # QUY TẮC: efSearch nên >= ~2x coarse.top_k (đang là 1000) -> 2048.
+    ef_search: 2048
   # Ngưỡng số lượng vector mà trên đó CẤM brute-force linear scan (Mục 1.3).
   # Vượt mức này bắt buộc phải dùng ANN (HNSW/IVF-PQ).
   brute_force_max_vectors: 50000  # [FIXED] theo ràng buộc Mục 1.3
