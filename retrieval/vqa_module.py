@@ -331,20 +331,47 @@ class MockReader(Reader):
         top = list(results)[:top_k]
         if not top:
             return ReaderAnswer(answer=f"Không tìm thấy kết quả cho: \"{query}\".")
-        cited = [it["keyframe_id"] for it in top]
+        # Kết quả có 2 DẠNG: keyframe phẳng {keyframe_id,…} hoặc CHUỖI thời gian
+        # {video_id, steps:[…]} (từ search_temporal). Reader phải đọc được cả hai —
+        # nếu không, một truy vấn "A trước khi B" sẽ làm sập cả vòng Agent.
+        if any(it.get("steps") for it in top):
+            return self._read_chains(query, top, entry, total=len(results))
+        cited = [it["keyframe_id"] for it in top if it.get("keyframe_id")]
         lines: list[str] = []
         for it in top:
-            kid = it["keyframe_id"]
+            kid = it.get("keyframe_id")
+            if not kid:
+                continue
             txt = _frame_text(entry, kid)
             where = f"video {it.get('video_id')} @ {float(it.get('timestamp') or 0):.1f}s"
             snippet = f" — {txt}" if txt else ""
             lines.append(f"[{kid}] ({where}){snippet}")
         head = (f"Tìm thấy {len(results)} kết quả liên quan đến \"{query}\". "
-                f"{len(top)} keyframe khớp nhất:")
+                f"{len(lines)} keyframe khớp nhất:")
         return ReaderAnswer(
             answer=head + "\n" + "\n".join(lines),
             cited_frame_ids=cited,
             reasoning="Tổng hợp caption/OCR/ASR + vị trí thời gian của top-K (offline).",
+        )
+
+    def _read_chains(self, query: str, top: list[dict], entry,
+                     total: Optional[int] = None) -> ReaderAnswer:
+        """Diễn giải kết quả CHUỖI THỜI GIAN: mỗi chuỗi là các cảnh đúng thứ tự."""
+        cited: list[str] = []
+        lines: list[str] = []
+        for ch in top:
+            steps = ch.get("steps") or []
+            cited.extend(s["keyframe_id"] for s in steps if s.get("keyframe_id"))
+            path = " → ".join(
+                f"[{s['keyframe_id']}] {float(s.get('timestamp') or 0):.1f}s"
+                f" ({s.get('event')})" for s in steps)
+            lines.append(f"video {ch.get('video_id')}: {path}")
+        n = total if total is not None else len(top)
+        head = (f"Tìm thấy {n} chuỗi cảnh đúng thứ tự cho \"{query}\""
+                + (f" — {len(top)} chuỗi khớp nhất:" if n > len(top) else ":"))
+        return ReaderAnswer(
+            answer=head + "\n" + "\n".join(lines), cited_frame_ids=cited,
+            reasoning="Các cảnh cùng video, timestamp tăng dần đúng thứ tự yêu cầu.",
         )
 
 
@@ -390,7 +417,9 @@ class ClaudeReader(Reader):
         cited: list[str] = []
         n_img = 0
         for it in top:
-            kid = it["keyframe_id"]
+            kid = it.get("keyframe_id")
+            if not kid:      # chuỗi thời gian -> không có ảnh đơn lẻ để gửi
+                continue
             cited.append(kid)
             raw = getattr(entry, "raws", {}).get(kid)
             img = getattr(raw, "image_bytes", None) if raw is not None else None

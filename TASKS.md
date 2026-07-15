@@ -133,6 +133,22 @@ THẲNG trên embedding. Endpoint search trả `disambiguation`; UI panel "🗣�
 **CÒN LẠI:** KISC theo THUỘC TÍNH (áo màu gì/ở đâu) cần object-detection hoặc caption.
 **File:** `retrieval/video_engine.py`, `ui/app.py`, `ui/index.html`
 
+### ✅ F5. Tab 🧠 Agent — đưa lớp Agentic (G1–G4) lên UI  ĐÃ XONG (2026-07-15)
+Trước: G1–G4 xong ở tầng code + test nhưng `ui/app.py` KHÔNG import `search_agent`/
+`session_memory`/`Reader` — người dùng giao diện không chạm tới được. **Đã làm:**
+endpoints `/api/agent/ask|reset` (`SearchAgent` + `MockReader`; tự nâng lên
+`ClaudePlanner`+`ClaudeReader` khi có `ANTHROPIC_API_KEY`) + tab `🧠 Agent`: ô hỏi →
+lưới ảnh / chuỗi thời gian, panel **"Agent đã làm gì"** (tool + lý do + số kết quả),
+**trí nhớ phiên** (lượt · 👍/👎 · câu gần đây), đáp án Reader, panel Agent chủ động hỏi lại.
+**2 BUG THẬT do smoke test bắt được** (test không thấy): `MockReader.read` và
+`SearchAgent.chat` đều giả định mọi kết quả có `keyframe_id` → truy vấn "A trước khi B"
+(trả CHUỖI `{video_id, steps[]}`) làm **sập cả vòng Agent** với `KeyError`. Đã sửa cả hai
++ thêm test hồi quy; gom việc rút id vào `_result_ids()`.
+**Đo thật** (walking.mp4): "người đi bộ" → `search` 8 ảnh · "đi bộ **trước khi** xe chạy"
+→ tự chuyển `search_temporal`, 50 chuỗi (UI vẽ 8, vẫn báo tổng) · 👍 → `search_with_feedback`,
+ảnh 👍 lên top, nhớ 3 lượt.
+**File:** `ui/app.py`, `ui/index.html`, `retrieval/vqa_module.py`, `retrieval/search_agent.py`
+
 ### ✅ F4. Bộ lọc ẢNH hội thoại — thay tab KISC  ĐÃ XONG (2026-07-15)
 **Vấn đề:** tab KISC chạy `build_dataset()` — 200 bản ghi lifelog TỔNG HỢP (`embedding=0`,
 KHÔNG có ảnh) → chỉ hiện được text `kf_0102 (video_0020, t=500s)`. **Giải:** cho vòng thu

@@ -15,6 +15,7 @@ Chạy:  python -m ui.app   rồi mở http://127.0.0.1:5000
 """
 from __future__ import annotations
 
+import os
 from io import BytesIO
 from pathlib import Path
 
@@ -449,6 +450,95 @@ def create_app() -> Flask:
         if filter_state["session"] is not None:
             filter_state["session"].reset()
         filter_state["session"] = None
+        return jsonify(ok=True)
+
+    # ==================== AGENT (smart path — tự điều phối công cụ) ==============
+    # Đưa lớp Agentic (G1–G4) lên UI: Search Agent tự quyết chuỗi tool (understand ->
+    # search / search_temporal / search_with_feedback -> disambiguation), giữ trí nhớ
+    # xuyên lượt (SessionMemory), và Reader tổng hợp đáp án có trích dẫn keyframe.
+    # Không cần API key: mặc định MockPlanner + MockReader (tất định, offline).
+    from retrieval.search_agent import SearchAgent
+    from retrieval.vqa_module import MockReader
+
+    agent_state: dict = {"agent": None, "video": None}
+    AGENT_MAX_CHAINS = 8      # trần số chuỗi temporal vẽ ra UI (tổng thật vẫn báo)
+
+    def _get_agent(entry, vid: str) -> SearchAgent:
+        """Một Agent cho mỗi video (đổi video -> phiên mới, trí nhớ mới).
+
+        Có ANTHROPIC_API_KEY -> dùng bộ não thật (ClaudePlanner + ClaudeReader);
+        không có -> MockPlanner/MockReader vẫn tự định tuyến, chạy offline."""
+        if agent_state["agent"] is not None and agent_state["video"] == vid:
+            return agent_state["agent"]
+        planner = None
+        reader = MockReader()
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            try:
+                from retrieval.search_agent import ClaudePlanner
+                from retrieval.vqa_module import ClaudeReader
+                planner, reader = ClaudePlanner(), ClaudeReader()
+            except Exception as e:  # pragma: no cover - thiếu SDK -> lùi về mock
+                print(f"[ui] Không dùng được Claude ({e!r}); dùng MockPlanner.")
+                planner, reader = None, MockReader()
+        agent_state["agent"] = SearchAgent(video_state["engine"], entry,
+                                           planner=planner, reader=reader)
+        agent_state["video"] = vid
+        return agent_state["agent"]
+
+    def _agent_json(run) -> dict:
+        """Gói AgentRun cho UI: trace các bước + kết quả (ảnh) hoặc chuỗi thời gian."""
+        steps = [{
+            "kind": s.action.kind, "tool": s.action.tool,
+            "rationale": s.action.rationale,
+            "ok": (None if s.result is None else s.result.ok),
+            "n": (None if s.result is None else len(s.result.items)),
+        } for s in run.steps]
+        results, chains = [], []
+        for it in run.results:
+            if it.get("keyframe_id"):          # nhánh tìm keyframe phẳng
+                results.append({**it, "id": it["keyframe_id"],
+                                "image": f"/api/video/frame/{it['keyframe_id']}"})
+            elif it.get("steps"):              # nhánh temporal: chuỗi cảnh đúng thứ tự
+                chains.append({**it, "steps": [
+                    {**s, "image": f"/api/video/frame/{s['keyframe_id']}"}
+                    for s in it["steps"]]})
+        meta = dict(run.meta or {})
+        clar = [{"id": i, "image": f"/api/video/frame/{i}"}
+                for i in (meta.get("need_clarification") or [])]
+        # Temporal có thể ra hàng chục tổ hợp -> chỉ vẽ vài chuỗi đầu cho đỡ nghẽn UI,
+        # nhưng VẪN báo tổng số thật (chains_total) thay vì lặng lẽ cắt bớt.
+        return {"query": run.query, "answer": run.answer,
+                "tools_used": run.tools_used(), "steps": steps,
+                "route": meta.get("route"), "results": results,
+                "chains": chains[:AGENT_MAX_CHAINS], "chains_total": len(chains),
+                "clarify": clar, "cited": meta.get("cited_frame_ids") or [],
+                "memory": meta.get("memory") or {}}
+
+    @app.post("/api/agent/ask")
+    def agent_ask():
+        data = request.json or {}
+        vid = data.get("video", "")
+        entry = video_state["videos"].get(vid)
+        if entry is None:
+            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        agent = _get_agent(entry, vid)
+        query = (data.get("query") or "").strip()
+        if not query:   # lượt chỉ-phản-hồi -> dùng lại câu hỏi gần nhất trong trí nhớ
+            recent = agent.memory.recent(1) if agent.memory else []
+            query = recent[0].query if recent else ""
+        if not query:
+            return jsonify(error="Nhập câu để Agent tìm."), 400
+        run = agent.chat(
+            query,
+            positive_ids=[i for i in (data.get("positive") or []) if i],
+            negative_ids=[i for i in (data.get("negative") or []) if i],
+        )
+        return jsonify(_agent_json(run))
+
+    @app.post("/api/agent/reset")
+    def agent_reset():
+        agent_state["agent"] = None
+        agent_state["video"] = None
         return jsonify(ok=True)
 
     @app.get("/api/video/frame/<path:frame_id>")

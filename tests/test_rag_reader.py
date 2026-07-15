@@ -50,6 +50,27 @@ def test_mock_reader_without_text_signal_still_grounds_by_location() -> None:
     assert "[a]" in ans.answer and "vid9" in ans.answer  # vẫn dẫn id + vị trí
 
 
+def test_mock_reader_handles_temporal_chains() -> None:
+    """Hồi quy: kết quả từ search_temporal có shape {video_id, steps[]} — KHÔNG có
+    'keyframe_id'. Trước đây Reader sập KeyError, làm hỏng cả vòng Agent với truy vấn
+    'A trước khi B'."""
+    chains = [{"video_id": "v1", "total_score": 1.2, "steps": [
+        {"event": "cởi mũ", "keyframe_id": "a", "timestamp": 1.0},
+        {"event": "vào phòng", "keyframe_id": "b", "timestamp": 4.0}]}]
+    ans = MockReader().read("cởi mũ trước khi vào phòng", chains, _entry())
+    assert ans.cited_frame_ids == ["a", "b"]
+    assert "[a]" in ans.answer and "[b]" in ans.answer and "→" in ans.answer
+    assert "chuỗi" in ans.answer.lower()
+
+
+def test_claude_reader_skips_chain_items_without_keyframe(monkeypatch) -> None:
+    """ClaudeReader cũng không được sập khi gặp kết quả dạng chuỗi."""
+    chains = [{"video_id": "v1", "steps": [{"event": "x", "keyframe_id": "a", "timestamp": 1.0}]}]
+    fake = _FakeClaude("ok")
+    ans = ClaudeReader(client=fake).read("q", chains, _entry())
+    assert ans.answer == "ok" and ans.cited_frame_ids == []
+
+
 # --------------------------------- ClaudeReader ------------------------------
 class _FakeClaude:
     def __init__(self, text):

@@ -193,3 +193,15 @@ def test_chat_carries_feedback_into_rocchio_next_turn(agent) -> None:
 def test_run_does_not_touch_memory(agent) -> None:
     agent.run("cảnh màu đỏ")           # run() là fast-path, không tạo memory
     assert agent.memory is None
+
+
+def test_chat_handles_temporal_results_with_reader(agent) -> None:
+    """Hồi quy: nhánh temporal trả CHUỖI ({video_id, steps[]}) chứ không có
+    'keyframe_id'. Cả Reader lẫn ghi-Turn từng sập KeyError ở đây."""
+    from retrieval.vqa_module import MockReader
+    agent.reader = MockReader()
+    run = agent.chat("cảnh đỏ trước khi cảnh xanh dương")
+    assert run.meta["route"] == "search_temporal"
+    assert run.meta["memory"]["turns"] == 1        # ghi Turn thành công
+    if run.results:                                # có chuỗi -> Reader diễn giải được
+        assert run.answer and "chuỗi" in run.answer.lower()

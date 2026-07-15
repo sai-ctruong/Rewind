@@ -157,14 +157,40 @@ def test_filter_reset_ok_even_without_session(client) -> None:
     assert client.post("/api/filter/reset", json={}).get_json()["ok"] is True
 
 
+# ----------------------------- Agent (/api/agent/*) ---------------------------
+# Vòng lặp Agent được test đầy đủ ở tests/test_search_agent.py (engine mock, offline).
+# Ở đây kiểm tầng HTTP: guard khi chưa nạp video / thiếu câu, và reset.
+def test_agent_ask_requires_loaded_video(client) -> None:
+    r = client.post("/api/agent/ask", json={"video": "chua_nap", "query": "phố"})
+    assert r.status_code == 400
+    assert "Nạp video" in r.get_json()["error"]
+
+
+def test_agent_reset_ok(client) -> None:
+    assert client.post("/api/agent/reset", json={}).get_json()["ok"] is True
+
+
 # ------------------------------- Frontend asset ------------------------------
 def test_index_html_exists_and_wires_apis() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
     for hook in ("/api/health", "/api/vqa", "/api/video/list", "/api/video/search",
                  "/api/video/index_folder", "/api/video/temporal",
                  "/api/video/search_image", "/api/video/neighbors/",
-                 "/api/filter/start", "/api/filter/refine", "/api/filter/reset"):
+                 "/api/filter/start", "/api/filter/refine", "/api/filter/reset",
+                 "/api/agent/ask", "/api/agent/reset"):
         assert hook in html
+
+
+def test_agent_tab_shows_tool_trace_and_memory() -> None:
+    """Tab Agent phải phơi đúng thứ làm nên 'smart path': trace tool đã gọi, trí nhớ
+    phiên, đáp án của Reader, và panel Agent chủ động hỏi lại."""
+    html = (UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'data-view="agent"' in html and 'id="view-agent"' in html
+    assert 'id="agent-trace"' in html and "renderTrace" in html   # Agent đã gọi tool nào
+    assert 'id="agent-mem"' in html                               # trí nhớ xuyên lượt
+    assert 'id="agent-answer"' in html                            # đáp án Reader
+    assert 'id="agent-clarify"' in html                           # hỏi lại khi mơ hồ
+    assert 'id="agent-chains"' in html and "renderChains" in html # nhánh temporal
     assert "data-theme" in html
     # Q1/Q2: ô tải ảnh + canvas phác hoạ (đều tìm qua /api/video/search_image).
     assert 'id="video-imgfile"' in html and 'id="video-sketch"' in html

@@ -102,6 +102,22 @@ class AgentRun:
 Recorder = Callable[[AgentAction, Optional[ToolResult]], None]
 
 
+def _result_ids(results: Sequence[dict]) -> list[str]:
+    """Rút keyframe_id từ kết quả tool — chịu được CẢ HAI dạng.
+
+    `search`/`search_by_image`… trả keyframe PHẲNG ({keyframe_id,…}); `search_temporal`
+    trả CHUỖI ({video_id, steps:[{keyframe_id,…}]}). Ai cũng dễ quên dạng thứ hai nên
+    gom về một chỗ: truy vấn "A trước khi B" từng làm sập cả vòng chat vì chỗ này."""
+    ids: list[str] = []
+    for it in results:
+        if it.get("keyframe_id"):
+            ids.append(it["keyframe_id"])
+        else:
+            ids.extend(s["keyframe_id"] for s in (it.get("steps") or [])
+                       if s.get("keyframe_id"))
+    return ids
+
+
 # ----------------------------------------------------------------------------- planner ABC
 
 
@@ -341,7 +357,7 @@ class SearchAgent:
                             context=self.memory.feedback_context())
         self.memory.record(Turn(
             query=query, route=run.meta.get("route"),
-            result_ids=[it["keyframe_id"] for it in run.results],
+            result_ids=_result_ids(run.results),
             positive_ids=list(positive_ids), negative_ids=list(negative_ids),
             answer=run.answer,
         ))

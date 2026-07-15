@@ -187,6 +187,24 @@
   .fgrid.pick .fcard:hover { border-color: var(--accent); }
   .shrink { font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
   .fbbar { padding: 0 12px 14px; }
+  /* --- Tab Agent: kết quả bên trái, trace + trí nhớ bên phải --- */
+  .agent-grid { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+  @media (max-width: 980px) { .agent-grid { grid-template-columns: 1fr; } }
+  .ans-text { padding: 4px 18px 18px; white-space: pre-wrap; line-height: 1.6; font-size: 14.5px; }
+  .trace { margin: 0; padding: 6px 18px 18px 34px; display: flex; flex-direction: column; gap: 10px; }
+  .trace li { font-size: 13px; }
+  .trace li.empty { list-style: none; margin-left: -16px; color: var(--muted); }
+  .trace .tool { font-family: var(--mono); font-weight: 650; color: var(--accent); }
+  .trace .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .trace .n { color: var(--faint); font-size: 11.5px; font-family: var(--mono); }
+  .mem { padding: 4px 18px 18px; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+  .mem b { color: var(--ink); font-weight: 600; }
+  .chain { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0 12px 10px;
+    padding: 10px; display: flex; gap: 8px; align-items: center; overflow-x: auto; }
+  .chain .step { flex: 0 0 130px; }
+  .chain .step img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; display: block; }
+  .chain .step .lb { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
+  .chain .arrow { color: var(--accent); font-weight: 700; }
   .cands { padding: 6px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .cand { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
     border: 1px solid var(--border); background: var(--surface); }
@@ -287,6 +305,7 @@
         <button role="tab" aria-selected="false" data-view="vqa">VQA</button>
         <button role="tab" aria-selected="false" data-view="video">🎥 Video</button>
         <button role="tab" aria-selected="false" data-view="temporal">⏱️ Chuỗi</button>
+        <button role="tab" aria-selected="false" data-view="agent">🧠 Agent</button>
       </nav>
       <div class="util">
         <span class="pill" id="status"><span class="dot"></span><span id="status-text">Đang kiểm tra…</span></span>
@@ -531,6 +550,64 @@
       </div>
     </section>
 
+    <!-- ================= AGENT (smart path) ================= -->
+    <section class="view" id="view-agent" role="tabpanel">
+      <div class="hero">
+        <h1>Agent <em>tự chọn cách tìm</em></h1>
+        <p>Gõ một câu — Agent tự hiểu và tự quyết dùng công cụ nào: tìm theo chữ, theo
+           thứ tự thời gian, hay hỏi lại khi mơ hồ. Nó nhớ phản hồi của bạn qua các lượt
+           và trả lời kèm dẫn chứng keyframe.</p>
+      </div>
+      <div class="notice" id="agent-offline" style="display:none">
+        Tính năng này cần <b>backend</b>. Chạy <code>python -m ui.app</code>.
+      </div>
+      <div id="agent-live">
+        <div class="controls">
+          <select class="vsel" id="agent-select"><option>Đang tải…</option></select>
+          <button class="btn ghost" id="agent-load">Nạp video</button>
+          <span class="vstatus" id="agent-status"></span>
+          <button class="btn ghost" id="agent-reset" title="Quên phiên + trí nhớ, bắt đầu lại">↺ Phiên mới</button>
+        </div>
+        <form class="search-bar" id="agent-form">
+          <input id="agent-query" autocomplete="off"
+            placeholder="VD: người cởi mũ trước khi vào phòng — Agent tự chọn tìm theo thứ tự" />
+          <button class="btn" type="submit" id="agent-send">Hỏi Agent</button>
+        </form>
+        <div class="agent-grid">
+          <div>
+            <div class="card" id="agent-answer-card" style="display:none;margin-bottom:14px">
+              <div class="hd"><span class="eyebrow">Trả lời</span></div>
+              <div class="ans-text" id="agent-answer"></div>
+            </div>
+            <div class="card" id="agent-clarify-card" style="display:none;margin-bottom:14px">
+              <div class="hd"><span class="eyebrow">Agent hỏi lại: cái nào gần ý bạn nhất?</span></div>
+              <div class="fgrid pick" id="agent-clarify"></div>
+            </div>
+            <div class="card">
+              <div class="hd"><span class="eyebrow">Kết quả</span><span class="shrink" id="agent-count"></span></div>
+              <div class="fgrid" id="agent-results">
+                <div class="empty">Chọn video, nạp, rồi hỏi Agent một câu.</div>
+              </div>
+              <div id="agent-chains"></div>
+              <div class="fbbar" id="agent-fbbar" style="display:none">
+                <button class="btn" id="agent-apply" type="button">🔁 Hỏi lại theo phản hồi</button>
+              </div>
+            </div>
+          </div>
+          <aside class="panel">
+            <div class="card">
+              <div class="hd"><span class="eyebrow">Agent đã làm gì</span></div>
+              <ol class="trace" id="agent-trace"><li class="empty">Chưa chạy lượt nào.</li></ol>
+            </div>
+            <div class="card">
+              <div class="hd"><span class="eyebrow">Trí nhớ phiên</span></div>
+              <div class="mem" id="agent-mem">—</div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
     <div class="foot">
       <span>Pipeline: Query Understanding → Coarse (CLIP+SigLIP+BM25) → RRF → LVLM rerank → Temporal check.</span>
       <span id="mode-note"><code>—</code></span>
@@ -607,6 +684,9 @@
     filterStart: (video, query) => post("/api/filter/start", { video, query }),
     filterRefine: (payload) => post("/api/filter/refine", payload),
     filterReset: () => post("/api/filter/reset", {}),
+    // Agent (smart path): tự chọn tool + nhớ xuyên lượt + đáp án có dẫn chứng.
+    agentAsk: (payload) => post("/api/agent/ask", payload),
+    agentReset: () => post("/api/agent/reset", {}),
     async vqa(question) { if (LIVE) return post("/api/vqa", { question });
       return simVqa(question); },
   };
@@ -642,28 +722,32 @@
     $("#kisc-apply").textContent = "🔁 Lọc theo phản hồi (👍" + F.fb.pos.size + " 👎" + F.fb.neg.size + ")";
   }
 
-  /* Một thẻ ẢNH THẬT. opts.pick=true -> thẻ trong panel "chọn ảnh gần ý nhất". */
+  /* Một thẻ ẢNH THẬT — dùng chung cho bộ lọc ảnh (tab KISC) và tab Agent.
+     opts.pick=true  -> thẻ bấm-để-chọn (panel "cái nào gần ý nhất?"), gọi opts.onPick.
+     opts.fb/onChange -> trạng thái 👍/👎 của tab gọi (mặc định: bộ lọc ảnh). */
   function frameCard(it, opts) {
+    opts = opts || {};
     const c = el("div", "fcard");
     const img = el("img"); img.src = it.image; img.alt = it.id; img.loading = "lazy";
     const meta = el("div", "fmeta");
-    meta.innerHTML = "<span>" + it.video_id + " · " + it.timestamp + "s</span>" +
+    meta.innerHTML = "<span>" + (it.video_id || "") + (it.timestamp != null ? " · " + it.timestamp + "s" : "") + "</span>" +
       (typeof it.score === "number" ? "<span>" + it.score.toFixed(2) + "</span>" : "");
     c.append(img, meta);
-    if (opts && opts.pick) { c.addEventListener("click", () => applyPick(it.id)); return c; }
-    const fb = el("div", "fb");
+    if (opts.pick) { c.addEventListener("click", () => (opts.onPick || applyPick)(it.id)); return c; }
+    const fb = opts.fb || F.fb, onChange = opts.onChange || fbBarSync;
+    const bar = el("div", "fb");
     const up = el("button"), dn = el("button");
     up.type = dn.type = "button"; up.textContent = "👍"; dn.textContent = "👎";
     const sync = () => {
-      up.classList.toggle("on", F.fb.pos.has(it.id)); dn.classList.toggle("on", F.fb.neg.has(it.id));
-      c.classList.toggle("up", F.fb.pos.has(it.id)); c.classList.toggle("down", F.fb.neg.has(it.id));
-      fbBarSync();
+      up.classList.toggle("on", fb.pos.has(it.id)); dn.classList.toggle("on", fb.neg.has(it.id));
+      c.classList.toggle("up", fb.pos.has(it.id)); c.classList.toggle("down", fb.neg.has(it.id));
+      onChange();
     };
-    up.addEventListener("click", () => { F.fb.neg.delete(it.id);
-      F.fb.pos.has(it.id) ? F.fb.pos.delete(it.id) : F.fb.pos.add(it.id); sync(); });
-    dn.addEventListener("click", () => { F.fb.pos.delete(it.id);
-      F.fb.neg.has(it.id) ? F.fb.neg.delete(it.id) : F.fb.neg.add(it.id); sync(); });
-    fb.append(up, dn); c.append(fb); sync();
+    up.addEventListener("click", () => { fb.neg.delete(it.id);
+      fb.pos.has(it.id) ? fb.pos.delete(it.id) : fb.pos.add(it.id); sync(); });
+    dn.addEventListener("click", () => { fb.pos.delete(it.id);
+      fb.neg.has(it.id) ? fb.neg.delete(it.id) : fb.neg.add(it.id); sync(); });
+    bar.append(up, dn); c.append(bar); sync();
     return c;
   }
 
@@ -753,6 +837,164 @@
     $("#kisc-shrink").textContent = ""; $("#track").style.width = "100%";
     $("#kisc-grid").innerHTML = "<div class='empty'>Mô tả khoảnh khắc để bắt đầu lọc.</div>";
   });
+
+  /* ===================== AGENT UI (smart path) =====================
+     Agent tự chọn tool (understand -> search / search_temporal /
+     search_with_feedback -> disambiguation), nhớ phản hồi xuyên lượt, và Reader
+     tổng hợp đáp án có trích dẫn. Backend: /api/agent/*. */
+  const A = { fb: { pos: new Set(), neg: new Set() } };
+
+  function agentFbSync() {
+    const n = A.fb.pos.size + A.fb.neg.size;
+    $("#agent-fbbar").style.display = n ? "block" : "none";
+    $("#agent-apply").textContent = "🔁 Hỏi lại theo phản hồi (👍" + A.fb.pos.size + " 👎" + A.fb.neg.size + ")";
+  }
+
+  function renderTrace(steps) {
+    const t = $("#agent-trace"); t.innerHTML = "";
+    if (!steps || !steps.length) { t.innerHTML = "<li class='empty'>Chưa chạy lượt nào.</li>"; return; }
+    steps.forEach(s => {
+      const li = el("li");
+      const head = s.kind === "finish" ? "<span class='tool'>✓ xong</span>"
+        : "<span class='tool'>" + s.tool + "</span>"
+          + (s.n != null ? " <span class='n'>→ " + s.n + " kết quả</span>" : "")
+          + (s.ok === false ? " <span class='n'>⚠ lỗi</span>" : "");
+      li.innerHTML = head + (s.rationale ? "<div class='why'>" + s.rationale + "</div>" : "");
+      t.append(li);
+    });
+  }
+
+  function renderChains(chains) {
+    const box = $("#agent-chains"); box.innerHTML = "";
+    (chains || []).forEach(ch => {
+      const d = el("div", "chain");
+      ch.steps.forEach((s, i) => {
+        if (i) { const a = el("span", "arrow"); a.textContent = "→"; d.append(a); }
+        const st = el("div", "step");
+        st.innerHTML = "<img src='" + s.image + "' alt='' loading='lazy'>"
+          + "<div class='lb'>" + s.timestamp + "s · " + (s.event || "") + "</div>";
+        d.append(st);
+      });
+      box.append(d);
+    });
+  }
+
+  function renderAgent(j) {
+    A.fb.pos.clear(); A.fb.neg.clear(); agentFbSync();
+    // Đáp án của Reader (có trích dẫn keyframe)
+    const ac = $("#agent-answer-card");
+    if (j.answer) { $("#agent-answer").textContent = j.answer; ac.style.display = ""; }
+    else ac.style.display = "none";
+    renderTrace(j.steps);
+    // Trí nhớ phiên
+    const m = j.memory || {};
+    $("#agent-mem").innerHTML = m.turns
+      ? "<b>" + m.turns + "</b> lượt · 👍 <b>" + (m.positive_ids || []).length
+        + "</b> · 👎 <b>" + (m.negative_ids || []).length + "</b>"
+        + ((m.recent_queries || []).length ? "<br>Gần đây: " + m.recent_queries.join(" › ") : "")
+      : "—";
+    // Kết quả: lưới ảnh (nhánh phẳng) hoặc chuỗi thời gian
+    const g = $("#agent-results"); g.innerHTML = "";
+    const n = (j.results || []).length, nc = (j.chains || []).length;
+    const tot = j.chains_total || nc;
+    $("#agent-count").textContent = nc
+      ? (tot > nc ? tot + " chuỗi (hiện " + nc + ")" : nc + " chuỗi")
+      : (n ? n + " ảnh" : "");
+    if (n) j.results.forEach(it => g.append(frameCard(it, { fb: A.fb, onChange: agentFbSync })));
+    else if (!nc) g.innerHTML = "<div class='empty'>Agent không tìm thấy kết quả nào.</div>";
+    renderChains(j.chains);
+    // Agent chủ động hỏi lại
+    const cc = $("#agent-clarify-card"), cg = $("#agent-clarify");
+    if ((j.clarify || []).length) {
+      cg.innerHTML = "";
+      j.clarify.forEach(c => cg.append(frameCard(c, { pick: true, onPick: agentPick })));
+      cc.style.display = "";
+    } else cc.style.display = "none";
+  }
+
+  async function agentAsk(body, label) {
+    const st = $("#agent-status"); const old = st.textContent;
+    st.textContent = "🧠 Agent đang suy nghĩ…"; $("#agent-send").disabled = true;
+    let j;
+    try { j = await api.agentAsk(body); } catch (e) { j = { error: "Lỗi kết nối backend." }; }
+    $("#agent-send").disabled = false;
+    if (!j || j.error) { st.textContent = "✗ " + ((j && j.error) || "Lỗi"); return; }
+    st.textContent = old || "";
+    renderAgent(j);
+  }
+
+  function agentVideoKey() {
+    const v = $("#agent-select").value || "";
+    return v === "__dataset__" ? "__dataset__" : stem(v);
+  }
+
+  function agentPick(id) {
+    // Chọn 1 ảnh khi Agent hỏi lại -> coi là 👍 mạnh, các lựa chọn khác là 👎.
+    // LUÔN gửi kèm câu đang hiển thị: nếu để server tự lấy "câu gần nhất" thì lượt
+    // trước lỡ là truy vấn khác loại (vd temporal) sẽ định tuyến sai.
+    const others = [...$("#agent-clarify").querySelectorAll("img")].map(i => i.alt).filter(x => x && x !== id);
+    agentAsk({ video: agentVideoKey(), query: $("#agent-query").value.trim(),
+               positive: [id], negative: others });
+  }
+
+  function setupAgentTab() {
+    if (!LIVE) { $("#agent-live").style.display = "none"; $("#agent-offline").style.display = "block"; return; }
+    const sel = $("#agent-select"), st = $("#agent-status");
+    const sync = () => { const k = agentVideoKey();
+      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — hỏi Agent một câu." : ""; };
+    const refresh = async () => {
+      try {
+        const j = await (await fetch("/api/video/list")).json();
+        (j.indexed || []).forEach(v => INDEXED.add(v));
+        const cur = sel.value; sel.innerHTML = "";
+        if (!j.videos || !j.videos.length) {
+          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
+          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
+        }
+        const od = el("option"); od.value = "__dataset__";
+        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
+          + (INDEXED.has("__dataset__") ? " ✓" : "");
+        sel.append(od);
+        j.videos.forEach(v => { const o = el("option"); o.value = v;
+          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
+        if (cur) sel.value = cur;
+        sync();
+      } catch (e) { st.textContent = "Không tải được danh sách video."; }
+    };
+    sel.addEventListener("change", sync);
+    $("#agent-load").addEventListener("click", async () => {
+      const name = sel.value; if (!name) return;
+      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
+      const j = await post("/api/video/index", { video: name });
+      if (j.error) { st.textContent = "✗ " + j.error; return; }
+      INDEXED.add(j.video);
+      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — hỏi Agent một câu.";
+      refresh();
+    });
+    $("#agent-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = $("#agent-query").value.trim(); if (!q) return;
+      const k = agentVideoKey();
+      if (!k) { st.textContent = "Chọn video rồi bấm 'Nạp video' trước."; return; }
+      agentAsk({ video: k, query: q });
+    });
+    $("#agent-apply").addEventListener("click", () => {
+      if (!A.fb.pos.size && !A.fb.neg.size) return;
+      agentAsk({ video: agentVideoKey(), query: $("#agent-query").value.trim(),
+                 positive: [...A.fb.pos], negative: [...A.fb.neg] });
+    });
+    $("#agent-reset").addEventListener("click", async () => {
+      try { await api.agentReset(); } catch (e) { /* vẫn dọn phía client */ }
+      A.fb.pos.clear(); A.fb.neg.clear(); agentFbSync();
+      $("#agent-answer-card").style.display = "none";
+      $("#agent-clarify-card").style.display = "none";
+      $("#agent-chains").innerHTML = ""; $("#agent-count").textContent = "";
+      renderTrace([]); $("#agent-mem").textContent = "—";
+      $("#agent-results").innerHTML = "<div class='empty'>Phiên mới — hỏi Agent một câu.</div>";
+      st.textContent = "↺ Đã xoá trí nhớ phiên.";
+    });
+    refresh();
+  }
 
   /* Chọn + nạp video cho tab lọc ảnh (dùng chung API với các tab khác). */
   function setupFilterTab() {
@@ -1294,6 +1536,7 @@
     bubble("bot", "Chào bạn! Chọn video rồi bấm “Nạp video”, sau đó mô tả khoảnh khắc — "
       + "mình sẽ hiện lưới ảnh và thu hẹp dần theo mỗi lượt.");
     setupFilterTab();   // tab KISC = bộ lọc ảnh trên video thật
+    setupAgentTab();    // tab Agent = smart path (tự điều phối tool)
     // Khởi tạo 3 tab tìm-trên-video (chia sẻ cache): Video (tự do), KIS (Top-5), AVS (tất cả).
     setupVideoTab({ key: "video", topk: 8, highlightTop: false });
     setupVideoTab({ key: "kis", topk: 5, highlightTop: true,
