@@ -254,6 +254,15 @@
     color: #fff; background: rgba(0,0,0,.6); padding: 1px 5px; border-radius: 4px; }
   .frame.used { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 
+  /* --- Thanh video CHUNG (nạp 1 lần, mọi tab dùng) --- */
+  .gvbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    padding: 12px 14px; margin-bottom: 18px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface);
+    position: sticky; top: 8px; z-index: 5; }
+  .gvbar .gv-lb { font-size: 12px; font-weight: 650; color: var(--faint);
+    letter-spacing: .4px; text-transform: uppercase; }
+  .gvbar .gv-spacer { flex: 1; }
+
   /* ---------------- Video thật ---------------- */
   .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
   select.vsel { font: inherit; font-size: 14px; padding: 10px 12px; border-radius: 11px;
@@ -300,7 +309,7 @@
     <div class="wrap bar">
       <div class="brand">
         <span class="mark" aria-hidden="true"></span>
-        <span>Trợ lý Truy xuất Đa phương tiện<small>AIC 2026 · KIS · AVS · VQA · KISC</small></span>
+        <span>Rewind<small>Tua lại tìm khoảnh khắc</small></span>
       </div>
       <nav class="tabs" role="tablist" aria-label="Chế độ">
         <button role="tab" aria-selected="true" data-view="kisc">KISC</button>
@@ -319,6 +328,25 @@
   </header>
 
   <main class="wrap">
+    <!-- ===== THANH VIDEO CHUNG: nạp MỘT LẦN, mọi tab dùng chung =====
+         Trước đây mỗi tab có dropdown + nút nạp riêng -> phải chọn/nạp lại ở từng tab
+         dù index đã cache sẵn ở server. Giờ gom về đây: chọn 1 lần, cả 7 tab dùng. -->
+    <div class="gvbar" id="gv-bar">
+      <span class="gv-lb">Video</span>
+      <!-- value="" để lần refresh đầu KHÔNG bị coi là "đã chọn gì đó" (nếu không,
+           nhánh tự-chọn-video-đã-nạp bên dưới sẽ không bao giờ chạy). -->
+      <select class="vsel" id="gv-select"><option value="">Đang tải…</option></select>
+      <button class="btn ghost" id="gv-load">Nạp video</button>
+      <span class="vstatus" id="gv-status"></span>
+      <span class="gv-spacer"></span>
+      <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5×. Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="gv-ocr"> OCR</label>
+      <label class="rerank-tog" title="VLM sinh MÔ TẢ ngữ cảnh mỗi cảnh khi nạp → tìm theo QUAN HỆ/HOÀN CẢNH, và VQA trả lời được. RẤT CHẬM (~vài giây/cảnh)."><input type="checkbox" id="gv-caption"> Caption</label>
+      <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm."><input type="checkbox" id="gv-asr"> ASR</label>
+      <input class="folder-in" id="gv-folder" placeholder="… hoặc dán đường dẫn thư mục dataset, VD: D:\my_videos" />
+      <button class="btn ghost" id="gv-folder-btn">Nạp thư mục</button>
+      <button class="btn ghost" id="gv-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
+    </div>
+
     <!-- ================= KISC ================= -->
     <section class="view active" id="view-kisc" role="tabpanel">
       <div class="hero">
@@ -332,8 +360,6 @@
       </div>
       <div id="kisc-live">
         <div class="controls">
-          <select class="vsel" id="kisc-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="kisc-load">Nạp video</button>
           <span class="vstatus" id="kisc-status"></span>
           <button class="btn ghost" id="kisc-reset" title="Xoá phiên lọc, bắt đầu lại từ đầu">↺ Lọc lại từ đầu</button>
         </div>
@@ -388,16 +414,8 @@
       </div>
       <div id="kis-live">
         <div class="controls">
-          <select class="vsel" id="kis-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="kis-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="kis-rerank"> Rerank VLM</label>
           <span class="vstatus" id="kis-status"></span>
-          <input class="folder-in" id="kis-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
-          <button class="btn ghost" id="kis-folder-btn">Nạp thư mục</button>
-          <button class="btn ghost" id="kis-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
-          <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="kis-ocr"> OCR</label>
-          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH ('người lớn hướng dẫn trẻ tưới hoa'). RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="kis-caption"> Caption</label>
-          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="kis-asr"> ASR</label>
         </div>
         <form class="search-bar" id="kis-form">
           <input id="kis-query" autocomplete="off" placeholder="VD: một chiếc xe hơi trên đường" />
@@ -420,16 +438,8 @@
       </div>
       <div id="avs-live">
         <div class="controls">
-          <select class="vsel" id="avs-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="avs-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="avs-rerank"> Rerank VLM</label>
           <span class="vstatus" id="avs-status"></span>
-          <input class="folder-in" id="avs-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
-          <button class="btn ghost" id="avs-folder-btn">Nạp thư mục</button>
-          <button class="btn ghost" id="avs-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
-          <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="avs-ocr"> OCR</label>
-          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH. RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="avs-caption"> Caption</label>
-          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="avs-asr"> ASR</label>
         </div>
         <form class="search-bar" id="avs-form">
           <input id="avs-query" autocomplete="off" placeholder="VD: cảnh đường phố có xe cộ" />
@@ -455,8 +465,6 @@
       </div>
       <div id="vqa-live">
         <div class="controls">
-          <select class="vsel" id="vqa-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="vqa-load">Nạp video</button>
           <span class="vstatus" id="vqa-status"></span>
         </div>
         <div class="vqa-grid">
@@ -489,16 +497,8 @@
       </div>
       <div id="video-live">
         <div class="controls">
-          <select class="vsel" id="video-select"><option>Đang tải danh sách…</option></select>
-          <button class="btn ghost" id="video-load">Nạp video</button>
           <label class="rerank-tog" title="Dùng VLM (Qwen2-VL) đọc ảnh + hiểu câu để chấm lại — chính xác hơn nhưng chậm trên CPU"><input type="checkbox" id="video-rerank"> Rerank VLM</label>
           <span class="vstatus" id="video-status"></span>
-          <input class="folder-in" id="video-folder" placeholder="… hoặc dán đường dẫn thư mục dataset trên máy, VD: D:\my_videos" />
-          <button class="btn ghost" id="video-folder-btn">Nạp thư mục</button>
-          <button class="btn ghost" id="video-save" title="Lưu index ra đĩa — lần sau mở app tự nạp lại, không embed lại">💾 Lưu index</button>
-          <label class="rerank-tog" title="Đọc chữ/biển hiệu (OCR) khi nạp — CHẬM ~5× (0.2s/frame). Chỉ bật khi cần tìm theo chữ trên biển hiệu."><input type="checkbox" id="video-ocr"> OCR</label>
-          <label class="rerank-tog" title="VLM (Qwen2-VL) sinh MÔ TẢ ngữ cảnh cho mỗi cảnh khi nạp → tìm được theo QUAN HỆ + HOÀN CẢNH ('người lớn hướng dẫn trẻ tưới hoa'). RẤT CHẬM (~vài giây/cảnh), chỉ nên dùng cho video ngắn."><input type="checkbox" id="video-caption"> Caption</label>
-          <label class="rerank-tog" title="Chép lời nói (Whisper) khi nạp — tìm theo điều người ta NÓI. Chậm, cần openai-whisper."><input type="checkbox" id="video-asr"> ASR</label>
         </div>
         <form class="search-bar" id="video-form">
           <input id="video-query" autocomplete="off"
@@ -548,8 +548,6 @@
       </div>
       <div id="temporal-live">
         <div class="controls">
-          <select class="vsel" id="temporal-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="temporal-load">Nạp video</button>
           <span class="vstatus" id="temporal-status"></span>
         </div>
         <form class="search-bar" id="temporal-form" style="align-items:flex-start">
@@ -578,8 +576,6 @@
       </div>
       <div id="agent-live">
         <div class="controls">
-          <select class="vsel" id="agent-select"><option>Đang tải…</option></select>
-          <button class="btn ghost" id="agent-load">Nạp video</button>
           <span class="vstatus" id="agent-status"></span>
           <button class="btn ghost" id="agent-reset" title="Quên phiên + trí nhớ, bắt đầu lại">↺ Phiên mới</button>
         </div>
@@ -652,8 +648,6 @@
     b.setAttribute("aria-selected", "true");
     document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
     $("#view-" + b.dataset.view).classList.add("active");
-    // Đồng bộ danh sách/trạng thái video khi mở tab video/kis/avs (chia sẻ cache).
-    if (typeof VTABS !== "undefined" && VTABS[b.dataset.view]) VTABS[b.dataset.view].refresh();
   }));
 
   /* =====================================================================
@@ -787,10 +781,6 @@
       s => "Đã thu hẹp quanh ảnh bạn chọn — còn " + s.count + " ảnh.");
   }
 
-  function currentVideoKey() {
-    const v = $("#kisc-select").value || "";
-    return v === "__dataset__" ? "__dataset__" : stem(v);
-  }
 
   $("#kisc-apply").addEventListener("click", async () => {
     const pos = [...F.fb.pos], neg = [...F.fb.neg];
@@ -804,8 +794,8 @@
     e.preventDefault();
     const inp = $("#kisc-input"), v = inp.value.trim();
     if (!v) return;
-    const key = currentVideoKey();
-    if (!key) { bubble("bot", "Chọn video rồi bấm 'Nạp video' trước."); return; }
+    const key = currentVideo();
+    if (!videoReady()) { bubble("bot", "Chọn video ở thanh trên rồi bấm “Nạp video”."); return; }
     inp.value = ""; bubble("user", v);
     if (!F.started) {
       F.max = 0; prevCount = null;
@@ -834,7 +824,7 @@
      Agent tự chọn tool (understand -> search / search_temporal /
      search_with_feedback -> disambiguation), nhớ phản hồi xuyên lượt, và Reader
      tổng hợp đáp án có trích dẫn. Backend: /api/agent/*. */
-  const A = { fb: { pos: new Set(), neg: new Set() } };
+  const A = { started: false, fb: { pos: new Set(), neg: new Set() } };
 
   function agentFbSync() {
     const n = A.fb.pos.size + A.fb.neg.size;
@@ -872,6 +862,7 @@
   }
 
   function renderAgent(j) {
+    A.started = true;                 // đã có phiên -> đổi video thì phải reset
     A.fb.pos.clear(); A.fb.neg.clear(); agentFbSync();
     // Đáp án của Reader (có trích dẫn keyframe)
     const ac = $("#agent-answer-card");
@@ -915,64 +906,35 @@
     renderAgent(j);
   }
 
-  function agentVideoKey() {
-    const v = $("#agent-select").value || "";
-    return v === "__dataset__" ? "__dataset__" : stem(v);
-  }
 
   function agentPick(id) {
     // Chọn 1 ảnh khi Agent hỏi lại -> coi là 👍 mạnh, các lựa chọn khác là 👎.
     // LUÔN gửi kèm câu đang hiển thị: nếu để server tự lấy "câu gần nhất" thì lượt
     // trước lỡ là truy vấn khác loại (vd temporal) sẽ định tuyến sai.
     const others = [...$("#agent-clarify").querySelectorAll("img")].map(i => i.alt).filter(x => x && x !== id);
-    agentAsk({ video: agentVideoKey(), query: $("#agent-query").value.trim(),
+    agentAsk({ video: currentVideo(), query: $("#agent-query").value.trim(),
                positive: [id], negative: others });
   }
 
   function setupAgentTab() {
     if (!LIVE) { $("#agent-live").style.display = "none"; $("#agent-offline").style.display = "block"; return; }
-    const sel = $("#agent-select"), st = $("#agent-status");
-    const sync = () => { const k = agentVideoKey();
-      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — hỏi Agent một câu." : ""; };
-    const refresh = async () => {
-      try {
-        const j = await (await fetch("/api/video/list")).json();
-        (j.indexed || []).forEach(v => INDEXED.add(v));
-        const cur = sel.value; sel.innerHTML = "";
-        if (!j.videos || !j.videos.length) {
-          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
-          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
-        }
-        const od = el("option"); od.value = "__dataset__";
-        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
-          + (INDEXED.has("__dataset__") ? " ✓" : "");
-        sel.append(od);
-        j.videos.forEach(v => { const o = el("option"); o.value = v;
-          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
-        if (cur) sel.value = cur;
-        sync();
-      } catch (e) { st.textContent = "Không tải được danh sách video."; }
-    };
-    sel.addEventListener("change", sync);
-    $("#agent-load").addEventListener("click", async () => {
-      const name = sel.value; if (!name) return;
-      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
-      const j = await post("/api/video/index", { video: name });
-      if (j.error) { st.textContent = "✗ " + j.error; return; }
-      INDEXED.add(j.video);
-      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — hỏi Agent một câu.";
-      refresh();
+    const st = $("#agent-status");
+    // Video lấy từ THANH CHUNG; đổi video -> phiên/trí nhớ Agent của video CŨ vô nghĩa.
+    // Chỉ reset khi ĐÃ có phiên (tránh bắn POST thừa lúc khởi động), và đặt trạng thái
+    // SAU cùng để không bị handler reset ghi đè.
+    onVideoChange(() => {
+      if (A.started) { $("#agent-reset").click(); A.started = false; }
+      st.textContent = videoReady() ? "✓ Hỏi Agent một câu." : "";
     });
     $("#agent-form").addEventListener("submit", (e) => {
       e.preventDefault();
       const q = $("#agent-query").value.trim(); if (!q) return;
-      const k = agentVideoKey();
-      if (!k) { st.textContent = "Chọn video rồi bấm 'Nạp video' trước."; return; }
-      agentAsk({ video: k, query: q });
+      if (!videoReady()) { st.textContent = "Chọn video ở thanh trên rồi bấm “Nạp video”."; return; }
+      agentAsk({ video: currentVideo(), query: q });
     });
     $("#agent-apply").addEventListener("click", () => {
       if (!A.fb.pos.size && !A.fb.neg.size) return;
-      agentAsk({ video: agentVideoKey(), query: $("#agent-query").value.trim(),
+      agentAsk({ video: currentVideo(), query: $("#agent-query").value.trim(),
                  positive: [...A.fb.pos], negative: [...A.fb.neg] });
     });
     $("#agent-reset").addEventListener("click", async () => {
@@ -985,45 +947,16 @@
       $("#agent-results").innerHTML = "<div class='empty'>Phiên mới — hỏi Agent một câu.</div>";
       st.textContent = "↺ Đã xoá trí nhớ phiên.";
     });
-    refresh();
   }
 
-  /* Chọn + nạp video cho tab lọc ảnh (dùng chung API với các tab khác). */
+  /* Tab lọc ảnh: video lấy từ THANH CHUNG; đổi video -> xoá phiên lọc cũ. */
   function setupFilterTab() {
     if (!LIVE) { $("#kisc-live").style.display = "none"; $("#kisc-offline").style.display = "block"; return; }
-    const sel = $("#kisc-select"), st = $("#kisc-status");
-    const sync = () => { const k = currentVideoKey();
-      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — mô tả khoảnh khắc để lọc." : ""; };
-    const refresh = async () => {
-      try {
-        const j = await (await fetch("/api/video/list")).json();
-        (j.indexed || []).forEach(v => INDEXED.add(v));
-        const cur = sel.value; sel.innerHTML = "";
-        if (!j.videos || !j.videos.length) {
-          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
-          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
-        }
-        const od = el("option"); od.value = "__dataset__";
-        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
-          + (INDEXED.has("__dataset__") ? " ✓" : "");
-        sel.append(od);
-        j.videos.forEach(v => { const o = el("option"); o.value = v;
-          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
-        if (cur) sel.value = cur;
-        sync();
-      } catch (e) { st.textContent = "Không tải được danh sách video."; }
-    };
-    sel.addEventListener("change", sync);
-    $("#kisc-load").addEventListener("click", async () => {
-      const name = sel.value; if (!name) return;
-      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
-      const j = await post("/api/video/index", { video: name });
-      if (j.error) { st.textContent = "✗ " + j.error; return; }
-      INDEXED.add(j.video);
-      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — mô tả để bắt đầu lọc.";
-      refresh();
+    const st = $("#kisc-status");
+    onVideoChange(() => {
+      st.textContent = videoReady() ? "✓ Mô tả khoảnh khắc để bắt đầu lọc." : "";
+      if (F.started) $("#kisc-reset").click();   // video khác -> phiên lọc cũ vô nghĩa
     });
-    refresh();
   }
 
   /* KIS/AVS giờ tìm trên VIDEO THẬT — xử lý chung ở setupVideoTab bên dưới. */
@@ -1033,10 +966,6 @@
      rồi mới trả lời, và trả về CHÍNH các ảnh đã dùng để suy luận. */
   const SUGG = ["Có bao nhiêu người đi bộ?", "Chuyện gì đang diễn ra?", "Ai đang cầm ô?"];
 
-  function vqaVideoKey() {
-    const v = $("#vqa-select").value || "";
-    return v === "__dataset__" ? "__dataset__" : stem(v);
-  }
 
   function renderFilm(frames, used) {
     const f = $("#vqa-film"); f.innerHTML = "";
@@ -1051,48 +980,23 @@
 
   function setupVqaTab() {
     if (!LIVE) { $("#vqa-live").style.display = "none"; $("#vqa-offline").style.display = "block"; return; }
-    const sel = $("#vqa-select"), st = $("#vqa-status");
+    const st = $("#vqa-status");
     const sg = $("#vqa-suggest");
     SUGG.forEach(q => { const b = el("button"); b.textContent = q;
       b.onclick = () => { $("#vqa-input").value = q; $("#vqa-form").requestSubmit(); }; sg.append(b); });
-    const sync = () => { const k = vqaVideoKey();
-      st.textContent = k && INDEXED.has(k) ? "✓ Sẵn sàng — đặt câu hỏi." : ""; };
-    const refresh = async () => {
-      try {
-        const j = await (await fetch("/api/video/list")).json();
-        (j.indexed || []).forEach(v => INDEXED.add(v));
-        const cur = sel.value; sel.innerHTML = "";
-        if (!j.videos || !j.videos.length) {
-          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
-          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
-        }
-        const od = el("option"); od.value = "__dataset__";
-        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
-          + (INDEXED.has("__dataset__") ? " ✓" : "");
-        sel.append(od);
-        j.videos.forEach(v => { const o = el("option"); o.value = v;
-          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
-        if (cur) sel.value = cur;
-        sync();
-      } catch (e) { st.textContent = "Không tải được danh sách video."; }
-    };
-    sel.addEventListener("change", sync);
-    $("#vqa-load").addEventListener("click", async () => {
-      const name = sel.value; if (!name) return;
-      st.textContent = "⏳ Đang nạp video (lần đầu có thể lâu)…";
-      const j = await post("/api/video/index", { video: name });
-      if (j.error) { st.textContent = "✗ " + j.error; return; }
-      INDEXED.add(j.video);
-      st.textContent = "✓ Đã nạp " + (j.frames || 0) + " keyframe — đặt câu hỏi.";
-      refresh();
+    // Video lấy từ THANH CHUNG; đổi video -> xoá câu trả lời + cửa sổ của video cũ.
+    onVideoChange(() => {
+      st.textContent = videoReady() ? "✓ Đặt câu hỏi." : "";
+      $("#vqa-big").textContent = "—"; $("#vqa-why").textContent = "Nạp video rồi đặt câu hỏi.";
+      $("#vqa-hint").style.display = "none"; renderFilm([], []);
+      $("#vqa-window").textContent = "Cửa sổ keyframe";
     });
     $("#vqa-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const v = $("#vqa-input").value.trim(); if (!v) return;
-      const k = vqaVideoKey();
-      if (!k) { st.textContent = "Chọn video rồi bấm 'Nạp video' trước."; return; }
+      if (!videoReady()) { st.textContent = "Chọn video ở thanh trên rồi bấm “Nạp video”."; return; }
       $("#vqa-big").textContent = "…"; $("#vqa-why").textContent = "";
-      const a = await post("/api/video/vqa", { video: k, question: v });
+      const a = await post("/api/video/vqa", { video: currentVideo(), question: v });
       if (a.error) { $("#vqa-big").textContent = "—"; $("#vqa-why").textContent = a.error; return; }
       $("#vqa-big").textContent = a.value != null ? a.value : a.answer;
       $("#vqa-why").textContent = a.reasoning || "";
@@ -1105,51 +1009,71 @@
       if (!a.claude && !a.has_text) {
         hint.innerHTML = "⚠️ Video này chưa có <b>caption/OCR/ASR</b> và chưa có "
           + "<code>ANTHROPIC_API_KEY</code>. Hệ chỉ suy luận trên CHỮ nên gần như không "
-          + "trả lời được. Hãy nạp lại video có bật <b>Caption</b> (tab 🎥 Video), "
+          + "trả lời được. Hãy tick <b>Caption</b> ở thanh video trên rồi nạp lại, "
           + "hoặc đặt API key để dùng Claude vision (nhìn thẳng ảnh).";
         hint.style.display = "";
       } else hint.style.display = "none";
     });
-    refresh();
   }
 
-  /* ============ VIDEO THẬT — dùng chung cho tab Video / KIS / AVS ============ */
+  /* ============ VIDEO THẬT — dùng chung cho mọi tab ============ */
   const INDEXED = new Set();        // các video đã index sẵn phía server (chia sẻ)
   function stem(name) { return name.replace(/\.mp4$/i, ""); }
-  const VTABS = {};                 // key -> instance (để refresh khi đổi tab)
 
-  function setupVideoTab(cfg) {
-    const q = (s) => $("#" + cfg.key + "-" + s);
-    const live = q("live"), offline = q("offline");
-    if (!LIVE) { if (live) live.style.display = "none"; if (offline) offline.style.display = "block"; return; }
+  /* ===================== THANH VIDEO CHUNG (GV) =====================
+     MỘT chỗ chọn + nạp video cho TẤT CẢ các tab. Index vốn đã được cache chung ở
+     server (video_state["videos"]) — trước đây chỉ có GIAO DIỆN bắt mỗi tab tự chọn
+     và bấm nạp lại, rất phiền. Giờ: nạp 1 lần, mọi tab dùng ngay.
+     Tuỳ chọn LÚC NẠP (OCR/Caption/ASR) ở đây; tuỳ chọn LÚC TÌM (Rerank VLM) ở từng tab. */
+  const GV = { listeners: [] };
 
+  function currentVideo() {         // key của video đang chọn (mọi tab đọc hàm này)
+    const v = ($("#gv-select") || {}).value || "";
+    return v === "__dataset__" ? "__dataset__" : stem(v);
+  }
+  function videoReady() { const k = currentVideo(); return !!k && INDEXED.has(k); }
+  function onVideoChange(fn) { GV.listeners.push(fn); }
+  function emitVideoChange() { GV.listeners.forEach(f => { try { f(currentVideo()); } catch (e) {} }); }
+
+  function setupGlobalVideo() {
+    const bar = $("#gv-bar");
+    if (!LIVE) { bar.style.display = "none"; return; }
+    const sel = $("#gv-select"), st = $("#gv-status");
+    const idxOpts = () => ({ ocr: $("#gv-ocr").checked, asr: $("#gv-asr").checked,
+                             caption: $("#gv-caption").checked });
     const sync = () => {
-      const name = q("select").value;
-      q("status").textContent = (name && INDEXED.has(stem(name))) ? "✓ Sẵn sàng — nhập câu để tìm." : "";
+      st.className = "vstatus";
+      st.textContent = videoReady() ? "✓ Đã nạp — dùng được ở mọi tab."
+        : (currentVideo() ? "Chưa nạp — bấm “Nạp video”." : "");
+      emitVideoChange();
     };
     const refresh = async () => {
       try {
         const j = await (await fetch("/api/video/list")).json();
         (j.indexed || []).forEach(v => INDEXED.add(v));
-        const sel = q("select"), cur = sel.value; sel.innerHTML = "";
+        const cur = sel.value; sel.innerHTML = "";
         if (!j.videos || !j.videos.length) {
-          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>";
-          q("status").textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
+          sel.innerHTML = "<option value=''>— chưa có video trong data/videos/ —</option>";
+          st.textContent = "Bỏ video vào data/videos/ rồi tải lại trang."; return;
         }
-        // Option đầu: tìm xuyên suốt CẢ dataset (mọi video).
         const od = el("option"); od.value = "__dataset__";
-        od.textContent = INDEXED.has("__dataset__")
-          ? `🗂️ Toàn bộ dataset (${j.videos.length} video) ✓` : `🗂️ Toàn bộ dataset (${j.videos.length} video)`;
+        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)"
+          + (INDEXED.has("__dataset__") ? " ✓" : "");
         sel.append(od);
         j.videos.forEach(v => { const o = el("option"); o.value = v;
           o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
         if (cur) sel.value = cur;
+        else {
+          // Mở app lần đầu: tự chọn sẵn video ĐÃ NẠP (index khôi phục từ đĩa) để dùng
+          // được ngay, khỏi phải chọn+nạp lại.
+          const ready = [...sel.options].find(o => o.textContent.includes("✓"));
+          if (ready) sel.value = ready.value;
+        }
         sync();
-      } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
+      } catch (e) { st.textContent = "Không tải được danh sách video."; }
     };
-
-    // A6: poll tiến độ index (khi đang nạp) -> hiện count + fps để không tưởng treo.
-    const startProgressPoll = (st) => {
+    // A6: poll tiến độ index -> hiện count + fps để không tưởng treo.
+    const poll = () => {
       const iv = setInterval(async () => {
         try {
           const p = await (await fetch("/api/video/progress")).json();
@@ -1160,70 +1084,68 @@
       return () => clearInterval(iv);
     };
 
-    // Tuỳ chọn nạp: chỉ còn OCR on/off. Luôn quét TOÀN BỘ video (engine tự lấy
-    // mẫu mỗi 1s, không giới hạn frame) — không cho chọn giây/số frame nữa.
-    const idxOpts = () => {
-      const o = {};
-      const oc = q("ocr"); if (oc) o.ocr = oc.checked;
-      const ar = q("asr"); if (ar) o.asr = ar.checked;
-      const cp = q("caption"); if (cp) o.caption = cp.checked;
-      return o;
-    };
-
-    // Lưu index ra đĩa (A2) — lưu MỌI index đang có; lần sau mở app tự nạp lại.
-    const savebtn = q("save");
-    if (savebtn) savebtn.addEventListener("click", async () => {
-      const st = q("status"); st.className = "vstatus busy";
-      st.textContent = "Đang lưu index ra đĩa…"; savebtn.disabled = true;
+    sel.addEventListener("change", sync);
+    $("#gv-load").addEventListener("click", async () => {
+      const name = sel.value; if (!name) return;
+      st.className = "vstatus busy";
+      st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model, có thể vài phút)…";
+      $("#gv-load").disabled = true;
+      const stop = poll();
+      try {
+        const j = await post("/api/video/index", { video: name, ...idxOpts() });
+        st.className = "vstatus";
+        if (j.error) st.textContent = "Lỗi: " + j.error;
+        else {
+          INDEXED.add(j.video);
+          st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}” — dùng được ở MỌI tab.`;
+          await refresh();
+        }
+      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
+      stop(); $("#gv-load").disabled = false;
+    });
+    $("#gv-folder-btn").addEventListener("click", async () => {
+      const path = $("#gv-folder").value.trim();
+      if (!path) { st.textContent = "Nhập đường dẫn thư mục dataset."; return; }
+      st.className = "vstatus busy";
+      st.textContent = "Đang quét thư mục + cắt keyframe + embed (nhiều video → có thể lâu)…";
+      $("#gv-folder-btn").disabled = true;
+      const stop = poll();
+      try {
+        const j = await post("/api/video/index_folder", { path, ...idxOpts() });
+        st.className = "vstatus";
+        if (j.error) st.textContent = "Lỗi: " + j.error;
+        else {
+          INDEXED.add("__dataset__"); await refresh();
+          sel.value = "__dataset__"; sync();
+          st.textContent = `✓ Đã nạp ${j.videos} video (${j.frames} keyframe) từ: ${j.folder}.`;
+        }
+      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp thư mục."; }
+      stop(); $("#gv-folder-btn").disabled = false;
+    });
+    $("#gv-save").addEventListener("click", async () => {
+      st.className = "vstatus busy"; st.textContent = "Đang lưu index ra đĩa…";
+      $("#gv-save").disabled = true;
       try {
         const j = await (await fetch("/api/video/save", { method: "POST" })).json();
         st.className = "vstatus";
         st.textContent = j.error ? ("Lỗi: " + j.error)
           : `✓ Đã lưu ${j.saved.length} index. Lần sau mở app tự nạp lại (không embed lại).`;
       } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi lưu index."; }
-      savebtn.disabled = false;
+      $("#gv-save").disabled = false;
+    });
+    refresh();
+  }
+
+  function setupVideoTab(cfg) {
+    const q = (s) => $("#" + cfg.key + "-" + s);
+    const live = q("live"), offline = q("offline");
+    if (!LIVE) { if (live) live.style.display = "none"; if (offline) offline.style.display = "block"; return; }
+
+    // Video lấy từ THANH CHUNG (nạp 1 lần dùng mọi tab) -> tab này chỉ lo TÌM KIẾM.
+    onVideoChange(() => {
+      q("status").textContent = videoReady() ? "✓ Nhập câu để tìm." : "";
     });
 
-    q("select").addEventListener("change", sync);
-    q("load").addEventListener("click", async () => {
-      const name = q("select").value; if (!name) return;
-      const st = q("status"); st.className = "vstatus busy";
-      st.textContent = "Đang cắt keyframe + embed SigLIP (lần đầu tải model, có thể vài phút)…";
-      q("load").disabled = true;
-      const stopPoll = startProgressPoll(st);
-      try {
-        const j = await (await fetch("/api/video/index", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name, ...idxOpts() }) })).json();
-        st.className = "vstatus";
-        if (j.error) st.textContent = "Lỗi: " + j.error;
-        else { INDEXED.add(j.video);
-          st.textContent = `✓ Đã nạp ${j.frames} keyframe từ “${j.video}”.`; }
-      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
-      stopPoll(); q("load").disabled = false;
-    });
-    // Nạp cả một THƯ MỤC dataset bất kỳ trên máy (không cần chép vào data/videos/).
-    const fbtn = q("folder-btn");
-    if (fbtn) fbtn.addEventListener("click", async () => {
-      const path = q("folder").value.trim();
-      const st = q("status");
-      if (!path) { st.textContent = "Nhập đường dẫn thư mục dataset."; return; }
-      st.className = "vstatus busy";
-      st.textContent = "Đang quét thư mục + cắt keyframe + embed (nhiều video → có thể lâu)…";
-      fbtn.disabled = true;
-      const stopPoll = startProgressPoll(st);
-      try {
-        const j = await (await fetch("/api/video/index_folder", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, ...idxOpts() }) })).json();
-        st.className = "vstatus";
-        if (j.error) { st.textContent = "Lỗi: " + j.error; }
-        else {
-          INDEXED.add("__dataset__"); await refresh();
-          q("select").value = "__dataset__";
-          st.textContent = `✓ Đã nạp ${j.videos} video (${j.frames} keyframe) từ: ${j.folder}. Nhập câu để tìm cả dataset.`;
-        }
-      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp thư mục."; }
-      stopPoll(); fbtn.disabled = false;
-    });
     // F2: trạng thái phản hồi liên quan (👍/👎) — reset khi đổi câu (ý định mới).
     const fb = { pos: new Set(), neg: new Set() };
     let fbBtn = null;
@@ -1278,7 +1200,7 @@
 
     async function runSearch(useFeedback) {
       const query = q("query").value.trim(); if (!query) return;
-      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      const vid = currentVideo();
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
       const rerankEl = $("#" + cfg.key + "-rerank");
       const rerank = !!(rerankEl && rerankEl.checked);
@@ -1400,7 +1322,7 @@
 
     // Q1/Q2/Q3: tìm bằng ẢNH (upload hoặc phác hoạ). imgData = File | Blob.
     async function runImageSearch(imgData, srcLabel) {
-      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      const vid = currentVideo();
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
       const text = q("query").value.trim();   // Q3: có chữ -> multimodal (chữ + ảnh)
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
@@ -1449,7 +1371,7 @@
     };
     const explorebtn = q("explore");
     if (explorebtn) explorebtn.addEventListener("click", async () => {
-      const name = q("select").value, vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
+      const vid = currentVideo();
       if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
       const box = q("results"), countEl = $("#" + cfg.key + "-count");
       box.innerHTML = "<div class='empty'>Đang lấy mẫu khám phá…</div>"; if (countEl) countEl.textContent = "";
@@ -1497,9 +1419,6 @@
         sk.toBlob(b => { if (b) runImageSearch(b, "✏️ phác hoạ"); }, "image/png"));
     }
 
-    const inst = { refresh };
-    VTABS[cfg.key] = inst;
-    return inst;
   }
 
   /* ---------- Tab TEMPORAL: chuỗi "cảnh A trước cảnh B" (B4) ---------- */
@@ -1508,43 +1427,15 @@
     const live = q("live"), offline = q("offline");
     if (!LIVE) { if (live) live.style.display = "none"; if (offline) offline.style.display = "block"; return; }
 
-    const refresh = async () => {
-      try {
-        const j = await (await fetch("/api/video/list")).json();
-        (j.indexed || []).forEach(v => INDEXED.add(v));
-        const sel = q("select"), cur = sel.value; sel.innerHTML = "";
-        if (!j.videos || !j.videos.length) {
-          sel.innerHTML = "<option value=''>— chưa có .mp4 trong data/videos/ —</option>"; return; }
-        const od = el("option"); od.value = "__dataset__";
-        od.textContent = "🗂️ Toàn bộ dataset (" + j.videos.length + " video)" +
-          (INDEXED.has("__dataset__") ? " ✓" : ""); sel.append(od);
-        j.videos.forEach(v => { const o = el("option"); o.value = v;
-          o.textContent = INDEXED.has(stem(v)) ? v + "  ✓ đã nạp" : v; sel.append(o); });
-        if (cur) sel.value = cur;
-      } catch (e) { q("status").textContent = "Không tải được danh sách video."; }
-    };
-
-    q("load").addEventListener("click", async () => {
-      const name = q("select").value; if (!name) return;
-      const st = q("status"); st.className = "vstatus busy";
-      st.textContent = "Đang cắt keyframe + embed (lần đầu tải model, có thể vài phút)…";
-      q("load").disabled = true;
-      try {
-        const j = await (await fetch("/api/video/index", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ video: name }) })).json();
-        st.className = "vstatus";
-        if (j.error) st.textContent = "Lỗi: " + j.error;
-        else { INDEXED.add(j.video); st.textContent = "✓ Đã nạp " + j.frames + " keyframe.";
-          await refresh(); q("select").value = name; }
-      } catch (e) { st.className = "vstatus"; st.textContent = "Lỗi khi nạp video."; }
-      q("load").disabled = false;
+    // Video lấy từ THANH CHUNG -> tab này chỉ lo tìm chuỗi.
+    onVideoChange(() => {
+      q("status").textContent = videoReady() ? "✓ Nhập các cảnh theo thứ tự." : "";
     });
 
     q("form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const name = q("select").value;
-      const vid = name === "__dataset__" ? "__dataset__" : (name ? stem(name) : "");
-      if (!vid || !INDEXED.has(vid)) { q("status").textContent = "Hãy bấm “Nạp video” trước."; return; }
+      const vid = currentVideo();
+      if (!videoReady()) { q("status").textContent = "Chọn video ở thanh trên rồi bấm “Nạp video”."; return; }
       const events = q("events").value.split("\n").map(s => s.trim()).filter(Boolean);
       const box = q("results"), countEl = q("count"); countEl.textContent = "";
       if (events.length < 2) {
@@ -1578,8 +1469,6 @@
       } catch (e) { box.innerHTML = "<div class='empty'>Lỗi khi tìm chuỗi.</div>"; }
     });
 
-    VTABS["temporal"] = { refresh };
-    return { refresh };
   }
 
   /* ---------- Boot ---------- */
@@ -1591,8 +1480,8 @@
       $("#mode-note").innerHTML = "<code>Chế độ: API thật (Flask + pipeline)</code>"; }
     else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
       $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }
-    bubble("bot", "Chào bạn! Chọn video rồi bấm “Nạp video”, sau đó mô tả khoảnh khắc — "
-      + "mình sẽ hiện lưới ảnh và thu hẹp dần theo mỗi lượt.");
+    bubble("bot", "Chào bạn! Chọn video ở thanh trên rồi bấm “Nạp video” (một lần, mọi tab "
+      + "dùng chung), sau đó mô tả khoảnh khắc — mình sẽ hiện lưới ảnh và thu hẹp dần.");
     setupFilterTab();   // tab KISC = bộ lọc ảnh trên video thật
     setupAgentTab();    // tab Agent = smart path (tự điều phối tool)
     setupVqaTab();      // tab VQA  = hỏi–đáp trên video thật
@@ -1603,7 +1492,7 @@
     setupVideoTab({ key: "avs", topk: 30, highlightTop: false,
       countMsg: (n) => "Tìm thấy <b>" + n + "</b> khung khớp" });
     setupTemporalTab();
-    ["video", "kis", "avs", "temporal"].forEach(k => VTABS[k] && VTABS[k].refresh());
+    setupGlobalVideo();   // SAU CÙNG: phát sự kiện video cho mọi tab đã đăng ký
   })();
 })();
 </script>

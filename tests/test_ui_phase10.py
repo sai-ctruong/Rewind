@@ -186,9 +186,26 @@ def test_index_html_exists_and_wires_apis() -> None:
                  "/api/filter/start", "/api/filter/refine", "/api/filter/reset",
                  "/api/agent/ask", "/api/agent/reset"):
         assert hook in html
-    # Tab VQA chạy trên video thật: có chọn/nạp video + dải ảnh thật (không phải mô phỏng).
-    assert 'id="vqa-select"' in html and 'id="vqa-load"' in html
     assert "simVqa" not in html and "VQA_FRAMES" not in html
+
+
+def test_video_picker_is_global_not_per_tab() -> None:
+    """Nạp video MỘT LẦN, mọi tab dùng chung: chỉ còn 1 bộ chọn/nạp (thanh #gv-bar),
+    không còn dropdown + nút nạp riêng ở từng tab."""
+    html = (UI_DIR / "index.html").read_text(encoding="utf-8")
+    # Thanh chung có đủ: chọn · nạp · thư mục · lưu index · tuỳ chọn LÚC NẠP.
+    for gid in ("gv-bar", "gv-select", "gv-load", "gv-folder-btn", "gv-save",
+                "gv-ocr", "gv-asr", "gv-caption"):
+        assert f'id="{gid}"' in html, gid
+    # KHÔNG còn điều khiển nạp riêng ở bất kỳ tab nào.
+    for key in ("kis", "avs", "video", "temporal", "kisc", "agent", "vqa"):
+        for ctl in ("select", "load", "folder", "save", "ocr", "asr", "caption"):
+            assert f'id="{key}-{ctl}"' not in html, f"{key}-{ctl} lẽ ra đã gỡ"
+    # Rerank là tuỳ chọn LÚC TÌM -> vẫn ở lại từng tab.
+    for key in ("kis", "avs", "video"):
+        assert f'id="{key}-rerank"' in html
+    # Mọi tab đọc chung một nguồn + được báo khi đổi video.
+    assert "function currentVideo()" in html and "onVideoChange(" in html
 
 
 def test_agent_tab_shows_tool_trace_and_memory() -> None:

@@ -25,37 +25,45 @@ Góc trên có:
 
 ---
 
-## 2. Bước chung cho mọi tab: Nạp video
+## 2. Thanh video chung: **nạp một lần, mọi tab dùng**
 
-Trước khi tìm, phải **nạp (index)** video ít nhất một lần. Ở đầu mỗi tab tìm kiếm có 3 nút:
+Ngay dưới thanh tab là **thanh video chung** — chỗ **duy nhất** để chọn và nạp video.
+Nạp xong, **cả 7 tab dùng được ngay**, không phải chọn/nạp lại ở từng tab.
 
 | Điều khiển | Làm gì |
 |---|---|
-| **Ô chọn video** (dropdown) | Liệt kê các video hệ tìm thấy trong `data/videos/` — chọn một cái |
-| **Nạp video** | Nạp video đang chọn ở dropdown → cắt keyframe + tạo chỉ mục |
-| **Ô đường dẫn + Nạp thư mục** | Hoặc dán đường dẫn 1 thư mục bất kỳ (VD `D:\my_videos`) → nạp cả kho nhiều video |
-| **💾 Lưu index** | Lưu chỉ mục ra đĩa để lần sau mở lại **không phải nạp lại** |
+| **Ô chọn video** | Liệt kê video trong `data/videos/`; cái nào đã nạp có dấu **✓ đã nạp** |
+| **Nạp video** | Nạp video đang chọn → cắt keyframe + tạo chỉ mục |
+| **Ô đường dẫn + Nạp thư mục** | Hoặc dán đường dẫn thư mục bất kỳ (VD `D:\my_videos`) → nạp cả kho |
+| **💾 Lưu index** | Lưu ra đĩa → lần sau mở app **tự nạp lại**, khỏi embed lại |
 
-> 📁 Muốn video của bạn hiện trong dropdown: đặt file vào thư mục **`data/videos/`** của
-> dự án. Hoặc dùng ô đường dẫn để trỏ tới thư mục bất kỳ trên máy.
+Đổi video ở thanh này → mọi tab tự cập nhật theo (phiên lọc ảnh / trí nhớ Agent của video
+cũ được xoá, vì chúng không còn ý nghĩa với video mới).
 
-Khi nạp, một **thanh tiến trình** hiện số keyframe đã xử lý. Video dài lần đầu sẽ lâu
-(đang tải model + cắt frame). Nạp xong là có thể tìm.
+> 📁 Muốn video hiện trong ô chọn: đặt file vào **`data/videos/`**. Mở app lần sau, video
+> đã lưu index được **tự chọn sẵn** — dùng được ngay.
 
-> Hệ **luôn quét toàn bộ video** (tự lấy mẫu keyframe) — bạn không cần chọn giây/số frame.
+Khi nạp, thanh trạng thái hiện **tiến trình** (số keyframe · fps · thời gian). Video dài
+lần đầu sẽ lâu (tải model + cắt frame).
 
-### Bốn công tắc khi nạp (checkbox cạnh ô tìm)
+> Hệ **luôn quét toàn bộ video** (tự lấy mẫu keyframe) — không cần chọn giây/số frame.
 
-Bật **trước khi nạp** để làm giàu dữ liệu tìm kiếm:
+### Ba công tắc **lúc nạp** (ở thanh chung)
+
+Bật **trước khi bấm Nạp video** để làm giàu dữ liệu:
 
 | Công tắc | Ý nghĩa | Lưu ý tốc độ |
 |---|---|---|
 | **OCR** | Đọc **chữ trên khung hình** (biển hiệu, phụ đề cứng) → tìm được theo text | Chậm ~5× khi nạp |
-| **ASR** | Chép **lời nói** trong video (Whisper) → tìm theo điều ai đó nói | Chậm, cần `openai-whisper` |
-| **Caption** | VLM **mô tả ngữ cảnh** mỗi cảnh → tìm theo **quan hệ/hoàn cảnh** ("người lớn hướng dẫn trẻ tưới hoa") | Rất chậm (~vài giây/cảnh) — chỉ dùng video ngắn |
-| **Rerank VLM** | Khi *tìm*, dùng VLM chấm lại top kết quả → **chính xác hơn** | Chậm hơn lúc tìm (không ảnh hưởng lúc nạp) |
+| **Caption** | VLM **mô tả ngữ cảnh** mỗi cảnh → tìm theo **quan hệ/hoàn cảnh**; **VQA cần cái này** để trả lời | Rất chậm (~vài giây/cảnh) — chỉ dùng video ngắn |
+| **ASR** | Chép **lời nói** (Whisper) → tìm theo điều ai đó nói | Chậm, cần `openai-whisper` |
 
-> Mặc định **OCR/ASR/Caption tắt** để nạp nhanh. Bật khi thật sự cần kiểu tìm tương ứng.
+> Mặc định cả ba **tắt** để nạp nhanh. Bật khi thật sự cần kiểu tìm tương ứng.
+
+### Công tắc **lúc tìm** (ở từng tab)
+
+**Rerank VLM** nằm trong tab KIS/AVS/Video — vì nó ảnh hưởng lúc *tìm*, không phải lúc
+*nạp*: dùng VLM chấm lại top kết quả → chính xác hơn nhưng chậm hơn mỗi lần tìm.
 
 ---
 
@@ -116,7 +124,7 @@ Giống tab Video nhưng tối giản, dùng khi bạn biết rõ mình cần ki
 | **KIS** (Known-Item) | Cần tìm **một** khoảnh khắc cụ thể | **Tìm Top-5** | 5 ứng viên khả dĩ nhất |
 | **AVS** (Ad-hoc) | Cần **mọi** cảnh khớp một mô tả chung | **Tìm tất cả** | Danh sách đầy đủ, xếp hạng |
 
-Cả hai đều có công tắc **Rerank VLM / OCR / Caption / ASR** như trên.
+Cả hai dùng video từ **thanh chung** và có công tắc **Rerank VLM** riêng (tuỳ chọn lúc tìm).
 
 ---
 
@@ -139,7 +147,7 @@ Dùng khi truy vấn là **chuỗi sự kiện có thứ tự** ("A xảy ra **t
 
 Dùng để **hỏi một câu và nhận câu trả lời có suy luận**, không phải tìm ảnh.
 
-1. Chọn video → **Nạp video** (dùng chung cache với các tab khác).
+1. Video lấy từ **thanh video chung** (mục 2) — nạp một lần là xong.
 2. Gõ câu hỏi hoặc bấm **câu hỏi gợi ý** (VD: *"Có bao nhiêu người đi bộ?"*) → **Hỏi**.
 3. Hệ **dùng chính câu hỏi để tìm cửa sổ keyframe liên quan**, rồi trả lời trên cửa sổ đó
    (thay vì đọc cả video — vừa chậm vừa loãng). Bên phải hiện **dải ảnh thật** đã dùng để
@@ -148,7 +156,7 @@ Dùng để **hỏi một câu và nhận câu trả lời có suy luận**, kh�
 > ⚠️ **Điều kiện để trả lời được:** hệ cần "nhìn" hoặc "đọc" được nội dung.
 > - **Không có `ANTHROPIC_API_KEY`** → chỉ suy luận trên **chữ** (caption/OCR/ASR). Video
 >   nạp mà **không bật Caption** thì gần như không trả lời được — tab sẽ hiện cảnh báo này.
->   Cách khắc phục: nạp lại video có tick **Caption** (tab 🎥 Video).
+>   Cách khắc phục: tick **Caption** ở thanh video chung rồi nạp lại.
 > - **Có API key** → dùng **Claude vision**, nhìn thẳng ảnh, không cần caption.
 
 ---
@@ -158,8 +166,7 @@ Dùng để **hỏi một câu và nhận câu trả lời có suy luận**, kh�
 Dùng khi bạn **khó mô tả một câu cho đủ**. Thay vì đọc danh sách chữ, bạn **nhìn ảnh thật
 và thu hẹp dần** cho tới khi còn đúng khoảnh khắc cần tìm.
 
-1. Chọn video ở dropdown → bấm **Nạp video** (dùng chung cache với tab 🎥 Video, đã nạp
-   rồi thì tức thì).
+1. Chọn + nạp video ở **thanh video chung** (mục 2) — chỉ một lần cho mọi tab.
 2. Gõ mô tả thô (VD: *"người đi bộ trên phố"*) → **Gửi**.
    → Hiện **lưới ảnh keyframe thật** (VD 11 ảnh). Ô **Còn lại** đếm số ảnh.
 3. Thu hẹp bằng **3 cách, dùng lẫn nhau tuỳ ý**:
@@ -187,7 +194,7 @@ cộng dồn; **thanh bên phải** ghi lại diễn tiến hội thoại.
 Các tab trên: *bạn* chọn công cụ (tìm chữ / ảnh / chuỗi…). Tab này: **gõ một câu, Agent tự
 quyết**.
 
-1. Chọn video → **Nạp video**.
+1. Video lấy từ **thanh video chung** (mục 2).
 2. Gõ câu bất kỳ → **Hỏi Agent**. Nó tự hiểu và tự định tuyến:
 
 | Bạn gõ | Agent tự làm |
@@ -213,7 +220,7 @@ quyết**.
 ## 9. Vòng làm việc khuyến nghị
 
 ```
-Nạp video (💾 lưu index để tái dùng)
+Nạp video MỘT LẦN ở thanh chung (💾 lưu index để tái dùng)
       │
       ▼
 Tab 🎥 Video: gõ mô tả → Tìm trong video
@@ -229,8 +236,8 @@ Tab 🎥 Video: gõ mô tả → Tìm trong video
 
 ## 9. Mẹo & lưu ý
 
-- **Lưu index**: sau khi nạp video lớn, bấm **💾 Lưu index** — lần sau mở lại tức thì,
-  khỏi nạp lại.
+- **Nạp một lần dùng mọi tab**: thanh video chung là chỗ duy nhất cần nạp.
+- **Lưu index**: sau khi nạp video lớn, bấm **💾 Lưu index** — lần sau mở lại tức thì.
 - **OCR chỉ bật khi cần tìm theo chữ** (biển hiệu). Bật bừa sẽ nạp chậm hơn và đôi khi
   *giảm* độ chính xác cho truy vấn thị giác.
 - **Caption rất chậm với video dài** — dùng cho clip ngắn, hoặc cấu hình Claude (xem
