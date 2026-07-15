@@ -1286,7 +1286,8 @@
   (async function boot() {
     const size = await detect();
     const pill = $("#status");
-    if (LIVE) { pill.classList.add("live"); $("#status-text").textContent = "Backend thật · " + size + " keyframe";
+    if (LIVE) { pill.classList.add("live"); $("#status-text").textContent = "Backend thật · "
+      + (size ? size + " keyframe" : "chưa nạp video");
       $("#mode-note").innerHTML = "<code>Chế độ: API thật (Flask + pipeline)</code>"; }
     else { pill.classList.add("sim"); $("#status-text").textContent = "Mô phỏng (không backend)";
       $("#mode-note").innerHTML = "<code>Chế độ: mô phỏng trong trình duyệt</code>"; }

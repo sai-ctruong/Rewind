@@ -1,12 +1,15 @@
-"""Web UI cho hệ thống AIC 2026 (CLAUDE.md Phase 10).
+"""Web UI của Rewind — backend Flask nối thẳng pipeline THẬT trên video người dùng nạp.
 
-Backend Flask nối thẳng pipeline THẬT:
-  - Hội thoại KISC  -> KISCDialogueManager + RealKISCRetriever (Phase 8)
-  - Tìm kiếm KIS/AVS -> CoarseRetriever (BM25) trên KeyframeIndex (Phase 3)
-  - VQA             -> VqaModule (Phase 7)
+  - Tìm kiếm video (chữ / ảnh / sketch / đa phương thức / chuỗi thời gian), rerank VLM,
+    relevance feedback, gợi ý concept, duyệt lân cận  ->  /api/video/*
+  - Bộ lọc ẢNH hội thoại (thu hẹp dần)               ->  /api/filter/*
+  - Hỏi–đáp VQA (demo trên bộ keyframe mẫu)          ->  /api/vqa
 
-Frontend (ui/index.html) là 1 trang tĩnh tự gọi các API này. Cùng file HTML đó cũng
-chạy được ở chế độ ĐỘC LẬP (Artifact) nhờ một bản mô phỏng JS khi không có backend.
+MỌI thứ chạy trên index của video THẬT (video_state["videos"]) — không còn dataset
+lifelog tổng hợp. Demo hội thoại theo THUỘC TÍNH (Information Gain) nằm ở
+`python -m kisc_module.demo` và `retrieval/kisc_real_demo.py`, không phơi qua HTTP nữa.
+
+Frontend (ui/index.html) là 1 trang tĩnh tự gọi các API này.
 
 Chạy:  python -m ui.app   rồi mở http://127.0.0.1:5000
 """
@@ -19,23 +22,7 @@ import numpy as np
 from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) sớm nhất
-from ingestion.build_index import KeyframeIndex
 from ingestion.schemas import KeyframeRecord
-from kisc_module.dialogue_manager import KISCDialogueManager
-from kisc_module.schemas import Keyframe
-from retrieval.coarse_retriever import CoarseRetriever
-from retrieval.kisc_adapter import (
-    ACTIVITIES,
-    CLOTHING_COLORS,
-    GENDERS,
-    LOCATION_DESCS,
-    LOCATION_TYPES,
-    TARGET_ATTRS,
-    TIME_PERIODS,
-    RealKISCRetriever,
-    build_lifelog_record,
-    tags_to_attributes,
-)
 from retrieval.vqa_module import VqaModule
 
 _UI_DIR = Path(__file__).resolve().parent
@@ -43,28 +30,6 @@ _ROOT = _UI_DIR.parent
 VIDEO_DIR = _ROOT / "data" / "videos"          # nơi bỏ file video của người dùng
 FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
 INDEX_DIR = _ROOT / "artifacts" / "index"      # nơi lưu index (A2 — nạp lại, không embed lại)
-
-
-def build_dataset(n: int = 200, seed: int = 42) -> list[KeyframeRecord]:
-    """Dữ liệu mẫu (đóng vai 'dữ liệu thật') + ép ground-truth vào record 0."""
-    rng = np.random.default_rng(seed)
-    records: list[KeyframeRecord] = []
-    for i in range(n):
-        attrs = {
-            "location_type": str(rng.choice(LOCATION_TYPES)),
-            "location_desc": str(rng.choice(LOCATION_DESCS)),
-            "gender": str(rng.choice(GENDERS)),
-            "clothing_color": str(rng.choice(CLOTHING_COLORS)),
-            "activity": str(rng.choice(ACTIVITIES)),
-            "time_period": str(rng.choice(TIME_PERIODS)),
-        }
-        records.append(
-            build_lifelog_record(f"kf_{i:04d}", f"video_{i // 5:04d}",
-                                 float(rng.integers(0, 3600)), attrs)
-        )
-    records[0] = build_lifelog_record(records[0].id, records[0].video_id,
-                                      records[0].timestamp, dict(TARGET_ATTRS))
-    return records
 
 
 def build_vqa_records() -> list[KeyframeRecord]:
@@ -82,20 +47,8 @@ def build_vqa_records() -> list[KeyframeRecord]:
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    records = build_dataset()
-    index = KeyframeIndex.build(records)
-    records_by_id = {r.id: r for r in records}
-    coarse = CoarseRetriever(index)
-    kisc_retriever = RealKISCRetriever(index)
     vqa_records = build_vqa_records()
     vqa = VqaModule()
-    state = {"manager": None}  # 1 phiên hội thoại KISC cho demo cục bộ
-
-    def kf_json(kf: Keyframe) -> dict:
-        return {
-            "id": kf.id, "video_id": kf.video_id, "timestamp": round(kf.timestamp, 1),
-            "score": round(float(kf.score), 3), "attributes": kf.attributes,
-        }
 
     @app.get("/")
     def home():
@@ -111,56 +64,12 @@ def create_app() -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify(ok=True, dataset_size=len(records))
-
-    @app.post("/api/kisc/start")
-    def kisc_start():
-        query = (request.json or {}).get("query", "").strip()
-        if not query:
-            return jsonify(error="Vui lòng nhập mô tả ban đầu."), 400
-        mgr = KISCDialogueManager(kisc_retriever, max_turns=5, max_candidates_to_stop=5)
-        response = mgr.start(query)
-        state["manager"] = mgr
-        return jsonify(_dialogue_state(mgr, response))
-
-    @app.post("/api/kisc/respond")
-    def kisc_respond():
-        mgr = state["manager"]
-        if mgr is None:
-            return jsonify(error="Chưa có phiên hội thoại. Hãy bắt đầu trước."), 400
-        answer = (request.json or {}).get("answer", "").strip()
-        response = mgr.respond(answer)
-        return jsonify(_dialogue_state(mgr, response))
-
-    def _dialogue_state(mgr, response: str) -> dict:
-        top = sorted(mgr.state.candidates, key=lambda c: c.score, reverse=True)[:5]
-        return {
-            "response": response,
-            "count": len(mgr.state.candidates),
-            "finished": mgr.state.finished,
-            "filters": mgr.state.filters,
-            "top": [kf_json(c) for c in top],
-        }
-
-    @app.post("/api/search")
-    def search():
-        data = request.json or {}
-        query = data.get("query", "").strip()
-        if not query:
-            return jsonify(error="Nhập truy vấn tìm kiếm."), 400
-        # KIS lấy Top-5 (đúng 1 khoảnh khắc); AVS lấy nhiều (tất cả đoạn khớp).
-        top_k = max(1, min(60, int(data.get("top_k", 24))))
-        cands = coarse.search(query_text=query, top_k=top_k)
-        results = []
-        for c in cands:
-            rec = records_by_id.get(c.keyframe_id)
-            results.append({
-                "id": c.keyframe_id, "video_id": c.video_id,
-                "timestamp": round(c.timestamp, 1), "score": round(c.score, 4),
-                "attributes": tags_to_attributes(index.objects[c.row]),
-                "caption": rec.llm_caption if rec else "",
-            })
-        return jsonify(query=query, count=len(results), results=results)
+        """Trạng thái backend + số liệu THẬT: bao nhiêu video đã index, tổng bao nhiêu
+        keyframe. (Trước đây trả kích thước một dataset lifelog TỔNG HỢP -> con số hiện
+        trên UI không liên quan gì tới video người dùng nạp.)"""
+        vids = video_state["videos"]
+        return jsonify(ok=True, videos=len(vids),
+                       dataset_size=sum(e.num_indexed for e in vids.values()))
 
     @app.post("/api/vqa")
     def vqa_answer():

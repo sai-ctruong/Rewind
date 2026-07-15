@@ -32,54 +32,22 @@ def test_home_serves_full_html(client) -> None:
     assert "Trợ lý Truy xuất Đa phương tiện" in html
 
 
-def test_health(client) -> None:
+def test_health_reports_real_indexed_numbers(client) -> None:
+    """Health phải báo số liệu THẬT (video đã index + keyframe thật), không phải kích
+    thước một dataset tổng hợp. Chưa nạp video -> 0 (trung thực), không phải 200 giả."""
     r = client.get("/api/health")
     assert r.status_code == 200
     body = r.get_json()
-    assert body["ok"] is True and body["dataset_size"] > 0
+    assert body["ok"] is True
+    assert body["dataset_size"] == 0 and body["videos"] == 0
 
 
-# ------------------------------- KISC end-to-end ------------------------------
-def test_kisc_flow_converges(client) -> None:
-    r1 = client.post("/api/kisc/start",
-                     json={"query": "Tôi gặp một người bạn cũ vào tuần trước."})
-    s1 = r1.get_json()
-    assert not s1["finished"]           # còn mơ hồ -> hỏi tiếp
-    assert s1["count"] > 5
-    assert "?" in s1["response"]         # có câu hỏi làm rõ
-
-    r2 = client.post("/api/kisc/respond",
-                     json={"answer": "Ở quán cà phê ngoài trời, anh ấy mặc áo xanh dương."})
-    s2 = r2.get_json()
-    assert s2["finished"]
-    assert s2["count"] <= 5
-    assert s2["top"][0]["id"] == "kf_0000"   # hội tụ đúng ground-truth
-    # filter tích luỹ có mặt các slot đã trích.
-    assert s2["filters"].get("clothing_color") == "blue"
-
-
-def test_kisc_respond_without_start_errors(client) -> None:
-    r = client.post("/api/kisc/respond", json={"answer": "gì đó"})
-    assert r.status_code == 400
-
-
-def test_kisc_start_empty_query_errors(client) -> None:
-    r = client.post("/api/kisc/start", json={"query": "   "})
-    assert r.status_code == 400
-
-
-# ------------------------------- Search --------------------------------------
-def test_search_returns_ranked_results(client) -> None:
-    r = client.post("/api/search",
-                    json={"query": "người đàn ông áo xanh dương quán cà phê"})
-    body = r.get_json()
-    assert body["count"] > 0
-    first = body["results"][0]
-    assert {"id", "video_id", "timestamp", "score", "attributes", "caption"} <= set(first)
-
-
-def test_search_empty_errors(client) -> None:
-    assert client.post("/api/search", json={"query": ""}).status_code == 400
+def test_synthetic_kisc_endpoints_are_gone(client) -> None:
+    """Đã gỡ dataset lifelog tổng hợp + API không còn UI nào gọi. Thuật toán hội thoại
+    theo thuộc tính vẫn được phủ ở tests/test_kisc_integration_phase8.py."""
+    assert client.post("/api/kisc/start", json={"query": "x"}).status_code == 404
+    assert client.post("/api/kisc/respond", json={"answer": "x"}).status_code == 404
+    assert client.post("/api/search", json={"query": "x"}).status_code == 404
 
 
 # ------------------------------- VQA -----------------------------------------
