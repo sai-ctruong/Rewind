@@ -252,12 +252,9 @@ Benchmark trên **51 nhãn thật** (RTX 3060) — *đo, không đoán*:
 recall — nên mới có cơ chế **thích ứng theo loại truy vấn**. Hit@5 ~0.65 rất ổn định qua
 mọi lần chạy — và ta đã **đo để biết vì sao**:
 
-| Encoder (cùng ground-truth) | Hit@5 |
-|---|:---:|
-| **2 encoder base — ensemble** (mặc định) | **0.647** ✅ |
-| large-384 + base-multilingual | 0.588 ↓ |
-| 1 encoder base | 0.471 |
-| 1 encoder **large**-384 | 0.333 ↓↓ |
+<p align="center">
+  <img src="docs/assets/bench-encoder.svg" alt="hit@5 theo cấu hình encoder: 2 encoder base ensemble 0.647; large + base-multilingual 0.588; 1 encoder base 0.471; 1 encoder large 0.333" width="100%">
+</p>
 
 > 🔬 **Giả thuyết "encoder to hơn thì recall cao hơn" — đã thử và BÁC BỎ.** Model large
 > làm **kém đi**. Thứ tạo ra độ chính xác là **độ đa dạng của ensemble** (2 base = 0.647
@@ -265,6 +262,20 @@ mọi lần chạy — và ta đã **đo để biết vì sao**:
 > Đã loại trừ mọi nghi vấn "dùng sai" trước khi kết luận: fp16 ≡ fp32, không NaN, padding
 > SigLIP đúng, dedup không xoá mất đáp án, và so 1-đối-1 để không lẫn lợi thế ensemble.
 > ⇒ Trần 0.65 **không** phá được bằng model to hơn; đòn bẩy còn lại là **caption LLM**.
+
+<details>
+<summary>Số liệu dạng bảng (encoder)</summary>
+
+| Cấu hình encoder | Hit@1 | Hit@5 | MRR |
+|---|:---:|:---:|:---:|
+| **2 encoder base — ensemble** (mặc định) | 0.353 | **0.647** | 0.482 |
+| large-384 + base-multilingual | 0.255 | 0.588 | 0.399 |
+| 1 encoder base | 0.333 | 0.471 | 0.388 |
+| 1 encoder large-384 | 0.196 | 0.333 | 0.256 |
+
+*51 nhãn thật · truy vấn tiếng Anh · cùng ground-truth · RTX 3060.*
+`python -m evaluation.bench_retrieval --labels evaluation/labels_en.json --encoders`
+</details>
 
 ### Còn "sẵn sàng scale" thì sao? — cũng đo, không nói suông
 
@@ -275,7 +286,10 @@ mọi lần chạy — và ta đã **đo để biết vì sao**:
 | RAM | **3.343 B/vector** (tuyến tính) | 200k keyframe ≈ **2.4 GB** (×2 encoder) → thoải mái; 1M ≈ **12 GB** → **cần IVF-PQ** |
 | Build index | 200k trong **43 s** | không phải nút thắt — **trích embedding** mới là (200k frame ≈ 7–14 h) |
 | Latency coarse | **<1 ms → 11 ms** @200k | ~0,05% của time budget 20 s; VLM rerank mới chiếm phần lớn |
-| recall@100 vs `efSearch` | 128 → **0.465** · 2048 → **0.981** | 👇 |
+
+<p align="center">
+  <img src="docs/assets/bench-efsearch.svg" alt="recall@100 theo efSearch: 128 đạt 0.465 (0.6ms); 256 đạt 0.604 (1.1ms); 1024 đạt 0.911 (4.6ms); 2048 đạt 0.981 (11ms)" width="100%">
+</p>
 
 > 🔴 **Benchmark này bắt được một lỗi cấu hình thật:** `efSearch=128` **âm thầm đánh mất
 > ~54% ứng viên đúng** ở tầng lọc thô — vi phạm chính ràng buộc "không được mất recall ở

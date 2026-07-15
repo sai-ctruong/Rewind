@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340"
+     role="img" aria-label="Bieu do cot: hit@5 theo cau hinh encoder. 2 encoder base ensemble 0.647; large + base-multilingual 0.588; 1 encoder base 0.471; 1 encoder large 0.333.">
+  <title>Trần recall không phá được bằng encoder to hơn — hit@5 theo cấu hình encoder</title>
+  <desc>Đo trên 51 nhãn thật, truy vấn tiếng Anh, cùng ground-truth. Ensemble 2 encoder base
+  đạt hit@5 0.647 (cao nhất). Thêm encoder large làm giảm còn 0.588. Một encoder base 0.471.
+  Một encoder large 0.333 (thấp nhất).</desc>
+  <defs>
+    <style>
+      .ttl  { font-family: "Segoe UI", Arial, sans-serif; font-weight: 700; fill: #e6ecff; }
+      .sub  { font-family: "Segoe UI", Arial, sans-serif; fill: #93a1c9; }
+      .cat  { font-family: "Segoe UI", Arial, sans-serif; fill: #e6ecff; }
+      .val  { font-family: Consolas, "SF Mono", monospace; font-weight: 700; fill: #e6ecff; }
+      .note { font-family: "Segoe UI", Arial, sans-serif; fill: #7684ac; }
+      .axis { stroke: #2b3350; stroke-width: 1; }
+      /* Cột: một màu duy nhất — KHÔNG tô đậm-nhạt theo giá trị (đó là double-encode
+         độ dài bằng màu). Nhấn cấu hình đang dùng bằng CHỮ, không bằng màu. */
+      .bar  { fill: #3987e5; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="340" fill="#0b1020"/>
+  <text class="ttl" x="40" y="42" font-size="20">Encoder to hơn KHÔNG phá được trần recall — nó làm kém đi</text>
+  <text class="sub" x="40" y="66" font-size="13.5">hit@5 · 51 nhãn thật · truy vấn tiếng Anh · cùng ground-truth · RTX 3060</text>
+
+  <!-- luoi doc (recessive, hairline, solid) -->
+  <g class="axis">
+    <line x1="360" y1="88" x2="360" y2="286"/>
+    <line x1="480" y1="88" x2="480" y2="286"/>
+    <line x1="600" y1="88" x2="600" y2="286"/>
+    <line x1="720" y1="88" x2="720" y2="286"/>
+    <line x1="840" y1="88" x2="840" y2="286"/>
+    <line x1="960" y1="88" x2="960" y2="286"/>
+  </g>
+  <g class="note" font-size="11" text-anchor="middle">
+    <text x="360" y="304">0</text><text x="480" y="304">0.2</text><text x="600" y="304">0.4</text>
+    <text x="720" y="304">0.6</text><text x="840" y="304">0.8</text><text x="960" y="304">1.0</text>
+  </g>
+  <!-- duong co so (baseline) -->
+  <line x1="360" y1="88" x2="360" y2="286" stroke="#4a5578" stroke-width="1.5"/>
+
+  <!-- Cot: cao 22px (<=24), dau tron 4px, vuong o baseline, moc tu 1 baseline.
+       Thang: 0->1.0 anh xa x 360->960 (600px) -->
+  <!-- 1) base_ensemble 0.647 -> w=388 -->
+  <g>
+    <text class="cat" x="344" y="119" font-size="13.5" text-anchor="end">2 encoder base — ensemble</text>
+    <path d="M360 105 h384 a4 4 0 0 1 4 4 v14 a4 4 0 0 1 -4 4 h-384 z" class="bar"/>
+    <text class="val" x="760" y="120" font-size="14">0.647</text>
+    <text class="note" x="812" y="120" font-size="12">← mặc định của hệ</text>
+  </g>
+  <!-- 2) hq_ensemble 0.588 -> w=353 -->
+  <g>
+    <text class="cat" x="344" y="163" font-size="13.5" text-anchor="end">large-384 + base-multilingual</text>
+    <path d="M360 149 h349 a4 4 0 0 1 4 4 v14 a4 4 0 0 1 -4 4 h-349 z" class="bar"/>
+    <text class="val" x="725" y="164" font-size="14">0.588</text>
+  </g>
+  <!-- 3) base_single 0.471 -> w=283 -->
+  <g>
+    <text class="cat" x="344" y="207" font-size="13.5" text-anchor="end">1 encoder base</text>
+    <path d="M360 193 h279 a4 4 0 0 1 4 4 v14 a4 4 0 0 1 -4 4 h-279 z" class="bar"/>
+    <text class="val" x="655" y="208" font-size="14">0.471</text>
+  </g>
+  <!-- 4) large_single 0.333 -> w=200 -->
+  <g>
+    <text class="cat" x="344" y="251" font-size="13.5" text-anchor="end">1 encoder large-384</text>
+    <path d="M360 237 h196 a4 4 0 0 1 4 4 v14 a4 4 0 0 1 -4 4 h-196 z" class="bar"/>
+    <text class="val" x="572" y="252" font-size="14">0.333</text>
+  </g>
+
+  <text class="note" x="40" y="330" font-size="12.5">Độ đa dạng của ensemble mới tạo ra độ chính xác (2 base 0.647 ≫ 1 base 0.471), không phải kích thước model.</text>
+</svg>

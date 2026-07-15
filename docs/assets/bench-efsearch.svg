@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360"
+     role="img" aria-label="Duong cong: recall@100 theo efSearch. 128 -> 0.465 (0.6ms); 256 -> 0.604 (1.1ms); 1024 -> 0.911 (4.6ms); 2048 -> 0.981 (11ms).">
+  <title>efSearch: mua recall bằng vài mili-giây — recall@100 theo efSearch</title>
+  <desc>Đo trên 100.000 vector 768 chiều. efSearch=128 chỉ đạt recall@100 = 0.465 (0.6ms);
+  256 đạt 0.604 (1.1ms); 1024 đạt 0.911 (4.6ms); 2048 đạt 0.981 (11ms). Latency ghi làm nhãn
+  trực tiếp, KHÔNG dùng trục thứ hai.</desc>
+  <defs>
+    <style>
+      .ttl  { font-family: "Segoe UI", Arial, sans-serif; font-weight: 700; fill: #e6ecff; }
+      .sub  { font-family: "Segoe UI", Arial, sans-serif; fill: #93a1c9; }
+      .val  { font-family: Consolas, "SF Mono", monospace; font-weight: 700; fill: #e6ecff; }
+      .lat  { font-family: Consolas, "SF Mono", monospace; fill: #7684ac; }
+      .note { font-family: "Segoe UI", Arial, sans-serif; fill: #7684ac; }
+      .tick { font-family: Consolas, "SF Mono", monospace; fill: #7684ac; }
+      .axis { stroke: #2b3350; stroke-width: 1; }
+      .line { fill: none; stroke: #3987e5; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+      .dot  { fill: #3987e5; }
+      .bad  { fill: #d03b3b; }   /* status: cấu hình cũ gây mất recall */
+      .good { fill: #0ca30c; }   /* status: giá trị đã chốt */
+      .badt { font-family: "Segoe UI", Arial, sans-serif; font-weight: 600; fill: #d03b3b; }
+      .goodt{ font-family: "Segoe UI", Arial, sans-serif; font-weight: 600; fill: #0ca30c; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="360" fill="#0b1020"/>
+  <text class="ttl" x="40" y="42" font-size="20">efSearch: mua recall bằng vài mili-giây</text>
+  <text class="sub" x="40" y="66" font-size="13.5">recall@100 · 100.000 vector · 768 chiều · latency ghi ngay cạnh điểm (một trục — không trục thứ hai)</text>
+
+  <!-- Luoi ngang + nhan truc y (recall 0 -> 1, y: 290 -> 100) -->
+  <g class="axis">
+    <line x1="150" y1="290" x2="1080" y2="290"/>
+    <line x1="150" y1="242" x2="1080" y2="242"/>
+    <line x1="150" y1="195" x2="1080" y2="195"/>
+    <line x1="150" y1="147" x2="1080" y2="147"/>
+    <line x1="150" y1="100" x2="1080" y2="100"/>
+  </g>
+  <g class="tick" font-size="11" text-anchor="end">
+    <text x="138" y="294">0</text><text x="138" y="246">0.25</text><text x="138" y="199">0.50</text>
+    <text x="138" y="151">0.75</text><text x="138" y="104">1.00</text>
+  </g>
+  <text class="note" x="150" y="86" font-size="12">recall@100</text>
+
+  <!-- x = efSearch trên thang log2 (128,256,1024,2048 — ĐÚNG 4 điểm đã đo; không có
+       512 trong lượt k=100 nên KHÔNG vẽ điểm ở đó). y = 290 - recall*190 -->
+  <path class="line" d="M220 201.6 L430 175.2 L850 116.9 L1060 103.7"/>
+
+  <!-- Diem + nhan gia tri + latency (nhan truc tiep, khong phai truc thu 2) -->
+  <g>
+    <circle class="bad"  cx="220"  cy="201.6" r="5.5"/>
+    <text class="val"  x="220" y="184" font-size="13.5" text-anchor="middle">0.465</text>
+    <text class="lat"  x="220" y="228" font-size="11.5" text-anchor="middle">0.6 ms</text>
+    <text class="badt" x="220" y="252" font-size="12" text-anchor="middle">✕ giá trị cũ</text>
+    <text class="badt" x="220" y="268" font-size="11.5" text-anchor="middle">mất 54% ứng viên đúng</text>
+  </g>
+  <g>
+    <circle class="dot" cx="430" cy="175.2" r="5"/>
+    <text class="val" x="430" y="158" font-size="13.5" text-anchor="middle">0.604</text>
+    <text class="lat" x="430" y="202" font-size="11.5" text-anchor="middle">1.1 ms</text>
+  </g>
+  <g>
+    <circle class="dot" cx="850" cy="116.9" r="5"/>
+    <text class="val" x="850" y="100" font-size="13.5" text-anchor="middle">0.911</text>
+    <text class="lat" x="850" y="143" font-size="11.5" text-anchor="middle">4.6 ms</text>
+  </g>
+  <g>
+    <circle class="good" cx="1060" cy="103.7" r="5.5"/>
+    <text class="val"   x="1060" y="87" font-size="13.5" text-anchor="middle">0.981</text>
+    <text class="lat"   x="1060" y="130" font-size="11.5" text-anchor="middle">11 ms</text>
+    <text class="goodt" x="1060" y="152" font-size="12" text-anchor="middle">✓ đã chốt</text>
+  </g>
+
+  <!-- truc x: chi ghi cac gia tri THAT SU da do -->
+  <g class="tick" font-size="12" text-anchor="middle">
+    <text x="220" y="312">128</text><text x="430" y="312">256</text>
+    <text x="850" y="312">1024</text><text x="1060" y="312">2048</text>
+  </g>
+  <text class="note" x="640" y="332" font-size="12" text-anchor="middle">efSearch (độ rộng chùm tìm kiếm)</text>
+  <text class="note" x="40" y="350" font-size="12.5">11 ms = 0,05% của time budget 20 s — và ứng viên rớt ở tầng lọc thô thì mất vĩnh viễn. Nên mua recall.</text>
+</svg>
