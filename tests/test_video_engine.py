@@ -547,6 +547,25 @@ class _EncoderWithModel(ColorMockEncoder):
         self.device = "cuda"
 
 
+def _fake_torch(monkeypatch, cuda_available: bool) -> None:
+    """Bơm module 'torch' GIẢ vào sys.modules thay vì import torch thật.
+
+    Test này chỉ cần torch.cuda.is_available()/empty_cache() — không cần tensor nào.
+    Import torch thật sẽ làm test CHẾT trên CI (lõi nhẹ cố ý không cài torch), còn
+    importorskip thì bị CI chặn vì không phân biệt được với 'requirements.txt sót lib'.
+    Module giả cho test chạy ở CẢ HAI môi trường và không bao giờ skip.
+    """
+    import sys
+    import types
+
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(
+        is_available=lambda: cuda_available,
+        empty_cache=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+
 def test_offload_encoders_moves_to_cpu_and_back(engine_and_entry, monkeypatch) -> None:
     """VRAM 6GB không đủ cho SigLIP + Qwen2-VL cùng lúc: đo được 2.77s -> 0.48s mỗi ứng
     viên khi đẩy SigLIP sang RAM lúc rerank. Test khoá hành vi đó lại."""
@@ -554,9 +573,7 @@ def test_offload_encoders_moves_to_cpu_and_back(engine_and_entry, monkeypatch) -
     encs = [_EncoderWithModel(0.0), _EncoderWithModel(0.3)]
     engine.set_encoders(encs)
 
-    import torch
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    _fake_torch(monkeypatch, cuda_available=True)
 
     assert engine._offload_encoders(to_cpu=True) is True
     assert all(e._model.device == "cpu" for e in encs)   # đã nhường VRAM
@@ -572,8 +589,7 @@ def test_offload_is_noop_without_cuda(engine_and_entry, monkeypatch) -> None:
     engine, _ = engine_and_entry
     encs = [_EncoderWithModel(0.0)]
     engine.set_encoders(encs)
-    import torch
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    _fake_torch(monkeypatch, cuda_available=False)
     assert engine._offload_encoders(to_cpu=True) is False
     assert encs[0]._model.moves == []          # không đụng vào model
 
@@ -588,7 +604,5 @@ def test_offload_survives_broken_encoder(engine_and_entry, monkeypatch) -> None:
             self._model = object()      # không có .to()
 
     engine.set_encoders([Bad()])
-    import torch
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    _fake_torch(monkeypatch, cuda_available=True)
     assert engine._offload_encoders(to_cpu=True) is False   # nuốt lỗi, trả False

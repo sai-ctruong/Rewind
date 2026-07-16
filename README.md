@@ -191,7 +191,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 2. Chạy toàn bộ test — offline, không cần GPU/API
-pytest                            # → 273 passed (~7s, không cần GPU)
+pytest                            # → 276 passed (~7s, không cần GPU)
 
 # 3. Web demo (pipeline thật)
 python -m ui.app                  # → http://127.0.0.1:5000

@@ -56,7 +56,7 @@ Mọi thứ bắt đầu bằng việc **index một video** để tạo `entry`
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-pytest                       # → 273 passed  (~7 giây, không cần GPU)
+pytest                       # → 276 passed  (~7 giây, không cần GPU)
 ```
 
 ### Thêm để xử lý VIDEO THẬT (SigLIP local, vẫn không cần API key)
