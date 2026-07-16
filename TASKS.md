@@ -375,8 +375,25 @@ nhàn rỗi. Best-effort: CPU-only → no-op; encoder lạ không có `.to()` �
 | 32 | 0.471 | 0.608 | 13.73 s |
 
 hit@5 **đứng im** ở mọi pool → 24 ứng viên thêm **chưa bao giờ** góp đáp án đúng; pool
-sâu chỉ thêm nhiễu, đẩy đáp án đúng khỏi hạng 1. (Cột giây không đơn điệu → nhiễu đo,
-nhưng cột accuracy nhất quán.) **Kết quả lưu:** `evaluation/benchmarks/rerank_pool_bench.json`
+sâu chỉ thêm nhiễu. **Kết quả lưu:** `evaluation/benchmarks/rerank_pool_bench.json`
+
+> #### 🔴 SỬA: cột hit@1 ở bảng trên KHÔNG kết luận được gì (2026-07-16)
+> Tôi từng viết "pool 8 (0.510) tốt hơn pool 32 (0.471)". **Sai về phương pháp.** Chênh
+> 0.039 trên 51 nhãn = **đúng 2 query**. KTC95% của 0.510 là **[0.377, 0.641]** — rộng
+> 0.265, nuốt trọn mọi giá trị trong bảng. Kiểm định McNemar theo cặp ở **kịch bản
+> thuận lợi nhất** cho giả thuyết (2 cặp bất đồng, pool 8 thắng cả 2): **p = 0.50**.
+> Ngang tung đồng xu.
+>
+> Phần **hit@5 bằng nhau tuyệt đối** ở mọi pool thì VẪN VỮNG — bằng nhau y hệt không
+> phải chuyện may rủi. Kết luận đúng phải là: *pool sâu không giúp, và pool 8 rẻ hơn
+> nhiều* (4.71s vs 13.73s — chênh lệch tốc độ mới là thứ có thật), **không phải** "pool
+> 8 chính xác hơn".
+>
+> **Không cần 2400 nhãn** để sửa: các cấu hình chạy trên CÙNG 51 query nên phải so
+> **theo cặp**, không so 2 tỉ lệ độc lập. So cặp chỉ nhìn query có kết quả khác nhau →
+> chỉ cần **6 cặp bất đồng thắng sạch** là p < 0.05. Đã thêm
+> `evaluation/metrics.py::compare_configs` (Wilson + McNemar) và test khoá chính sai
+> lầm này lại. **Từ nay mọi so sánh cấu hình phải đi qua đó.**
 
 ### 🔴 SỬA KẾT LUẬN CŨ: 0.65 KHÔNG phải trần của encoder
 | Đáp án nằm trong | top-1 | top-5 | top-10 | top-30 | **top-100** |

@@ -152,3 +152,74 @@ def mean_average_precision(samples: list[IRSample]) -> float:
 
 def mean_ndcg_at_k(samples: list[IRSample], k: int) -> float:
     return _mean([ndcg_at_k(r, rel, k) for r, rel in samples])
+
+
+# ========================= So sánh cấu hình (thống kê) ========================
+# VÌ SAO CẦN MỤC NÀY: đã có kết luận SAI vì đọc nhiễu thành tín hiệu. Bảng rerank_pool
+# ghi "pool 8 (0.510) tốt hơn pool 32 (0.471)" — chênh 0.039 trên 51 nhãn = ĐÚNG 2
+# QUERY, trong khi sai số chuẩn của một tỉ lệ ở n=51 là ~0.07 (±7 query). Không kết
+# luận được gì. Từ nay mọi so sánh cấu hình phải đi qua đây.
+
+
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Khoảng tin cậy 95% cho MỘT tỉ lệ (hit@k), theo Wilson.
+
+    Dùng Wilson thay vì công thức normal (p ± z·√(p(1-p)/n)): ở n nhỏ và p gần 0/1,
+    normal cho khoảng vượt ra ngoài [0,1] và phủ sai. Wilson luôn nằm trong [0,1].
+    """
+    if n <= 0:
+        return (0.0, 0.0)
+    p = successes / n
+    d = 1.0 + z * z / n
+    center = (p + z * z / (2 * n)) / d
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
+def mcnemar_paired(a_hits: Sequence[float], b_hits: Sequence[float]) -> dict:
+    """So 2 cấu hình trên CÙNG bộ query (theo cặp) — mạnh hơn so 2 tỉ lệ độc lập.
+
+    Ý tưởng: các query mà CẢ HAI cùng đúng (hoặc cùng sai) không mang thông tin về
+    việc cái nào hơn — chúng chỉ làm loãng phép đo. Chỉ các cặp BẤT ĐỒNG mới đáng kể:
+      b01 = A sai, B đúng      b10 = A đúng, B sai
+    Nếu 2 cấu hình thực sự như nhau thì b01 ~ Binomial(b01+b10, 0.5). p-value 2 phía
+    tính CHÍNH XÁC bằng binomial (không xấp xỉ chi-square — số bất đồng thường < 25,
+    chỗ xấp xỉ đó sai).
+
+    Trả p_value + số cặp bất đồng. p_value >= 0.05 nghĩa là "CHƯA phân biệt được",
+    KHÔNG phải "hai cái như nhau" — với n nhỏ, thiếu bằng chứng ≠ bằng chứng phủ định.
+    """
+    if len(a_hits) != len(b_hits):
+        raise ValueError("So theo cặp thì 2 danh sách phải cùng bộ query, cùng thứ tự.")
+    b01 = sum(1 for a, b in zip(a_hits, b_hits) if a < b)   # A sai, B đúng
+    b10 = sum(1 for a, b in zip(a_hits, b_hits) if a > b)   # A đúng, B sai
+    n_disc = b01 + b10
+    if n_disc == 0:
+        p = 1.0
+    else:
+        # P(X <= min) * 2, X ~ Binomial(n_disc, 0.5); chặn tại 1.0.
+        m = min(b01, b10)
+        tail = sum(math.comb(n_disc, i) for i in range(m + 1)) / (2 ** n_disc)
+        p = min(1.0, 2 * tail)
+    return {
+        "b01_only_b_correct": b01,
+        "b10_only_a_correct": b10,
+        "n_discordant": n_disc,
+        "p_value": round(p, 4),
+        "significant_at_05": p < 0.05,
+    }
+
+
+def compare_configs(a_hits: Sequence[float], b_hits: Sequence[float]) -> dict:
+    """Báo cáo so sánh đầy đủ: 2 tỉ lệ + KTC Wilson + kiểm định cặp McNemar."""
+    n = len(a_hits)
+    sa, sb = int(sum(a_hits)), int(sum(b_hits))
+    return {
+        "n_queries": n,
+        "a_rate": round(sa / n, 4) if n else 0.0,
+        "b_rate": round(sb / n, 4) if n else 0.0,
+        "a_ci95": tuple(round(x, 4) for x in wilson_interval(sa, n)),
+        "b_ci95": tuple(round(x, 4) for x in wilson_interval(sb, n)),
+        "delta": round((sb - sa) / n, 4) if n else 0.0,
+        **mcnemar_paired(a_hits, b_hits),
+    }
