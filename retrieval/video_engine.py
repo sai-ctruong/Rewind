@@ -229,6 +229,44 @@ class VideoSearchEngine:
         `.embed(raw) -> vec` và `.encode_text(str) -> vec`."""
         self._encoders = list(encoders)[:2]
 
+    def _offload_encoders(self, to_cpu: bool = True) -> bool:
+        """Đẩy SigLIP sang RAM (hoặc kéo về GPU) — GIẢI PHÓNG VRAM mà KHÔNG mất model.
+
+        VÌ SAO (đo thật trên RTX 3060 6GB): SigLIP (~1.45 GB) + Qwen2-VL-2B (~4.1 GB)
+        cùng nằm trong VRAM là 5.56/6.0 GB — đỉnh chạm 6.06 GB, tức TRÀN. GPU nghẹt
+        khiến rerank chậm **2.77s/ứng viên**; đẩy SigLIP sang RAM trước khi rerank thì
+        còn **0.48s/ứng viên** — nhanh **5.8×**.
+
+        Khác `_free_encoders` (xoá hẳn -> lượt sau phải nạp LẠI TỪ ĐĨA): ở đây chỉ
+        chuyển thiết bị, trọng số vẫn nằm trong RAM nên kéo về GPU rất nhanh. Query đã
+        được encode TRƯỚC khi rerank, nên trong lúc rerank encoder chắc chắn nhàn rỗi.
+
+        Trả True nếu có chuyển được (dùng để biết có cần kéo về không)."""
+        if not self._encoders:
+            return False
+        try:
+            import gc
+
+            import torch
+            if not torch.cuda.is_available():
+                return False        # CPU-only: không có VRAM để giành, khỏi làm gì
+            moved = False
+            for e in self._encoders:
+                m = getattr(e, "_model", None)
+                if m is None:
+                    continue
+                m.to("cpu" if to_cpu else "cuda")
+                if hasattr(e, "device"):
+                    e.device = "cpu" if to_cpu else "cuda"
+                moved = True
+            if moved and to_cpu:
+                gc.collect()
+                torch.cuda.empty_cache()
+            return moved
+        except Exception as e:  # pragma: no cover - tối ưu 'best-effort', không được sập
+            print(f"[video_engine] Không offload được encoder ({e!r}); bỏ qua.")
+            return False
+
     def _free_encoders(self) -> None:
         """Xả SigLIP khỏi VRAM/RAM (để nạp VLM caption trên máy hạn bộ nhớ). Encoder
         tự nạp lại LƯỜI ở lần search kế. An toàn: chỉ gọi khi embedding đã tính xong."""
@@ -877,12 +915,18 @@ class VideoSearchEngine:
             return coarse[:top_k]
         context = {c.keyframe_id: entry.raws[c.keyframe_id]
                    for c in coarse if c.keyframe_id in entry.raws}
+        # Query đã encode xong -> SigLIP nhàn rỗi. Đẩy nó khỏi VRAM để Qwen2-VL chạy
+        # thoáng (đo: 2.77s -> 0.48s mỗi ứng viên trên 6GB VRAM), rồi kéo về.
+        offloaded = self._offload_encoders(to_cpu=True)
         try:
             reranked = self._get_reranker().rerank(query, coarse, context)
             return reranked[:top_k]
         except Exception as e:  # pragma: no cover - fallback khi VLM lỗi/thiếu model
             print(f"[video_engine] VLM rerank lỗi ({e!r}); dùng kết quả coarse.")
             return coarse[:top_k]
+        finally:
+            if offloaded:
+                self._offload_encoders(to_cpu=False)
 
     def search_with_feedback(
         self, entry: VideoIndexEntry, query: str,

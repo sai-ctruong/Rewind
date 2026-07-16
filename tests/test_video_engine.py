@@ -524,3 +524,71 @@ def test_single_encoder_mode(tmp_path) -> None:
     results = engine.search(entry, "red", top_k=2)
     assert results and results[0].timestamp < 1.0
     assert set(results[0].source_ranks.keys()) == {"clip"}  # không có slot siglip
+
+
+# ------------------- Offload encoder khi rerank (tối ưu VRAM) -----------------
+class _FakeCudaModel:
+    """Model giả có .to(device) — đủ để kiểm logic offload mà không cần GPU thật."""
+
+    def __init__(self):
+        self.device = "cuda"
+        self.moves: list[str] = []
+
+    def to(self, dev):
+        self.device = dev
+        self.moves.append(dev)
+        return self
+
+
+class _EncoderWithModel(ColorMockEncoder):
+    def __init__(self, salt=0.0):
+        super().__init__(salt=salt)
+        self._model = _FakeCudaModel()
+        self.device = "cuda"
+
+
+def test_offload_encoders_moves_to_cpu_and_back(engine_and_entry, monkeypatch) -> None:
+    """VRAM 6GB không đủ cho SigLIP + Qwen2-VL cùng lúc: đo được 2.77s -> 0.48s mỗi ứng
+    viên khi đẩy SigLIP sang RAM lúc rerank. Test khoá hành vi đó lại."""
+    engine, _ = engine_and_entry
+    encs = [_EncoderWithModel(0.0), _EncoderWithModel(0.3)]
+    engine.set_encoders(encs)
+
+    import torch
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+
+    assert engine._offload_encoders(to_cpu=True) is True
+    assert all(e._model.device == "cpu" for e in encs)   # đã nhường VRAM
+    assert all(e.device == "cpu" for e in encs)
+
+    assert engine._offload_encoders(to_cpu=False) is True
+    assert all(e._model.device == "cuda" for e in encs)  # kéo về GPU cho lượt sau
+    assert all(e.device == "cuda" for e in encs)
+
+
+def test_offload_is_noop_without_cuda(engine_and_entry, monkeypatch) -> None:
+    """Máy CPU-only: không có VRAM để giành -> đừng làm gì (tránh chi phí vô ích)."""
+    engine, _ = engine_and_entry
+    encs = [_EncoderWithModel(0.0)]
+    engine.set_encoders(encs)
+    import torch
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert engine._offload_encoders(to_cpu=True) is False
+    assert encs[0]._model.moves == []          # không đụng vào model
+
+
+def test_offload_survives_broken_encoder(engine_and_entry, monkeypatch) -> None:
+    """Tối ưu 'best-effort': encoder lạ không có .to() thì KHÔNG được làm sập search."""
+    engine, _ = engine_and_entry
+
+    class Bad(ColorMockEncoder):
+        def __init__(self):
+            super().__init__()
+            self._model = object()      # không có .to()
+
+    engine.set_encoders([Bad()])
+    import torch
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    assert engine._offload_encoders(to_cpu=True) is False   # nuốt lỗi, trả False
