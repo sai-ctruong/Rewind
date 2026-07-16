@@ -268,7 +268,29 @@ mọi lần chạy — và ta đã **đo để biết vì sao**:
 > ≫ 1 base = 0.471), không phải kích thước model — đúng lý do chọn ensemble ngay từ đầu.
 > Đã loại trừ mọi nghi vấn "dùng sai" trước khi kết luận: fp16 ≡ fp32, không NaN, padding
 > SigLIP đúng, dedup không xoá mất đáp án, và so 1-đối-1 để không lẫn lợi thế ensemble.
-> ⇒ Trần 0.65 **không** phá được bằng model to hơn; đòn bẩy còn lại là **caption LLM**.
+
+### 0.65 KHÔNG phải trần truy xuất — nó là trần XẾP HẠNG
+
+Đo sâu hơn cho thấy coarse **tìm được đáp án gần như luôn luôn**, chỉ là không đẩy nó lên đầu:
+
+| Đáp án nằm trong… | top-1 | top-5 | top-10 | top-30 | **top-100** |
+|---|:---:|:---:|:---:|:---:|:---:|
+| % số lần | 0.372 | 0.627 | 0.608 | 0.824 | **0.902** |
+
+**Encoder tìm ra đáp án 90% số lần** — vấn đề nằm ở việc *xếp hạng* nó lên top. Vậy để
+VLM chấm lại **pool sâu hơn** thì sao? Cũng đã thử, cũng **bác bỏ**:
+
+| `rerank_pool` | Hit@1 | Hit@5 | s/truy vấn |
+|---|:---:|:---:|:---:|
+| **8** (mặc định) | **0.510** | 0.608 | **4.7 s** |
+| 16 | 0.471 | 0.608 | 6.9 s |
+| 32 | 0.471 | 0.608 | 13.7 s |
+
+Hit@5 **đứng im** ở mọi pool → 24 ứng viên thêm vào **chưa bao giờ** góp được đáp án
+đúng; pool sâu chỉ thêm nhiễu và làm Hit@1 *tệ đi*. ⇒ Nút thắt thật là **khả năng phân
+biệt của bộ chấm** (SigLIP ở coarse, Qwen2-VL-2B ở rerank), **không** phải kích thước
+encoder, cũng **không** phải độ sâu pool. Đòn bẩy còn lại: **bộ rerank mạnh hơn**
+(Claude vision) hoặc **caption LLM** — cả hai cần API key.
 
 <details>
 <summary>Số liệu dạng bảng (encoder)</summary>
@@ -283,6 +305,21 @@ mọi lần chạy — và ta đã **đo để biết vì sao**:
 *51 nhãn thật · truy vấn tiếng Anh · cùng ground-truth · RTX 3060.*
 `python -m evaluation.bench_retrieval --labels evaluation/labels_en.json --encoders`
 </details>
+
+### Tốc độ: nút thắt là **VRAM**, không phải model
+
+| Cấu hình (pool=8, 51 nhãn thật) | s/truy vấn |
+|---|---|
+| SigLIP **vẫn nằm** trong VRAM cùng Qwen2-VL | **21.16 s** ❌ *vượt time budget 20 s* |
+| **Đẩy SigLIP sang RAM** trước khi rerank | **4.03 s** ✅ **nhanh ×5.25** |
+
+> 🔍 SigLIP (~1.45 GB) + Qwen2-VL-2B (~4.1 GB) **giành nhau 6 GB VRAM** — đỉnh chạm
+> **6.06 GB = tràn**, GPU nghẹt nên rerank ì ạch **2.77 s/ứng viên**. Query đã encode
+> **xong trước khi** rerank ⇒ encoder nhàn rỗi ⇒ đẩy nó sang RAM, rerank còn **0.48
+> s/ứng viên**. Đổi lại đỉnh VRAM giảm **6.06 → 5.11 GB** — vừa nhanh hơn, vừa nhẹ hơn.
+>
+> Cũng thử **gộp nhiều ứng viên vào một lần `generate()`** — **chậm hơn ×0.17**, đã gỡ
+> bỏ: VRAM đã nghẹt thì không còn chỗ để song song hoá.
 
 ### Còn "sẵn sàng scale" thì sao? — cũng đo, không nói suông
 

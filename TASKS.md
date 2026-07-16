@@ -346,6 +346,57 @@ kiểm **cả hai chiều**: PASS trên venv sạch, **FAIL** trên venv có tor
 thật sự có tác dụng.
 
 
+## 6c. ⚡ NÂNG CẤP: độ chính xác · tốc độ · chi phí (2026-07-16)
+
+Ba đặc tính chỉ đánh đổi nhau khi áp MỘT phương pháp đắt cho MỌI thứ. Đo để tìm chỗ
+được cả ba (hoặc ít nhất không mất gì).
+
+### ✅ TỐC ĐỘ + CHI PHÍ — nút thắt là **VRAM**, không phải model (×5.25)
+| | VRAM | s/ứng viên | s/truy vấn (pool=8) |
+|---|---|---|---|
+| SigLIP + Qwen2-VL cùng trong VRAM | 5.56/6.0 · **đỉnh 6.06 = tràn** | 2.77 s | **21.16 s** ❌ vượt budget |
+| **Đẩy SigLIP sang RAM khi rerank** | 4.12 · đỉnh **5.11** | **0.48 s** | **4.03 s** ✅ |
+
+`_offload_encoders(to_cpu)` — chỉ **chuyển thiết bị**, khác `_free_encoders` (xoá hẳn →
+lượt sau nạp lại **từ đĩa**). Query encode xong **trước** rerank nên encoder chắc chắn
+nhàn rỗi. Best-effort: CPU-only → no-op; encoder lạ không có `.to()` → nuốt lỗi.
+3 test khoá hành vi. **File:** `retrieval/video_engine.py`
+
+### ❌ 2 GIẢ THUYẾT BỊ BÁC BỎ (đo rồi gỡ, không giữ code chết)
+1. **Gộp batch nhiều ứng viên vào 1 lần `generate()`** → **chậm hơn ×0.17** (điểm vẫn
+   khớp 16/16 nên không phải lỗi). VRAM đã nghẹt thì không còn chỗ song song hoá.
+2. **Tăng `rerank_pool` để VLM nhìn sâu hơn** → **không giúp, còn hơi hại**:
+
+| `rerank_pool` | hit@1 | hit@5 | s/truy vấn |
+|---|---|---|---|
+| **8** (giữ nguyên) | **0.510** | 0.608 | **4.71 s** |
+| 16 | 0.471 | 0.608 | 6.91 s |
+| 24 | 0.471 | 0.608 | 23.64 s |
+| 32 | 0.471 | 0.608 | 13.73 s |
+
+hit@5 **đứng im** ở mọi pool → 24 ứng viên thêm **chưa bao giờ** góp đáp án đúng; pool
+sâu chỉ thêm nhiễu, đẩy đáp án đúng khỏi hạng 1. (Cột giây không đơn điệu → nhiễu đo,
+nhưng cột accuracy nhất quán.) **Kết quả lưu:** `evaluation/benchmarks/rerank_pool_bench.json`
+
+### 🔴 SỬA KẾT LUẬN CŨ: 0.65 KHÔNG phải trần của encoder
+| Đáp án nằm trong | top-1 | top-5 | top-10 | top-30 | **top-100** |
+|---|---|---|---|---|---|
+| % số lần | 0.372 | 0.627 | 0.608 | 0.824 | **0.902** |
+
+Coarse **tìm được đáp án 90% số lần** — nó chỉ không đẩy lên đỉnh. Cộng với 2 kết quả
+bác bỏ ở trên (encoder to hơn: không; pool sâu hơn: không) ⇒ nút thắt thật là **khả năng
+PHÂN BIỆT của bộ chấm** (SigLIP ở coarse, Qwen2-VL-2B ở rerank). Đòn bẩy còn lại: **bộ
+rerank mạnh hơn (Claude vision)** hoặc **caption LLM** — đều cần API key.
+
+### 🟡 BUG ĐÃ TÌM RA, CHƯA SỬA — fusion phụ thuộc kích thước pool
+`hit@5` **đổi theo `top_k` yêu cầu**: 0.627 (top_k=5) → 0.510 (top_k=100). Xin **nhiều**
+ứng viên hơn lại làm **top-5 tệ đi** — vô lý. Nguyên nhân: `pool = max(top_k, rerank_pool)`
+(`video_engine._run_search`) làm **độ sâu fusion phụ thuộc số kết quả người gọi muốn**;
+pool lớn → BM25 bơm thêm ứng viên tầm thường, RRF cộng điểm từ nhiều nguồn đẩy chúng
+vượt kết quả dense tốt. **Cách sửa:** tách "độ sâu fusion" (cố định, theo `coarse.top_k`)
+khỏi "số kết quả trả về" → kết quả ổn định bất kể `top_k`.
+
+
 ## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, **51 nhãn** — chi tiết `evaluation/benchmarks/`)
 
 **Bảng chính (index có OCR, sample 1.0):**
