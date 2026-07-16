@@ -1,59 +1,626 @@
 [
-  {"query": "người cầm ván lướt sóng trên bãi biển", "video_id": "beach_walking", "time_window": [0.0, 1.8]},
-  {"query": "nhà hát Opera Sydney", "video_id": "beach_walking", "time_window": [1.5, 5.0]},
-  {"query": "Sydney Opera House by the water", "video_id": "beach_walking", "time_window": [1.5, 5.0]},
-  {"query": "tàu điện màu đỏ trên phố", "video_id": "beach_walking", "time_window": [7.0, 9.5]},
-  {"query": "cầu cảng Sydney Harbour Bridge", "video_id": "beach_walking", "time_window": [9.0, 11.5]},
-  {"query": "hồ bơi nước xanh ngọc", "video_id": "beach_walking", "time_window": [11.0, 13.5]},
-  {"query": "người phụ nữ mặc váy hồng đi bộ", "video_id": "beach_walking", "time_window": [13.0, 15.0]},
-  {"query": "cửa hàng điện máy JB HI-FI", "video_id": "beach_walking", "time_window": [17.0, 19.5]},
-
-  {"query": "nhà hàng Raising Cane's ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 5.0]},
-  {"query": "người đàn ông mặc áo thun màu nâu", "video_id": "walking", "time_window": [3.0, 5.5]},
-  {"query": "taxi màu vàng ở New York", "video_id": "walking", "time_window": [5.5, 10.5]},
-  {"query": "yellow taxi cab in Times Square", "video_id": "walking", "time_window": [5.5, 10.5]},
-  {"query": "biển quảng cáo LANEIGE màu xanh", "video_id": "walking", "time_window": [7.0, 9.5]},
-
-  {"query": "phố Seoul ban đêm biển hiệu neon dưới mưa", "video_id": "walk_rain_seoul", "time_window": [140.0, 165.0]},
-  {"query": "vạch qua đường nhiều người che ô", "video_id": "walk_rain_seoul", "time_window": [440.0, 460.0]},
-  {"query": "người cầm ô trong suốt", "video_id": "walk_rain_seoul", "time_window": [745.0, 758.0]},
-  {"query": "người phụ nữ cầm ô màu đỏ", "video_id": "walk_rain_seoul", "time_window": [1498.0, 1508.0]},
-  {"query": "woman holding a red umbrella in the rain", "video_id": "walk_rain_seoul", "time_window": [1498.0, 1508.0]},
-  {"query": "biển hiệu STREET FOOD trong hẻm", "video_id": "walk_rain_seoul", "time_window": [1795.0, 1808.0]},
-  {"query": "cửa hàng Starbucks bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [2242.0, 2253.0]},
-  {"query": "Starbucks storefront on a rainy street", "video_id": "walk_rain_seoul", "time_window": [2242.0, 2253.0]},
-  {"query": "xe buýt hai tầng màu vàng và xanh lá", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
-  {"query": "yellow double-decker bus at a crosswalk", "video_id": "walk_rain_seoul", "time_window": [2548.0, 2553.0]},
-  {"query": "quán cà phê có mái hiên đỏ và bàn ngoài trời", "video_id": "walk_rain_seoul", "time_window": [2845.0, 2858.0]},
-  {"query": "bảng neon màu hồng có chữ 2021", "video_id": "walk_rain_seoul", "time_window": [3145.0, 3158.0]},
-
-  {"query": "công trường xây dựng có bao xi măng và biển OPEN", "video_id": "walk_rain_seoul", "time_window": [293.0, 308.0]},
-  {"query": "bảng đèn LED điện tử lớn bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [1043.0, 1058.0]},
-  {"query": "cửa hàng điện tử SAMSUNG bên đường", "video_id": "walk_rain_seoul", "time_window": [1478.0, 1493.0]},
-  {"query": "Samsung store sign on a rainy street", "video_id": "walk_rain_seoul", "time_window": [1478.0, 1493.0]},
-  {"query": "người che ô màu xanh dương đi trong mưa", "video_id": "walk_rain_seoul", "time_window": [1343.0, 1360.0]},
-  {"query": "hẻm hẹp có biển neon ATHOME PLACE", "video_id": "walk_rain_seoul", "time_window": [2093.0, 2110.0]},
-  {"query": "ngã tư rộng có cọc tiêu giao thông màu cam", "video_id": "walk_rain_seoul", "time_window": [2393.0, 2410.0]},
-  {"query": "xe SUV BMW màu đen đậu bên đường", "video_id": "walk_rain_seoul", "time_window": [2693.0, 2710.0]},
-
-  {"query": "quảng trường có ghế nằm tắm nắng", "video_id": "beach_walking", "time_window": [15.3, 17.0]},
-  {"query": "công viên nhiều cây xanh", "video_id": "beach_walking", "time_window": [19.3, 21.0]},
-
-  {"query": "xe hơi thể thao màu đen trên phố", "video_id": "walking", "time_window": [1.5, 4.0]},
-  {"query": "đám đông băng qua đường ở Quảng trường Thời Đại", "video_id": "walking", "time_window": [0.0, 3.0]},
-  {"query": "người đàn ông áo trắng đứng ở khu bến cảng", "video_id": "beach_walking", "time_window": [5.5, 7.0]},
-
-  {"query": "xe tải nhỏ màu xanh dương đậu bên đường ướt", "video_id": "walk_rain_seoul", "time_window": [68.0, 83.0]},
-  {"query": "quầy quảng cáo trà TEA màu xanh lá", "video_id": "walk_rain_seoul", "time_window": [218.0, 233.0]},
-  {"query": "phố đêm neon đỏ nhiều nhà hàng", "video_id": "walk_rain_seoul", "time_window": [518.0, 533.0]},
-  {"query": "cửa hàng mặt tiền màu đỏ và bậc thang", "video_id": "walk_rain_seoul", "time_window": [668.0, 683.0]},
-  {"query": "người cầm ô màu vàng ở vạch qua đường", "video_id": "walk_rain_seoul", "time_window": [968.0, 983.0]},
-  {"query": "cờ quảng cáo Decathlon màu xanh dương", "video_id": "walk_rain_seoul", "time_window": [1118.0, 1133.0]},
-  {"query": "biển giảm giá SALE 70 màu đỏ", "video_id": "walk_rain_seoul", "time_window": [1268.0, 1290.0]},
-  {"query": "tòa nhà kính chọc trời và quảng trường ướt vắng", "video_id": "walk_rain_seoul", "time_window": [1718.0, 1735.0]},
-  {"query": "hẻm quán ăn có dây đèn lồng ban đêm", "video_id": "walk_rain_seoul", "time_window": [2018.0, 2033.0]},
-  {"query": "hẻm có nhiều xe máy đậu, người áo trắng", "video_id": "walk_rain_seoul", "time_window": [2168.0, 2185.0]},
-  {"query": "vỉa hè lát gạch xanh lá và xe máy đậu", "video_id": "walk_rain_seoul", "time_window": [2768.0, 2785.0]},
-  {"query": "xe sedan màu trắng đậu bên đường", "video_id": "walk_rain_seoul", "time_window": [2918.0, 2935.0]},
-  {"query": "áp phích chân dung lớn trên kính và cọc tiêu cam", "video_id": "walk_rain_seoul", "time_window": [3068.0, 3085.0]}
+  {
+    "query": "người cầm ván lướt sóng trên bãi biển",
+    "video_id": "beach_walking",
+    "time_window": [
+      0.0,
+      1.8
+    ]
+  },
+  {
+    "query": "nhà hát Opera Sydney",
+    "video_id": "beach_walking",
+    "time_window": [
+      1.5,
+      5.0
+    ]
+  },
+  {
+    "query": "Sydney Opera House by the water",
+    "video_id": "beach_walking",
+    "time_window": [
+      1.5,
+      5.0
+    ]
+  },
+  {
+    "query": "tàu điện màu đỏ trên phố",
+    "video_id": "beach_walking",
+    "time_window": [
+      7.0,
+      9.5
+    ]
+  },
+  {
+    "query": "cầu cảng Sydney Harbour Bridge",
+    "video_id": "beach_walking",
+    "time_window": [
+      9.0,
+      11.5
+    ]
+  },
+  {
+    "query": "hồ bơi nước xanh ngọc",
+    "video_id": "beach_walking",
+    "time_window": [
+      11.0,
+      13.5
+    ]
+  },
+  {
+    "query": "người phụ nữ mặc váy hồng đi bộ",
+    "video_id": "beach_walking",
+    "time_window": [
+      13.0,
+      15.0
+    ]
+  },
+  {
+    "query": "cửa hàng điện máy JB HI-FI",
+    "video_id": "beach_walking",
+    "time_window": [
+      17.0,
+      19.5
+    ]
+  },
+  {
+    "query": "nhà hàng Raising Cane's ở Quảng trường Thời Đại",
+    "video_id": "walking",
+    "time_window": [
+      0.0,
+      5.0
+    ]
+  },
+  {
+    "query": "người đàn ông mặc áo thun màu nâu",
+    "video_id": "walking",
+    "time_window": [
+      3.0,
+      5.5
+    ]
+  },
+  {
+    "query": "taxi màu vàng ở New York",
+    "video_id": "walking",
+    "time_window": [
+      5.5,
+      10.5
+    ]
+  },
+  {
+    "query": "yellow taxi cab in Times Square",
+    "video_id": "walking",
+    "time_window": [
+      5.5,
+      10.5
+    ]
+  },
+  {
+    "query": "biển quảng cáo LANEIGE màu xanh",
+    "video_id": "walking",
+    "time_window": [
+      7.0,
+      9.5
+    ]
+  },
+  {
+    "query": "phố Seoul ban đêm biển hiệu neon dưới mưa",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      140.0,
+      165.0
+    ]
+  },
+  {
+    "query": "vạch qua đường nhiều người che ô",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      440.0,
+      460.0
+    ]
+  },
+  {
+    "query": "người cầm ô trong suốt",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      745.0,
+      758.0
+    ]
+  },
+  {
+    "query": "người phụ nữ cầm ô màu đỏ",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1498.0,
+      1508.0
+    ]
+  },
+  {
+    "query": "woman holding a red umbrella in the rain",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1498.0,
+      1508.0
+    ]
+  },
+  {
+    "query": "biển hiệu STREET FOOD trong hẻm",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1795.0,
+      1808.0
+    ]
+  },
+  {
+    "query": "cửa hàng Starbucks bên đường ướt",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2242.0,
+      2253.0
+    ]
+  },
+  {
+    "query": "Starbucks storefront on a rainy street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2242.0,
+      2253.0
+    ]
+  },
+  {
+    "query": "xe buýt hai tầng màu vàng và xanh lá",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2548.0,
+      2553.0
+    ]
+  },
+  {
+    "query": "yellow double-decker bus at a crosswalk",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2548.0,
+      2553.0
+    ]
+  },
+  {
+    "query": "quán cà phê có mái hiên đỏ và bàn ngoài trời",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2845.0,
+      2858.0
+    ]
+  },
+  {
+    "query": "bảng neon màu hồng có chữ 2021",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      3145.0,
+      3158.0
+    ]
+  },
+  {
+    "query": "công trường xây dựng có bao xi măng và biển OPEN",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      293.0,
+      308.0
+    ]
+  },
+  {
+    "query": "bảng đèn LED điện tử lớn bên đường ướt",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1043.0,
+      1058.0
+    ]
+  },
+  {
+    "query": "cửa hàng điện tử SAMSUNG bên đường",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1478.0,
+      1493.0
+    ]
+  },
+  {
+    "query": "Samsung store sign on a rainy street",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1478.0,
+      1493.0
+    ]
+  },
+  {
+    "query": "người che ô màu xanh dương đi trong mưa",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1343.0,
+      1360.0
+    ]
+  },
+  {
+    "query": "hẻm hẹp có biển neon ATHOME PLACE",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2093.0,
+      2110.0
+    ]
+  },
+  {
+    "query": "ngã tư rộng có cọc tiêu giao thông màu cam",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2393.0,
+      2410.0
+    ]
+  },
+  {
+    "query": "xe SUV BMW màu đen đậu bên đường",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2693.0,
+      2710.0
+    ]
+  },
+  {
+    "query": "quảng trường có ghế nằm tắm nắng",
+    "video_id": "beach_walking",
+    "time_window": [
+      15.3,
+      17.0
+    ]
+  },
+  {
+    "query": "công viên nhiều cây xanh",
+    "video_id": "beach_walking",
+    "time_window": [
+      19.3,
+      21.0
+    ]
+  },
+  {
+    "query": "xe hơi thể thao màu đen trên phố",
+    "video_id": "walking",
+    "time_window": [
+      1.5,
+      4.0
+    ]
+  },
+  {
+    "query": "đám đông băng qua đường ở Quảng trường Thời Đại",
+    "video_id": "walking",
+    "time_window": [
+      0.0,
+      3.0
+    ]
+  },
+  {
+    "query": "người đàn ông áo trắng đứng ở khu bến cảng",
+    "video_id": "beach_walking",
+    "time_window": [
+      5.5,
+      7.0
+    ]
+  },
+  {
+    "query": "xe tải nhỏ màu xanh dương đậu bên đường ướt",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      68.0,
+      83.0
+    ]
+  },
+  {
+    "query": "quầy quảng cáo trà TEA màu xanh lá",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      218.0,
+      233.0
+    ]
+  },
+  {
+    "query": "phố đêm neon đỏ nhiều nhà hàng",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      518.0,
+      533.0
+    ]
+  },
+  {
+    "query": "cửa hàng mặt tiền màu đỏ và bậc thang",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      668.0,
+      683.0
+    ]
+  },
+  {
+    "query": "người cầm ô màu vàng ở vạch qua đường",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      968.0,
+      983.0
+    ]
+  },
+  {
+    "query": "cờ quảng cáo Decathlon màu xanh dương",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1118.0,
+      1133.0
+    ]
+  },
+  {
+    "query": "biển giảm giá SALE 70 màu đỏ",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1268.0,
+      1290.0
+    ]
+  },
+  {
+    "query": "tòa nhà kính chọc trời và quảng trường ướt vắng",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1718.0,
+      1735.0
+    ]
+  },
+  {
+    "query": "hẻm quán ăn có dây đèn lồng ban đêm",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2018.0,
+      2033.0
+    ]
+  },
+  {
+    "query": "hẻm có nhiều xe máy đậu, người áo trắng",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2168.0,
+      2185.0
+    ]
+  },
+  {
+    "query": "vỉa hè lát gạch xanh lá và xe máy đậu",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2768.0,
+      2785.0
+    ]
+  },
+  {
+    "query": "xe sedan màu trắng đậu bên đường",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2918.0,
+      2935.0
+    ]
+  },
+  {
+    "query": "áp phích chân dung lớn trên kính và cọc tiêu cam",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      3068.0,
+      3085.0
+    ]
+  },
+  {
+    "query": "biển quảng cáo Sweet Space màu xanh dương bên lối đi",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      44.0,
+      52.0
+    ]
+  },
+  {
+    "query": "biển hiệu GATE màu trắng có biểu tượng taxi vàng",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      374.0,
+      382.0
+    ]
+  },
+  {
+    "query": "xe buýt màu xanh lá bên biển quảng cáo số 1 màu cam",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      704.0,
+      712.0
+    ]
+  },
+  {
+    "query": "biển hiệu xăm hình màu xanh lá phát sáng trên phố mưa",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      16.0,
+      24.0
+    ]
+  },
+  {
+    "query": "rào chắn nhựa màu vàng ở công trường",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      786.0,
+      794.0
+    ]
+  },
+  {
+    "query": "biển hiệu ngân hàng Shinhan màu xanh dương",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      841.0,
+      849.0
+    ]
+  },
+  {
+    "query": "toà nhà có mặt tiền đục lỗ tròn",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      896.0,
+      904.0
+    ]
+  },
+  {
+    "query": "cột trụ kim loại bạc hình ống trước toà nhà gạch đỏ",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1006.0,
+      1014.0
+    ]
+  },
+  {
+    "query": "lối đi có mái che bằng giàn giáo kim loại",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1089.0,
+      1097.0
+    ]
+  },
+  {
+    "query": "áp phích Pikachu màu vàng bên lối đi",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1171.0,
+      1179.0
+    ]
+  },
+  {
+    "query": "biển hiệu LUSH màu xanh lá",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1309.0,
+      1317.0
+    ]
+  },
+  {
+    "query": "chậu hoa đỏ dài bên vỉa hè cạnh giàn giáo",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1446.0,
+      1454.0
+    ]
+  },
+  {
+    "query": "rào công trường sọc xanh và đỏ",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1611.0,
+      1619.0
+    ]
+  },
+  {
+    "query": "tượng điêu khắc màu đỏ uốn cong trên vỉa hè",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1666.0,
+      1674.0
+    ]
+  },
+  {
+    "query": "xe SUV màu trắng đậu trong con hẻm hẹp",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1776.0,
+      1784.0
+    ]
+  },
+  {
+    "query": "cửa hàng tiện lợi GS25 ở góc phố",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1886.0,
+      1894.0
+    ]
+  },
+  {
+    "query": "áp phích giảm giá 40 phần trăm dựng trên vỉa hè",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2436.0,
+      2444.0
+    ]
+  },
+  {
+    "query": "biển hiệu Mega Coffee màu vàng",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2656.0,
+      2664.0
+    ]
+  },
+  {
+    "query": "biển hiệu tiệm nail Nails for me",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2876.0,
+      2884.0
+    ]
+  },
+  {
+    "query": "cửa hàng kt plaza biển hiệu xanh lá",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      3041.0,
+      3049.0
+    ]
+  },
+  {
+    "query": "biển hiệu adidas màu đen trên toà nhà",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      869.0,
+      877.0
+    ]
+  },
+  {
+    "query": "red curved sculpture on the sidewalk",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1666.0,
+      1674.0
+    ]
+  },
+  {
+    "query": "GS25 convenience store on a rainy street corner",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1886.0,
+      1894.0
+    ]
+  },
+  {
+    "query": "LUSH green storefront sign",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1309.0,
+      1317.0
+    ]
+  },
+  {
+    "query": "Mega Coffee yellow sign",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      2656.0,
+      2664.0
+    ]
+  },
+  {
+    "query": "building facade with round perforated holes",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      896.0,
+      904.0
+    ]
+  },
+  {
+    "query": "yellow Pikachu poster next to the walkway",
+    "video_id": "walk_rain_seoul",
+    "time_window": [
+      1171.0,
+      1179.0
+    ]
+  }
 ]
