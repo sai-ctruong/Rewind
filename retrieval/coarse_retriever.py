@@ -147,9 +147,10 @@ class CoarseRetriever:
         weight BM25 giúp khớp CHỮ chính xác (biển hiệu) nổi lên khi dense (2 encoder)
         vốn áp đảo.
 
-        `top_k`: CHỈ là số kết quả trả về — không còn ảnh hưởng thứ hạng.
+        `top_k`: CHỈ là số kết quả trả về — không còn ảnh hưởng thứ hạng. Nếu
+        `fusion_depth` nhỏ hơn `top_k` thì trả về ít hơn top_k (xem bên dưới).
         `depth`: độ sâu fusion, mặc định `self.fusion_depth`. Chỉ truyền tay khi
-        benchmark quét giá trị (evaluation/bench_fusion_depth.py)."""
+        benchmark quét giá trị (bench_retrieval.py --fusion-depth)."""
         if query_clip_vec is None and query_siglip_vec is None and query_text is None:
             raise ValueError(
                 "Cần ít nhất 1 tín hiệu query: clip_vec, siglip_vec, hoặc text."
@@ -158,9 +159,16 @@ class CoarseRetriever:
         if candidate_rows is not None and not candidate_rows:
             return []  # filter loại hết -> không có ứng viên
 
-        # Độ sâu fusion CỐ ĐỊNH, không phụ thuộc top_k người gọi xin (xem docstring
-        # class). max() chỉ để lo trường hợp xin nhiều hơn cả độ sâu.
-        fuse_depth = max(top_k, depth if depth is not None else self.fusion_depth)
+        # Độ sâu fusion CỐ ĐỊNH, KHÔNG kẹp theo top_k (xem docstring class).
+        #
+        # Từng viết `max(top_k, depth)` cho "an toàn" — SAI, và nó âm thầm phá thí
+        # nghiệm: bench gọi top_k=100 nên mọi depth < 100 bị kẹp lên 100, đo cùng một
+        # cấu hình 5 lần rồi tưởng "độ sâu không ảnh hưởng". Kẹp như vậy còn tái lập
+        # đúng cái bug vừa sửa (top_k lại chi phối độ sâu).
+        #
+        # depth < top_k -> trả về ÍT hơn top_k. Đó là đúng: fusion sâu d trên n nguồn
+        # chỉ sinh tối đa d·n ứng viên; bịa thêm cho đủ số mới là sai.
+        fuse_depth = depth if depth is not None else self.fusion_depth
 
         ranked_lists: dict[str, list[int]] = {}
         if query_clip_vec is not None and self.index.has_encoder("clip"):

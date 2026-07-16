@@ -199,13 +199,18 @@ def fusion_depth_sweep(  # pragma: no cover - model thật
     index lại cho mỗi giá trị là phí thời gian (khác encoder_sweep: đổi encoder thì
     buộc phải index lại).
 
-    Đo hit@1..100 trong CÙNG một lượt với top_k=100 — phép đo này chỉ HỢP LỆ sau khi
-    sửa bug: trước đây top_k=100 sẽ tự nó đổi thứ hạng, nên hit@5 đo ở đây khác hit@5
-    đo với top_k=5, và cả hai đều không nói lên điều gì về chất lượng thật.
+    ĐO VỚI top_k=5, KHÔNG PHẢI 100 — bài học từ lần chạy hỏng đầu tiên: fusion sâu d
+    trên n nguồn chỉ sinh tối đa d·n ứng viên, nên hit@100 ở depth=5 là VÔ NGHĨA. Muốn
+    so công bằng thì mọi độ sâu phải trả đủ số kết quả được chấm -> top_k=5 (và hit@1/
+    hit@5 mới đúng là thứ quan trọng với KIS).
 
     rerank=False: cô lập ẢNH HƯỞNG CỦA FUSION. Bật VLM rerank sẽ trộn thêm một biến
     số nữa (và tốn ~4s/query × 51 nhãn × 7 độ sâu).
+
+    So sánh bằng McNemar THEO CẶP, không nhìn bảng bằng mắt (đã có tiền sự đọc chênh
+    lệch 2 query thành kết luận — xem TASKS Mục 6c).
     """
+    from evaluation.metrics import mcnemar_paired, wilson_interval
     from retrieval.video_engine import VideoSearchEngine
 
     BENCH_DIR.mkdir(parents=True, exist_ok=True)
@@ -220,23 +225,44 @@ def fusion_depth_sweep(  # pragma: no cover - model thật
           flush=True)
 
     rows: list[dict] = []
+    hits_by_depth: dict[int, list[float]] = {}
     for d in depths:
         engine.fusion_depth = d
         t0 = time.perf_counter()
-        acc = evaluate_labeled(engine, entry, labels, ks=(1, 5, 10, 30, 100), top_k=100)
+        acc = evaluate_labeled(engine, entry, labels, ks=(1, 5), top_k=5)
         elapsed = time.perf_counter() - t0
+        hits_by_depth[d] = [r["hit@1"] for r in acc["per_query"]]
+        # Số kết quả trả về trung bình: canh chừng depth bị kẹp (bug đã sập một lần).
+        n_ret = mean(len(engine.search(entry, lab.query, top_k=5)) for lab in labels)
+        lo, hi = wilson_interval(int(sum(hits_by_depth[d])), len(labels))
         row = {"fusion_depth": d,
                "seconds_per_query": round(elapsed / max(1, len(labels)), 4),
+               "avg_results_returned": round(n_ret, 2),
+               "hit@1_ci95": [round(lo, 4), round(hi, 4)],
                **acc["aggregate"]}
         rows.append(row)
-        print(f"[depth] {d:>5}: hit@1={row.get('hit@1')} hit@5={row.get('hit@5')} "
-              f"hit@30={row.get('hit@30')} hit@100={row.get('hit@100')} "
-              f"mrr={row.get('mrr')} | {row['seconds_per_query']}s/query", flush=True)
+        print(f"[depth] {d:>5}: hit@1={row.get('hit@1')} KTC95={row['hit@1_ci95']} "
+              f"hit@5={row.get('hit@5')} mrr={row.get('mrr')} | "
+              f"trả {row['avg_results_returned']} kq | {row['seconds_per_query']}s/q",
+              flush=True)
+
+    # So từng độ sâu với độ sâu LỚN NHẤT (mặc định hiện tại) — theo cặp.
+    base = max(depths)
+    comparisons = []
+    for d in depths:
+        if d == base:
+            continue
+        r = mcnemar_paired(hits_by_depth[base], hits_by_depth[d])
+        comparisons.append({"depth": d, "vs": base, **r})
+        verdict = "CÓ Ý NGHĨA" if r["significant_at_05"] else "chưa phân biệt được"
+        print(f"[so cặp] depth {d} vs {base}: {r['n_discordant']} cặp bất đồng, "
+              f"p={r['p_value']} -> {verdict}", flush=True)
 
     out = BENCH_DIR / out_name
     out.write_text(
         json.dumps({"n_labels": len(labels), "num_indexed": entry.num_indexed,
-                    "rerank": False, "depths": rows}, ensure_ascii=False, indent=2),
+                    "rerank": False, "top_k": 5, "depths": rows,
+                    "paired_tests": comparisons}, ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"[Đã lưu] {out}")
     return rows

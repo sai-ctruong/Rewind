@@ -405,7 +405,51 @@ bác bỏ ở trên (encoder to hơn: không; pool sâu hơn: không) ⇒ nút t
 PHÂN BIỆT của bộ chấm** (SigLIP ở coarse, Qwen2-VL-2B ở rerank). Đòn bẩy còn lại: **bộ
 rerank mạnh hơn (Claude vision)** hoặc **caption LLM** — đều cần API key.
 
-### 🟡 BUG ĐÃ TÌM RA, CHƯA SỬA — fusion phụ thuộc kích thước pool
+### ✅ ĐÃ SỬA — fusion phụ thuộc kích thước pool (2026-07-16)
+
+Đã tách `fusion_depth` (cố định) khỏi `top_k` (chỉ cắt kết quả) trong `CoarseRetriever`.
+**Kiểm chứng test bắt được bug thật** (chạy lại code cũ qua `git stash`):
+
+```
+CODE CŨ  top5(xin 5)  : k42 k512 k546 k305 k424
+CODE CŨ  top5(xin 50) : k42 k512 k157 k414 k546   ← 3/5 khác nhau
+```
+
+Cơ chế tinh vi hơn tưởng ban đầu: điểm RRF của một ảnh = tổng `1/(k+rank)` **trên các
+list nó CÓ MẶT**. List sâu hơn không đổi rank của ảnh, nhưng làm nó **xuất hiện thêm ở
+nguồn khác** → được cộng thêm điểm. Ảnh ở dense rank 2 + BM25 rank 12 vô hình khi
+depth=5, nhưng ở depth=20 được cộng điểm BM25 và vọt lên trên ảnh dense rank 1.
+
+#### 📊 Quét độ sâu (51 nhãn · 2679 kf · top_k=5 · coarse-only)
+| depth | hit@1 | hit@5 | s/query |
+|---|---|---|---|
+| 5 | 0.431 | **0.667** | 0.066 |
+| 10 | 0.451 | **0.667** | 0.063 |
+| 20 | 0.451 | 0.647 | 0.066 |
+| 50 | **0.490** | 0.628 | 0.068 |
+| 100 · 300 · **1000** | 0.471 | 0.608 | 0.065 |
+
+**Kết luận: GIỮ 1000 vì KHÔNG CÓ BẰNG CHỨNG để đổi** — không phải vì nó tối ưu.
+Trông như một đánh đổi đẹp (sâu → hit@1 tăng, hit@5 giảm) nhưng McNemar theo cặp cho
+hit@1: **p ≥ 0.625** ở mọi độ sâu. Với hit@5, chênh lệch **lớn nhất toàn bảng = 3
+query** → kể cả khi cả 3 cùng nghiêng một phía thì **p = 0.25**. Thí nghiệm **không đủ
+lực** để phát hiện hiệu ứng cỡ này (cần ≥ 6 cặp bất đồng) → phải làm **C1 (tăng nhãn)**
+trước, không chỉnh số dựa trên bảng này. Quá depth 100 thì **bão hoà tuyệt đối** (100 ≡
+300 ≡ 1000, 0 cặp bất đồng) — ứng viên ở rank sâu chỉ được cộng `1/(60+rank)`, quá nhỏ
+để lật thứ hạng.
+
+> #### 🔴 LẦN CHẠY ĐẦU HỎNG — tôi tự phá thí nghiệm của mình
+> Bench đầu cho **số liệu y hệt nhau ở 5 độ sâu** → suýt kết luận "độ sâu không ảnh
+> hưởng gì". Dấu hiệu hỏng: `depth=5` mà `hit@100=0.902` là **bất khả thi** (fusion sâu
+> 5 trên 3 nguồn cho tối đa 15 ứng viên). Thủ phạm là `max(top_k, depth)` tôi thêm cho
+> "an toàn": bench gọi `top_k=100` nên mọi depth < 100 **bị kẹp lên 100**. Tệ hơn: cái
+> kẹp đó **tái lập đúng bug vừa sửa** — để `top_k` chi phối độ sâu trở lại.
+> **Đã gỡ kẹp** (`depth < top_k` → trả về ít hơn top_k, đó mới đúng) + test khoá:
+> `depth=3, top_k=100` mà trả đủ 100 kết quả là hỏng.
+>
+> **Bài học:** số liệu quá "đẹp"/quá đều là dấu hiệu HỎNG, không phải dấu hiệu thành công.
+
+### 🟡 (đã sửa — giữ lại để tra cứu) BUG: fusion phụ thuộc kích thước pool
 `hit@5` **đổi theo `top_k` yêu cầu**: 0.627 (top_k=5) → 0.510 (top_k=100). Xin **nhiều**
 ứng viên hơn lại làm **top-5 tệ đi** — vô lý. Nguyên nhân: `pool = max(top_k, rerank_pool)`
 (`video_engine._run_search`) làm **độ sâu fusion phụ thuộc số kết quả người gọi muốn**;

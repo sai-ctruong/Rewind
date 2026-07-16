@@ -256,6 +256,32 @@ def test_fusion_depth_is_what_changes_ranking_not_top_k() -> None:
     assert d5 != d500, "đổi độ sâu fusion phải đổi được kết quả — nếu không, test kia vô nghĩa"
 
 
+def test_depth_is_never_clamped_up_to_top_k() -> None:
+    """`depth` KHÔNG được kẹp lên bằng top_k — bẫy này đã sập một lần.
+
+    Từng viết `max(top_k, depth)` cho "an toàn". Benchmark gọi top_k=100 nên mọi depth
+    < 100 bị kẹp lên 100 -> 5 độ sâu khác nhau cho ra số liệu Y HỆT, và suýt kết luận
+    "độ sâu fusion không ảnh hưởng gì". Cái kẹp đó cũng tái lập đúng bug vừa sửa: top_k
+    lại chi phối độ sâu.
+
+    Fusion sâu d trên n nguồn sinh tối đa d·n ứng viên -> xin 100 mà depth=3 thì phải
+    trả về ÍT hơn 100. Trả đủ 100 nghĩa là depth đã bị bỏ qua.
+    """
+    records = _big_records(600)
+    index = KeyframeIndex.build(records)
+    retriever = CoarseRetriever(index)
+    q = records[42]
+    got = retriever.search(
+        query_clip_vec=q.clip_embedding,
+        query_siglip_vec=q.siglip_embedding,
+        query_text="person car street",
+        top_k=100,
+        depth=3,
+    )
+    assert len(got) < 100, "depth=3 mà trả đủ 100 kết quả -> depth đang bị kẹp lên top_k"
+    assert len(got) <= 3 * 3, "tối đa depth × số nguồn (clip+siglip+bm25)"
+
+
 # -----------------------------------------------------------------------------
 # Persistence
 # -----------------------------------------------------------------------------

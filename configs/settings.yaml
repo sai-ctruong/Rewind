@@ -110,12 +110,23 @@ fusion:
   # [FIXED] Hằng số k trong công thức RRF_score = Σ 1/(k + rank). k=60 là mặc định
   # chuẩn trong tài liệu IR (Mục 4.3).
   rrf_k: 60
-  # [PROVISIONAL — đang đo bằng bench_retrieval.py --fusion-depth] Độ sâu fusion: mỗi
-  # nguồn (clip/siglip/bm25) đóng góp bấy nhiêu rank vào RRF.
+  # [ĐO 2026-07-16 — bench_retrieval.py --fusion-depth, 51 nhãn/2679 kf] Độ sâu fusion:
+  # mỗi nguồn (clip/siglip/bm25) đóng góp bấy nhiêu rank vào RRF.
   #
   # PHẢI TÁCH RIÊNG khỏi "số kết quả trả về". Bug đã đo: khi hai thứ này là MỘT tham
   # số, xin top_k=20 thay vì 5 làm hit@5 tụt 0.627 -> 0.510 (cùng query, cùng index) —
   # vì list sâu hơn khiến item được cộng điểm RRF từ nhiều nguồn hơn, đổi cả thứ hạng.
+  #
+  # GIÁ TRỊ 1000 giữ nguyên vì KHÔNG CÓ BẰNG CHỨNG để đổi, chứ không phải vì đã tối ưu:
+  #   depth   5: hit@1 0.431 · hit@5 0.667
+  #   depth  50: hit@1 0.490 · hit@5 0.628
+  #   depth 100/300/1000: hit@1 0.471 · hit@5 0.608  (GIỐNG HỆT NHAU — quá 100 bão hoà)
+  # Trông như đánh đổi (sâu -> hit@1 tăng, hit@5 giảm) nhưng McNemar theo cặp: p >= 0.625
+  # cho hit@1. Với hit@5, chênh lệch LỚN NHẤT toàn bảng chỉ là 3 query -> kể cả khi cả 3
+  # cùng nghiêng một phía thì p = 0.25. Tức thí nghiệm này KHÔNG ĐỦ LỰC để phát hiện
+  # (cần >= 6 cặp bất đồng). Đừng chỉnh số này dựa trên bảng trên — hãy tăng số nhãn
+  # trước (task C1). Độ trễ như nhau ở mọi độ sâu (~0.065s/query) nên không có lý do
+  # tốc độ để hạ xuống.
   depth: 1000
   # Số candidate giữ lại sau fusion trước khi vào fine rerank (Mục 3, bước [3]).
   top_k_after_fusion: 100       # [PROVISIONAL]
