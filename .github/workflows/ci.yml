@@ -99,6 +99,12 @@ jobs:
         # Số gõ tay thì luôn lệch — để CI canh.
         # Đếm qua HOOK của pytest, không bới chữ trong stdout: addopts="-ra -q" của
         # project khiến dòng "N passed" có thể không được in ra.
+        #
+        # LƯU Ý khi chạy TAY trên máy dev: nếu máy bạn ĐÃ cài torch thì con số là 272
+        # (một test guard lazy-import cố ý skip khi torch có mặt) -> bước này sẽ báo
+        # lệch. Đó KHÔNG phải lỗi: số 273 trong tài liệu mô tả đúng lệnh mà tài liệu
+        # ghi — `pip install -r requirements.txt` (lõi nhẹ, không torch) — và job này
+        # chạy đúng môi trường đó.
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
@@ -127,6 +133,9 @@ jobs:
           PY
 
       - name: Mọi ảnh/link nội bộ trong tài liệu phải tồn tại
+        env:                       # tài liệu tiếng Việt -> ép UTF-8 cho chắc
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
         run: |
           python - <<'PY'
           import re, sys

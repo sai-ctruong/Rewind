@@ -96,7 +96,8 @@ câu mô tả.
 ### 3.5 Tinh chỉnh bằng phản hồi 👍 / 👎 (rất mạnh)
 Trên mỗi kết quả có nút **👍** và **👎**:
 1. Bấm 👍 vào ảnh **đúng ý**, 👎 vào ảnh **lạc đề**.
-2. Thanh **🔁 Lọc lại theo phản hồi (👍n 👎m)** hiện số đã đánh dấu — bấm nó.
+2. Thanh **🔁 Lọc lại theo phản hồi (👍n 👎m)** **hiện ra ngay khi bạn đánh dấu** (chưa
+   bấm gì thì chưa có) — bấm nó.
 3. Hệ **kéo kết quả** về hướng ảnh bạn thích, tránh xa ảnh không thích (thuật toán
    Rocchio). Lặp vài vòng là ra đúng thứ cần.
 

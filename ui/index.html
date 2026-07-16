@@ -286,6 +286,11 @@
   .vstatus { font-size: 13px; color: var(--muted); }
   .vstatus.busy { color: var(--accent); }
   .video-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  /* Lưới kết quả chỉ nên xếp CỘT cho các THẺ keyframe. Mọi thứ khác được append vào
+     cùng container (banner "Hiểu câu", thanh 🔁 lọc theo phản hồi, chip gợi ý concept,
+     panel hỏi lại, thông báo rỗng) là phần tử NGANG -> phải trải hết chiều rộng, nếu
+     không chúng bị ép vào ô 150px và chồng lên nhau. */
+  .video-results > :not(.vcard) { grid-column: 1 / -1; }
   .vcard { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
     background: var(--surface); box-shadow: var(--shadow); animation: fade .3s ease; }
   .vcard.win { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
@@ -1149,9 +1154,13 @@
     // F2: trạng thái phản hồi liên quan (👍/👎) — reset khi đổi câu (ý định mới).
     const fb = { pos: new Set(), neg: new Set() };
     let fbBtn = null;
+    // Thanh 🔁 chỉ xuất hiện KHI ĐÃ có phản hồi — giống tab KISC/Agent. Trước đây tab
+    // này hiện nút disabled ngay từ đầu: vừa thừa (chưa bấm 👍/👎 thì lọc gì?), vừa lệch
+    // với các tab khác.
     const updateBar = () => { if (fbBtn) {
+      const n = fb.pos.size + fb.neg.size;
       fbBtn.textContent = "🔁 Lọc lại theo phản hồi (👍" + fb.pos.size + " 👎" + fb.neg.size + ")";
-      fbBtn.disabled = fb.pos.size === 0 && fb.neg.size === 0; } };
+      if (fbBtn.parentElement) fbBtn.parentElement.style.display = n ? "flex" : "none"; } };
 
     const el2 = (t, c, txt) => { const e = el(t, c); e.textContent = txt; return e; };
 

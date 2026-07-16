@@ -51,6 +51,12 @@ thu hẹp dần — nó trả về đúng khung hình.
 </tr>
 </table>
 
+<p align="center">
+  <img src="docs/assets/ui-video.jpg" alt="Giao diện Rewind: gõ “người đi bộ trên phố” trên video đã nạp, trả về lưới keyframe thật kèm mốc thời gian; phía trên là panel hiểu câu và panel hệ chủ động hỏi lại “cái nào giống nhất?”" width="100%">
+</p>
+<p align="center"><sub>Ảnh chụp thật — không dàn dựng: truy vấn <i>“người đi bộ trên phố”</i> trên video đã nạp.<br/>
+Trên cùng là thanh video <b>nạp một lần, mọi tab dùng chung</b>; hệ hiện câu đã hiểu, và <b>chủ động hỏi lại</b> khi còn mơ hồ.</sub></p>
+
 <img src="docs/assets/divider.svg" width="100%" alt="">
 
 ## 🎯 Bộ lọc ảnh — thu hẹp dần tới đúng khoảnh khắc
