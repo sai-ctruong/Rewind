@@ -6,8 +6,9 @@
 Công cụ tìm kiếm ngữ nghĩa cho video quy mô lớn — tìm bất kỳ khoảnh khắc nào bằng <em>lời mô tả</em>, <em>ảnh mẫu</em>, hoặc <em>hội thoại</em>.</p>
 
 <p align="center">
+  <a href="https://github.com/sai-ctruong/Rewind/actions/workflows/ci.yml"><img src="https://github.com/sai-ctruong/Rewind/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/tests-262%20passing-2f9e6f" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-273%20passing-2f9e6f" alt="Tests">
   <img src="https://img.shields.io/badge/ANN-Faiss%20HNSW-F5A623" alt="Faiss">
   <img src="https://img.shields.io/badge/encoder-SigLIP2-6E8BFF" alt="SigLIP">
   <img src="https://img.shields.io/badge/layer-Agentic-8B5CF6" alt="Agentic">
@@ -129,7 +130,7 @@ bạn xem nó đã gọi tool nào, vì sao**.
 | 🤝 **Ensemble 2 encoder** | SigLIP2 + SigLIP đa ngôn ngữ — giảm "cùng sai", **Việt lẫn Anh** |
 | 🔎 **Hybrid dense + sparse** | SigLIP trộn BM25 (OCR/ASR/caption) qua RRF, trọng số **thích ứng** |
 | 🧪 **Mock-first** | mọi thứ cần GPU/API đều có bản Mock chạy **offline**; bản thật *lazy-import* |
-| ✅ **262 unit test** | `pytest` chạy hoàn toàn offline — kể cả vòng lặp Agent |
+| ✅ **273 unit test** | `pytest` chạy hoàn toàn offline (~7s) — không cần GPU/API key |
 
 <img src="docs/assets/divider.svg" width="100%" alt="">
 
@@ -184,7 +185,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 2. Chạy toàn bộ test — offline, không cần GPU/API
-pytest                            # → 262 passed
+pytest                            # → 273 passed (~7s, không cần GPU)
 
 # 3. Web demo (pipeline thật)
 python -m ui.app                  # → http://127.0.0.1:5000
@@ -196,7 +197,7 @@ Bỏ video vào `data/videos/`, mở tab **🎥 Video** → **Nạp video** → 
 <summary><b>🎥 Tìm trên video thật bằng dòng lệnh (SigLIP local, không cần API key)</b></summary>
 
 ```bash
-pip install opencv-python-headless torch transformers sentencepiece protobuf pillow
+pip install -r requirements-full.txt      # torch + SigLIP + OCR (~5 GB)
 
 python -m ingestion.video_ingest phim.mp4 --out artifacts/frames --every 1.0
 python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên phố" --topk 5
@@ -348,5 +349,5 @@ reasoning CoT/ToT (cần LLM) · IVF-PQ/sharding (khi profiling cho thấy RAM l
 </p>
 <p align="center"><i>Rewind — tua lại tìm khoảnh khắc.</i></p>
 <p align="center">
-  <sub>Chạy offline bằng mock · cắm model/API thật là dùng · 262 test xanh</sub>
+  <sub>Chạy offline bằng mock · cắm model/API thật là dùng · 273 test xanh</sub>
 </p>

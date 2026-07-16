@@ -1,49 +1,38 @@
-# requirements.txt — phụ thuộc runtime cho hệ thống AIC 2026
+# requirements.txt — LÕI NHẸ: đủ để `pytest` xanh và mở web UI.
 #
-# NGUYÊN TẮC (Mục 10.2): chỉ thêm thư viện KHI Phase tương ứng thực sự cần, không
-# cài trước hàng loạt. Danh sách này sẽ lớn dần theo từng Phase. Các thư viện nặng
-# (faiss, torch, whisper, paddleocr...) chỉ thêm ở Phase 2/3 khi bắt đầu dùng.
+# TRIẾT LÝ (Mock-first): mọi thành phần cần GPU/API đều có bản Mock chạy offline, còn
+# bản thật được *lazy-import* (chỉ nạp khi thực dùng). Nhờ vậy file này KHÔNG chứa
+# torch/transformers/easyocr — cài lõi này là chạy được TOÀN BỘ test.
+#
+#     pip install -r requirements.txt && pytest
+#
+# ĐO THẬT (2026-07-16, venv sạch Python 3.14): **273 passed trong ~7 giây, ~280 MB**
+# — KHÔNG cần torch. Trước đây file này ép cài torch/easyocr (~5 GB) ngay từ đầu,
+# trái với chính lời hứa "chạy test offline, không cần GPU".
+#
+# Muốn XỬ LÝ VIDEO THẬT (SigLIP/OCR/VLM rerank):
+#     pip install -r requirements-full.txt
+#
+# NGUYÊN TẮC (Mục 10.2): chỉ thêm thư viện KHI thực sự cần, không cài trước hàng loạt.
 
-# --- Phase 0: cấu hình + test ---
+# --- cấu hình + test ---
 PyYAML>=6.0        # đọc configs/settings.yaml
 pytest>=7.4        # chạy unit test theo DoD mỗi Phase
 
-# --- Phase 1: dedup ---
+# --- dedup + embedding ---
 numpy>=1.26        # thao tác embedding + cosine similarity (KeyframeRecord.clip_embedding)
 
-# --- Phase 3: index + coarse retrieval ---
+# --- index + coarse retrieval ---
 faiss-cpu>=1.8     # vector index HNSW (Mục 2.2). Đổi faiss-gpu nếu có CUDA.
 rank-bm25>=0.2     # sparse retrieval BM25 trên OCR/ASR/objects/caption (Mục 3 bước [2])
 
-# --- Phase 10: web UI ---
+# --- web UI ---
 Flask>=3.0         # backend demo nối pipeline thật (ui/app.py)
 
-# --- Xử lý video thật + SigLIP (không cần API key, chỉ tải model local) ---
+# --- video I/O + ảnh (nhẹ, KHÔNG kéo theo torch) ---
 opencv-python-headless>=4.9   # decode video + cắt keyframe (ingestion/video_ingest.py)
-torch>=2.2                    # backend SigLIP
-transformers>=4.40            # load SigLIP (image + text encoder)
-sentencepiece>=0.2            # tokenizer text của SigLIP
-protobuf>=4.0                 # phụ thuộc tokenizer SigLIP
-pillow>=10.0                  # đọc ảnh keyframe cho SigLIP
+pillow>=10.0                  # đọc/ghi ảnh keyframe
 
-# --- OCR: đọc chữ/biển hiệu trên keyframe -> tìm bằng CHỮ (BM25), Mục 2/3 ---
-easyocr>=1.7                  # OCR tiếng Việt+Anh, tự chạy GPU qua torch (EasyOcrEngine)
-
-# --- VLM rerank local: hiểu từng chữ + ngữ cảnh (Mục 4.4, không cần API key) ---
-qwen-vl-utils>=0.0.8          # tiện ích xử lý ảnh cho Qwen2-VL
-accelerate>=0.30             # tải/chạy model hiệu quả (Qwen2-VL-2B rerank)
-
-# --- GPU (tuỳ chọn, tăng tốc 8-30x) -----------------------------------------
-# Mặc định `pip install torch` -> bản CPU-only. Có GPU NVIDIA thì cài bản CUDA:
-#   pip install "torch==2.13.0+cu126" --index-url https://download.pytorch.org/whl/cu126
-# (cu126 chạy trên driver hỗ trợ CUDA 12.x nhờ minor-version compatibility, r525+).
-# SiglipEncoder + Qwen2VLReranker TỰ dùng GPU (fp16) khi torch.cuda.is_available().
-
-# --- Phase 2+ real / các Phase sau (bổ sung khi tới): ---
-# faiss-cpu        # vector index HNSW (Mục 2.2) — cân nhắc faiss-gpu nếu có CUDA
-# torch            # backend cho SigLIP encoder
-# transformers     # load SigLIP (Mục 2.1)
-# rank-bm25        # sparse retrieval trên OCR/ASR/caption (Mục 3 bước [2])
-# anthropic        # Claude API cho Query Understanding / caption / rerank (Mục 2.3)
-# paddleocr        # OCR (Mục 6 ocr_asr_extract.py)
-# openai-whisper   # ASR (Mục 6 ocr_asr_extract.py)
+# --- đo đạc ---
+psutil>=5.9        # đo RAM tiến trình cho evaluation/bench_scale.py (benchmark quy mô).
+                   # THIẾU dòng này trước đây -> bench_scale nổ trên máy mới.

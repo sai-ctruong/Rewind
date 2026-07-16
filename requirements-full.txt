@@ -1,0 +1,35 @@
+# requirements-full.txt — XỬ LÝ VIDEO THẬT (SigLIP / OCR / VLM rerank).
+#
+# Chỉ cần khi bạn muốn index video thật và tìm kiếm bằng model thật. KHÔNG cần để
+# chạy test: `pip install -r requirements.txt && pytest` -> 273 passed (~7s, ~280 MB).
+#
+#     pip install -r requirements-full.txt      # đã bao gồm lõi nhẹ bên dưới
+#
+# NẶNG: ~5 GB (torch + easyocr + transformers) + model tải về lần đầu (vài trăm MB
+# tới vài GB). Vẫn KHÔNG cần API key — mọi model chạy local.
+
+-r requirements.txt
+
+# --- SigLIP: encoder ảnh + text (tìm cross-modal, không cần API key) ---
+torch>=2.2                    # backend SigLIP
+transformers>=4.40            # load SigLIP (image + text encoder)
+sentencepiece>=0.2            # tokenizer text của SigLIP
+protobuf>=4.0                 # phụ thuộc tokenizer SigLIP
+
+# --- OCR: đọc chữ/biển hiệu trên keyframe -> tìm bằng CHỮ (BM25), Mục 2/3 ---
+easyocr>=1.7                  # OCR tiếng Việt+Anh, tự chạy GPU qua torch (EasyOcrEngine)
+
+# --- VLM rerank local: hiểu từng chữ + ngữ cảnh (Mục 4.4, không cần API key) ---
+qwen-vl-utils>=0.0.8          # tiện ích xử lý ảnh cho Qwen2-VL
+accelerate>=0.30              # tải/chạy model hiệu quả (Qwen2-VL-2B rerank)
+
+# --- GPU (tuỳ chọn, tăng tốc 8-30x) -----------------------------------------
+# Mặc định `pip install torch` -> bản CPU-only. Có GPU NVIDIA thì cài bản CUDA:
+#   pip install "torch==2.13.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+# (cu126 chạy trên driver hỗ trợ CUDA 12.x nhờ minor-version compatibility, r525+).
+# SiglipEncoder + Qwen2VLReranker TỰ dùng GPU (fp16) khi torch.cuda.is_available().
+
+# --- Tuỳ chọn thêm (cài khi cần tính năng tương ứng) ---
+# openai-whisper   # ASR: tìm theo LỜI NÓI trong video (enable_asr=True)
+# anthropic        # Claude API: caption/rerank/Agent/VQA vision (cần ANTHROPIC_API_KEY)
+# decord           # decode video nhanh hơn (NVDEC) — xem A3 trong TASKS.md

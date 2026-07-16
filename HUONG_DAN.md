@@ -56,13 +56,13 @@ Mọi thứ bắt đầu bằng việc **index một video** để tạo `entry`
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-pytest                       # → 243 passed  (xác nhận mọi thứ chạy)
+pytest                       # → 273 passed  (~7 giây, không cần GPU)
 ```
 
 ### Thêm để xử lý VIDEO THẬT (SigLIP local, vẫn không cần API key)
 
 ```powershell
-pip install opencv-python-headless torch transformers sentencepiece protobuf pillow
+pip install -r requirements-full.txt   # torch + SigLIP + OCR + VLM (~5 GB)
 ```
 
 > Lần đầu chạy sẽ **tải model SigLIP** (vài trăm MB) về cache — chỉ tải 1 lần.

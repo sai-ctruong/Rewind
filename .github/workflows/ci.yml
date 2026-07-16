@@ -1,0 +1,146 @@
+# CI — chạy test trên MÁY SẠCH mỗi lần push/PR.
+#
+# VÌ SAO CÓ FILE NÀY: máy dev đã cài sẵn đủ thứ nên `pytest` xanh kể cả khi
+# requirements.txt THIẾU thư viện — đúng lỗi đã xảy ra (`psutil` được dùng trong
+# evaluation/bench_scale.py nhưng không khai báo, chỉ nổ trên máy mới). Runner của
+# GitHub bắt đầu từ con số 0, nên nó BẮT BUỘC phần khai báo phụ thuộc phải đúng.
+# Đây là thứ NGĂN lỗi tái diễn, không chỉ vá một lần.
+#
+# Đồng thời khoá luôn lời hứa trong README: "cài lõi nhẹ là chạy được toàn bộ test,
+# không cần GPU/torch/API key".
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # cho phép bấm chạy tay từ tab Actions
+
+jobs:
+  test:
+    name: pytest (lõi nhẹ, không torch)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = sàn tối thiểu README cam kết; 3.13 = bản mới, bắt sớm lỗi tương thích.
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cài Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cài LÕI NHẸ (chỉ requirements.txt — cố ý KHÔNG cài torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Khẳng định môi trường đúng là "nhẹ"
+        # Nếu torch lọt vào lõi nhẹ thì lời hứa của README hỏng mà không ai biết.
+        run: |
+          python - <<'PY'
+          import importlib.util as u, sys
+          heavy = [m for m in ("torch", "transformers", "easyocr") if u.find_spec(m)]
+          if heavy:
+              sys.exit(f"LỖI: {heavy} lọt vào requirements.txt — lõi phải NHẸ "
+                       "(chúng thuộc requirements-full.txt).")
+          print("OK: lõi nhẹ, không có torch/transformers/easyocr")
+          PY
+
+      # LƯU Ý: pyproject.toml đã đặt addopts = "-ra -q"; thêm "-q" nữa thành double-quiet
+      # và pytest NGỪNG in dòng "N passed" -> đừng thêm -q ở đây.
+      - name: Chạy test
+        env:
+          PYTHONUTF8: "1"          # tài liệu/test dùng tiếng Việt
+          PYTHONIOENCODING: utf-8
+        run: pytest
+
+      - name: Không được có test bị SKIP vì thiếu thư viện
+        # importorskip("cv2"/"faiss"/"psutil") sẽ âm thầm bỏ qua test nếu lõi thiếu
+        # -> CI vẫn "xanh" trong khi thực chất không chạy gì. Chặn đúng cái bẫy đó.
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          out = subprocess.run([sys.executable, "-m", "pytest", "-rs"],
+                               capture_output=True, text=True).stdout
+          bad = [l for l in out.splitlines()
+                 if "SKIPPED" in l and ("could not import" in l or "importorskip" in l)]
+          if bad:
+              print("\n".join(bad))
+              sys.exit("LỖI: có test bị skip vì THIẾU thư viện -> requirements.txt còn sót.")
+          print("OK: không test nào bị skip vì thiếu thư viện")
+          PY
+
+  docs:
+    name: Tài liệu khớp thực tế
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Số test trong README/HUONG_DAN phải đúng với thực tế
+        # Lỗi đã xảy ra: README ghi "262 passed", HUONG_DAN ghi "243", thực tế 273.
+        # Số gõ tay thì luôn lệch — để CI canh.
+        # Đếm qua HOOK của pytest, không bới chữ trong stdout: addopts="-ra -q" của
+        # project khiến dòng "N passed" có thể không được in ra.
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import re, sys
+          from pathlib import Path
+          import pytest
+
+          class Count:
+              total = 0
+              def pytest_terminal_summary(self, terminalreporter):
+                  Count.total = len(terminalreporter.stats.get("passed", []))
+
+          if pytest.main(["-p", "no:cacheprovider"], plugins=[Count()]) != 0:
+              sys.exit("pytest thất bại.")
+          real = Count.total
+          bad = []
+          for f in ("README.md", "HUONG_DAN.md"):
+              for claimed in re.findall(r"(\d+)\s+passed", Path(f).read_text(encoding="utf-8")):
+                  if int(claimed) != real:
+                      bad.append(f"{f}: ghi {claimed} passed, thực tế {real}")
+          if bad:
+              sys.exit("Tài liệu lệch thực tế:\n  " + "\n  ".join(bad))
+          print(f"OK: tài liệu khớp — {real} passed")
+          PY
+
+      - name: Mọi ảnh/link nội bộ trong tài liệu phải tồn tại
+        run: |
+          python - <<'PY'
+          import re, sys
+          from pathlib import Path
+          bad = []
+          for f in ("README.md", "HUONG_DAN.md", "HUONG_DAN_GIAO_DIEN.md"):
+              md = Path(f).read_text(encoding="utf-8")
+              for src in re.findall(r'<img src="([^"]+)"', md):
+                  if not src.startswith("http") and not Path(src).exists():
+                      bad.append(f"{f}: thiếu ảnh {src}")
+              for link in re.findall(r"\]\(([^)#][^)]*)\)", md):
+                  if not link.startswith("http") and not Path(link).exists():
+                      bad.append(f"{f}: link hỏng {link}")
+          if bad:
+              sys.exit("\n".join(bad))
+          print("OK: mọi ảnh + link nội bộ đều tồn tại")
+          PY

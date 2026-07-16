@@ -302,10 +302,49 @@ Build 200k vector: **43s** → 1M ước ~4–6 phút. Nhỏ xíu so với **tr�
 | B1 | Harness benchmark (throughput + Recall/MRR) + **51 nhãn thật** + sweep | ✅ (xem Mục 7) |
 | C1 | **Tăng nhãn** (37 → **51** ✅; tiến tới ~100+) — giảm nhiễu hit@1 | 🟡 51 xong, thêm được |
 | C2 | **VQA trên video thật** (đếm/thứ tự) — cần object-detection hoặc API | 🔲 |
-| C3 | **CI GitHub Actions** chạy pytest mỗi push | 🔲 |
+| C3 | **CI GitHub Actions** + sửa 3 lỗi onboarding | ✅ **XONG 2026-07-16** — xem Mục 6b |
 | C4 | Quy trình **PR** khi 2 người làm song song | 🔲 |
 
 ---
+
+## 6b. 🔧 C3 — CI + 3 LỖI ONBOARDING (đã sửa 2026-07-16)
+
+Máy dev đã cài sẵn đủ thứ nên `pytest` xanh **kể cả khi khai báo phụ thuộc sai**. Ba lỗi
+dưới đây chỉ lộ ra trên **máy sạch** — tức là đúng lúc người mới clone repo.
+
+| # | Lỗi | Hậu quả |
+|---|---|---|
+| 1 | `psutil` **thiếu** trong `requirements.txt` nhưng `bench_scale.py` dùng | benchmark quy mô **nổ** trên máy mới; test lặng lẽ bị skip |
+| 2 | Số test **sai ở 2 nơi**: README ghi `262`, HUONG_DAN ghi `243` — thực tế **273** | tài liệu tự mâu thuẫn ngay dòng đầu |
+| 3 | `requirements.txt` ép cài **torch + easyocr + transformers (~5 GB)** ngay từ đầu | trái chính lời hứa *"chạy test offline, không cần GPU"* |
+
+### Đã sửa
+- **Tách phụ thuộc:** `requirements.txt` (**lõi nhẹ**) ↔ `requirements-full.txt`
+  (torch/OCR/VLM, có `-r requirements.txt`). **ĐO THẬT trên venv sạch Python 3.14:**
+  `pip install -r requirements.txt && pytest` → **273 passed, ~7 giây, ~280 MB** —
+  **không cần torch**. (Trước: ~5 GB.)
+- Thêm `psutil` vào lõi; sửa số test ở README + HUONG_DAN; trỏ hướng dẫn cài sang
+  `requirements-full.txt` thay vì liệt kê gói thủ công.
+
+### CI (`.github/workflows/ci.yml`) — ngăn tái diễn, không chỉ vá một lần
+Runner GitHub bắt đầu từ số 0 nên **bắt buộc** khai báo phụ thuộc phải đúng. 2 job:
+
+| Job | Kiểm |
+|---|---|
+| **test** (Python 3.10 + 3.13) | cài **chỉ lõi nhẹ** → `pytest`; **khẳng định torch KHÔNG lọt vào lõi**; **chặn test bị skip vì thiếu thư viện** (bẫy: CI "xanh" mà thực chất không chạy gì) |
+| **docs** | **số test trong tài liệu phải khớp thực tế** (lỗi #2 sẽ không tái diễn); mọi **ảnh + link nội bộ** phải tồn tại |
+
+### 2 lỗi trong chính CI, tự bắt được khi chạy thử
+1. `pyproject.toml` đã đặt `addopts = "-ra -q"` → thêm `-q` nữa thành **double-quiet**,
+   pytest **ngừng in** dòng `N passed` → bước đếm test sập dù code không sao. Sửa: bỏ `-q`
+   và đếm qua **hook `pytest_terminal_summary`** thay vì bới chữ trong stdout.
+2. Hook pytest đòi **đúng tên tham số** (`terminalreporter`) — đổi tên là `PluginValidationError`.
+
+**Đã chạy thật cả 4 bước trên venv sạch** (trích đúng code từ `ci.yml`, không gõ lại):
+lõi-nhẹ PASS · 273 passed · không skip · tài liệu khớp · ảnh/link OK. Guard cũng được
+kiểm **cả hai chiều**: PASS trên venv sạch, **FAIL** trên venv có torch → chứng minh nó
+thật sự có tác dụng.
+
 
 ## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, **51 nhãn** — chi tiết `evaluation/benchmarks/`)
 
