@@ -45,12 +45,36 @@ class Candidate:
     source_ranks: dict[str, int]       # {"clip": rank, "siglip": rank, "bm25": rank}
 
 
-class CoarseRetriever:
-    """Retriever tầng coarse trên một KeyframeIndex đã dựng (Phase 3)."""
+#: Độ sâu fusion mặc định — mỗi nguồn (clip/siglip/bm25) đóng góp bấy nhiêu rank vào
+#: RRF. [PROVISIONAL] cho tới khi bench_fusion_depth.py đo xong (Mục 11.3).
+DEFAULT_FUSION_DEPTH = 1000
 
-    def __init__(self, index: KeyframeIndex, rrf_k: int = DEFAULT_RRF_K):
+
+class CoarseRetriever:
+    """Retriever tầng coarse trên một KeyframeIndex đã dựng (Phase 3).
+
+    `fusion_depth` TÁCH RIÊNG khỏi `top_k` — đây là bản sửa của một BUG ĐO ĐƯỢC:
+    trước đây `top_k` vừa là "số kết quả trả về" vừa là "độ sâu mỗi ranked list", nên
+    xin nhiều kết quả hơn lại làm THỨ HẠNG đổi (hit@5: 0.627 khi xin top_k=5 -> 0.510
+    khi xin top_k=20 — cùng query, cùng index).
+
+    VÌ SAO đổi: điểm RRF của một item = tổng 1/(k+rank) trên các list mà nó CÓ MẶT.
+    List sâu hơn -> item xuất hiện trong NHIỀU nguồn hơn -> điểm nó TĂNG. Một ảnh dense
+    rank 2 + bm25 rank 12 vô hình ở depth=5 (chỉ tính dense), nhưng ở depth=20 được cộng
+    thêm điểm bm25 và vọt lên trên ảnh dense rank 1. Tức là số kết quả người gọi XIN đã
+    âm thầm đổi thứ tự — sai về mặt logic: xem bao nhiêu kết quả không được phép ảnh
+    hưởng kết quả nào tốt nhất.
+    """
+
+    def __init__(
+        self,
+        index: KeyframeIndex,
+        rrf_k: int = DEFAULT_RRF_K,
+        fusion_depth: int = DEFAULT_FUSION_DEPTH,
+    ):
         self.index = index
         self.rrf_k = rrf_k
+        self.fusion_depth = fusion_depth
 
     # ------------------------------------------------------- metadata filter
     def _apply_filters(self, filters: Optional[dict[str, Any]]) -> Optional[list[int]]:
@@ -115,12 +139,17 @@ class CoarseRetriever:
         filters: Optional[dict[str, Any]] = None,
         top_k: int = 1000,
         weights: Optional[dict[str, float]] = None,
+        depth: Optional[int] = None,
     ) -> list[Candidate]:
         """Trả top-K Candidate đã fusion. Ít nhất một nguồn (vec/text) phải có.
 
         `weights`: trọng số RRF theo nguồn ({"clip":1,"siglip":1,"bm25":3}...). Tăng
         weight BM25 giúp khớp CHỮ chính xác (biển hiệu) nổi lên khi dense (2 encoder)
-        vốn áp đảo."""
+        vốn áp đảo.
+
+        `top_k`: CHỈ là số kết quả trả về — không còn ảnh hưởng thứ hạng.
+        `depth`: độ sâu fusion, mặc định `self.fusion_depth`. Chỉ truyền tay khi
+        benchmark quét giá trị (evaluation/bench_fusion_depth.py)."""
         if query_clip_vec is None and query_siglip_vec is None and query_text is None:
             raise ValueError(
                 "Cần ít nhất 1 tín hiệu query: clip_vec, siglip_vec, hoặc text."
@@ -129,18 +158,21 @@ class CoarseRetriever:
         if candidate_rows is not None and not candidate_rows:
             return []  # filter loại hết -> không có ứng viên
 
-        # Lấy dư ở mỗi nguồn (top_k) để fusion có đủ nguyên liệu.
+        # Độ sâu fusion CỐ ĐỊNH, không phụ thuộc top_k người gọi xin (xem docstring
+        # class). max() chỉ để lo trường hợp xin nhiều hơn cả độ sâu.
+        fuse_depth = max(top_k, depth if depth is not None else self.fusion_depth)
+
         ranked_lists: dict[str, list[int]] = {}
         if query_clip_vec is not None and self.index.has_encoder("clip"):
             ranked_lists["clip"] = self._dense_ranked_rows(
-                query_clip_vec, "clip", candidate_rows, top_k
+                query_clip_vec, "clip", candidate_rows, fuse_depth
             )
         if query_siglip_vec is not None and self.index.has_encoder("siglip"):
             ranked_lists["siglip"] = self._dense_ranked_rows(
-                query_siglip_vec, "siglip", candidate_rows, top_k
+                query_siglip_vec, "siglip", candidate_rows, fuse_depth
             )
         if query_text:
-            sparse = self.index.sparse_search(query_text, top_k, candidate_rows)
+            sparse = self.index.sparse_search(query_text, fuse_depth, candidate_rows)
             ranked_lists["bm25"] = [row for row, _ in sparse]
 
         if not ranked_lists:

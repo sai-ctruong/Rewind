@@ -207,6 +207,56 @@ def test_latency_under_200ms() -> None:
 
 
 # -----------------------------------------------------------------------------
+# Fusion depth ĐỘC LẬP với top_k (bug hồi quy)
+# -----------------------------------------------------------------------------
+def test_ranking_does_not_change_with_requested_top_k() -> None:
+    """XIN NHIỀU KẾT QUẢ HƠN KHÔNG ĐƯỢC ĐỔI THỨ HẠNG.
+
+    BUG THẬT đã đo: hit@5 = 0.627 khi xin top_k=5, tụt còn 0.510 khi xin top_k=20 —
+    cùng query, cùng index. Vì `top_k` từng vừa là "số kết quả trả về" vừa là "độ sâu
+    mỗi ranked list": list sâu hơn -> item được cộng điểm từ NHIỀU nguồn hơn -> điểm
+    đổi -> thứ tự đổi. Người dùng bấm 'xem thêm' mà kết quả tốt nhất lại khác đi.
+    """
+    records = _big_records(600)
+    index = KeyframeIndex.build(records)
+    retriever = CoarseRetriever(index)
+    q = records[42]
+    kw = dict(
+        query_clip_vec=q.clip_embedding,
+        query_siglip_vec=q.siglip_embedding,
+        query_text="person car street",
+    )
+    shallow = retriever.search(top_k=5, **kw)
+    deep = retriever.search(top_k=50, **kw)
+
+    assert [c.keyframe_id for c in shallow] == [c.keyframe_id for c in deep[:5]]
+    # Điểm cũng phải y hệt, không chỉ thứ tự.
+    assert [round(c.score, 9) for c in shallow] == [round(c.score, 9) for c in deep[:5]]
+
+
+def test_fusion_depth_is_what_changes_ranking_not_top_k() -> None:
+    """Mặt kia của cùng một đồng xu: `depth` MỚI là thứ được phép đổi thứ hạng.
+
+    Nếu đổi depth mà thứ hạng không bao giờ đổi thì test trên chỉ đang khẳng định một
+    điều tầm thường (vd fusion depth luôn phủ hết index) — test này chặn khả năng đó,
+    giữ cho test hồi quy ở trên còn ý nghĩa thật.
+    """
+    records = _big_records(600)
+    index = KeyframeIndex.build(records)
+    retriever = CoarseRetriever(index)
+    q = records[42]
+    kw = dict(
+        query_clip_vec=q.clip_embedding,
+        query_siglip_vec=q.siglip_embedding,
+        query_text="person car street",
+        top_k=20,
+    )
+    d5 = [c.keyframe_id for c in retriever.search(depth=5, **kw)]
+    d500 = [c.keyframe_id for c in retriever.search(depth=500, **kw)]
+    assert d5 != d500, "đổi độ sâu fusion phải đổi được kết quả — nếu không, test kia vô nghĩa"
+
+
+# -----------------------------------------------------------------------------
 # Persistence
 # -----------------------------------------------------------------------------
 def test_save_load_roundtrip(tmp_path, small_records) -> None:

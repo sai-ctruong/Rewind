@@ -30,7 +30,11 @@ from ingestion.build_index import KeyframeIndex, l2_normalize
 from ingestion.dedup import deduplicate_keyframes
 from ingestion.schemas import KeyframeRecord, RawKeyframe
 from ingestion.video_ingest import extract_keyframes
-from retrieval.coarse_retriever import Candidate, CoarseRetriever
+from retrieval.coarse_retriever import (
+    DEFAULT_FUSION_DEPTH,
+    Candidate,
+    CoarseRetriever,
+)
 from retrieval.fine_rerank import FineReranker, RerankConfig, Reranker
 from retrieval.temporal_check import TemporalMatch, temporal_consistency_filter
 
@@ -168,6 +172,7 @@ class VideoSearchEngine:
         query_templates: Sequence[str] = QUERY_TEMPLATES,
         rerank_model: str = "Qwen/Qwen2-VL-2B-Instruct",
         rerank_pool: int = 8,                   # [PROVISIONAL] số ứng viên coarse đưa vào VLM
+        fusion_depth: int = DEFAULT_FUSION_DEPTH,  # [PROVISIONAL] độ sâu RRF, ĐỘC LẬP với top_k
         enable_ocr: bool = True,                # đọc chữ trên keyframe -> tìm biển hiệu/chữ
         ocr_langs: tuple[str, ...] = ("vi", "en"),
         enable_asr: bool = False,               # B3: chép lời nói cả video -> BM25 (nặng, opt-in)
@@ -191,6 +196,7 @@ class VideoSearchEngine:
         self.query_templates = list(query_templates)
         self.rerank_model = rerank_model
         self.rerank_pool = rerank_pool
+        self.fusion_depth = fusion_depth
         self.enable_ocr = enable_ocr
         self.ocr_langs = ocr_langs
         self.enable_asr = enable_asr
@@ -847,7 +853,7 @@ class VideoSearchEngine:
         """Tìm keyframe GIỐNG một ảnh mẫu (image-to-video). Chỉ dùng tín hiệu THỊ GIÁC
         (dense ensemble), KHÔNG BM25 (ảnh không có 'chữ' để so). Trả top_k coarse."""
         qvecs = self.encode_image_query(image_bytes)
-        retriever = CoarseRetriever(entry.index)
+        retriever = CoarseRetriever(entry.index, fusion_depth=self.fusion_depth)
         coarse = retriever.search(
             query_clip_vec=qvecs[0],
             query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
@@ -899,7 +905,9 @@ class VideoSearchEngine:
     ) -> list:
         """Chạy coarse (dense qvecs + BM25 theo `query`) rồi rerank (nếu bật). Tách ra
         để `search` và `search_with_feedback` DÙNG CHUNG — feedback chỉ đổi qvecs."""
-        retriever = CoarseRetriever(entry.index)
+        retriever = CoarseRetriever(entry.index, fusion_depth=self.fusion_depth)
+        # `pool` = số ứng viên đưa cho VLM chấm. KHÔNG còn là độ sâu fusion — độ sâu đó
+        # nay cố định theo self.fusion_depth nên thứ hạng không đổi theo top_k người xin.
         pool = max(top_k, self.rerank_pool) if rerank else top_k
         # Trọng số BM25 theo LOẠI query (benchmark: chữ cần cao, thị giác cần thấp).
         bm25_w = (adaptive_bm25_weight(query, self.bm25_weight, self.bm25_weight_high)

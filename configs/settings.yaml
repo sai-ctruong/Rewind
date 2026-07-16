@@ -110,6 +110,13 @@ fusion:
   # [FIXED] Hằng số k trong công thức RRF_score = Σ 1/(k + rank). k=60 là mặc định
   # chuẩn trong tài liệu IR (Mục 4.3).
   rrf_k: 60
+  # [PROVISIONAL — đang đo bằng bench_retrieval.py --fusion-depth] Độ sâu fusion: mỗi
+  # nguồn (clip/siglip/bm25) đóng góp bấy nhiêu rank vào RRF.
+  #
+  # PHẢI TÁCH RIÊNG khỏi "số kết quả trả về". Bug đã đo: khi hai thứ này là MỘT tham
+  # số, xin top_k=20 thay vì 5 làm hit@5 tụt 0.627 -> 0.510 (cùng query, cùng index) —
+  # vì list sâu hơn khiến item được cộng điểm RRF từ nhiều nguồn hơn, đổi cả thứ hạng.
+  depth: 1000
   # Số candidate giữ lại sau fusion trước khi vào fine rerank (Mục 3, bước [3]).
   top_k_after_fusion: 100       # [PROVISIONAL]
 

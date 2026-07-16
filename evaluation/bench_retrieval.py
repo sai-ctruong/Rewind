@@ -184,6 +184,64 @@ def make_labeled_video(path: Path, video_id: str = "gt_scenes"):
     return path, labels
 
 
+def fusion_depth_sweep(  # pragma: no cover - model thật
+    labels_path: str,
+    out_name: str = "fusion_depth_bench.json",
+    depths: Sequence[int] = (5, 10, 20, 50, 100, 300, 1000),
+) -> list[dict]:
+    """Chốt `fusion_depth` bằng SỐ ĐO, không đoán (Mục 11.3).
+
+    BỐI CẢNH: `top_k` từng kiêm luôn vai trò độ sâu fusion, nên số đo cũ lẫn lộn hai
+    thứ — "xin 5 kết quả" thật ra cũng có nghĩa "fusion sâu 5". Nay đã tách, quét được
+    độ sâu một cách sạch sẽ.
+
+    Index MỘT LẦN rồi chỉ đổi `engine.fusion_depth` — độ sâu không đụng tới index, nên
+    index lại cho mỗi giá trị là phí thời gian (khác encoder_sweep: đổi encoder thì
+    buộc phải index lại).
+
+    Đo hit@1..100 trong CÙNG một lượt với top_k=100 — phép đo này chỉ HỢP LỆ sau khi
+    sửa bug: trước đây top_k=100 sẽ tự nó đổi thứ hạng, nên hit@5 đo ở đây khác hit@5
+    đo với top_k=5, và cả hai đều không nói lên điều gì về chất lượng thật.
+
+    rerank=False: cô lập ẢNH HƯỞNG CỦA FUSION. Bật VLM rerank sẽ trộn thêm một biến
+    số nữa (và tốn ~4s/query × 51 nhãn × 7 độ sâu).
+    """
+    from retrieval.video_engine import VideoSearchEngine
+
+    BENCH_DIR.mkdir(parents=True, exist_ok=True)
+    labels = load_labels(labels_path)
+    vids = sorted({lab.video_id for lab in labels})
+    video_paths = [Path("data/videos") / f"{v}.mp4" for v in vids]
+
+    engine = VideoSearchEngine()
+    t0 = time.perf_counter()
+    entry = engine.index_dataset(video_paths, BENCH_DIR / "fusion_depth_idx")
+    print(f"[depth] index {entry.num_indexed} kf trong {time.perf_counter()-t0:.1f}s",
+          flush=True)
+
+    rows: list[dict] = []
+    for d in depths:
+        engine.fusion_depth = d
+        t0 = time.perf_counter()
+        acc = evaluate_labeled(engine, entry, labels, ks=(1, 5, 10, 30, 100), top_k=100)
+        elapsed = time.perf_counter() - t0
+        row = {"fusion_depth": d,
+               "seconds_per_query": round(elapsed / max(1, len(labels)), 4),
+               **acc["aggregate"]}
+        rows.append(row)
+        print(f"[depth] {d:>5}: hit@1={row.get('hit@1')} hit@5={row.get('hit@5')} "
+              f"hit@30={row.get('hit@30')} hit@100={row.get('hit@100')} "
+              f"mrr={row.get('mrr')} | {row['seconds_per_query']}s/query", flush=True)
+
+    out = BENCH_DIR / out_name
+    out.write_text(
+        json.dumps({"n_labels": len(labels), "num_indexed": entry.num_indexed,
+                    "rerank": False, "depths": rows}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    print(f"[Đã lưu] {out}")
+    return rows
+
+
 # ================================== main =====================================
 def encoder_sweep(labels_path: str, out_name: str = "encoder_bench.json",
                   batch_size: int = 64) -> list[dict]:  # pragma: no cover - model thật
@@ -300,10 +358,16 @@ if __name__ == "__main__":
     p.add_argument("--encoders", action="store_true",
                    help="Q5: so encoder base vs LARGE trên cùng nhãn (cần --labels).")
     p.add_argument("--batch", type=int, default=64, help="embed_batch_size cho encoder large.")
+    p.add_argument("--fusion-depth", action="store_true",
+                   help="Quét độ sâu RRF để chốt fusion_depth (cần --labels).")
     args = p.parse_args()
     if args.encoders:
         if not args.labels:
             p.error("--encoders cần --labels (so encoder phải trên nhãn THẬT).")
         encoder_sweep(args.labels, batch_size=args.batch)
+    elif args.fusion_depth:
+        if not args.labels:
+            p.error("--fusion-depth cần --labels (chốt tham số phải trên nhãn THẬT).")
+        fusion_depth_sweep(args.labels)
     else:
         main(args.labels, sweep=args.sweep)
