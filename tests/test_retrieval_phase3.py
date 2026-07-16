@@ -20,7 +20,7 @@ import time
 import numpy as np
 import pytest
 
-from ingestion.build_index import IndexConfig, KeyframeIndex, tokenize
+from ingestion.build_index import IndexConfig, KeyframeIndex, l2_normalize, tokenize
 from ingestion.build_records import IngestionPipeline, make_sample_video
 from ingestion.schemas import RawKeyframe
 from retrieval.coarse_retriever import CoarseRetriever, reciprocal_rank_fusion
@@ -294,3 +294,54 @@ def test_save_load_roundtrip(tmp_path, small_records) -> None:
     target = small_records[3]
     results = retriever.search(query_clip_vec=target.clip_embedding, top_k=3)
     assert results[0].keyframe_id == target.id
+
+
+# -----------------------------------------------------------------------------
+# A9 — không giữ ma trận float trùng với vector trong Faiss
+# -----------------------------------------------------------------------------
+def test_index_keeps_no_duplicate_float_matrix(small_records) -> None:
+    """A9: HNSWFlat đã lưu nguyên vector float32 -> giữ thêm ma trận riêng là lưu CÙNG
+    dữ liệu hai lần (đo 20k×768: 58.6 MB thừa trên 125.8 MB = -46.6% RAM khi bỏ).
+
+    Test canh việc ai đó vô tình thêm lại một bản sao vào index.
+    """
+    index = KeyframeIndex.build(small_records)
+    big = [k for k, v in vars(index).items()
+           if isinstance(v, np.ndarray) and v.ndim == 2 and v.shape[0] == len(index.ids)]
+    assert not big, f"index đang giữ ma trận trùng với vector trong Faiss: {big}"
+
+
+def test_vectors_from_faiss_match_source_embeddings(small_records) -> None:
+    """Bỏ ma trận chỉ AN TOÀN nếu Faiss trả lại đúng vector đã nạp.
+
+    Kỳ vọng: khớp CHÍNH XÁC với embedding gốc đã L2-norm (HNSWFlat = không nén). Nếu
+    đổi sang index có nén (IVF-PQ, Mục 2.2/A5) thì test này PHẢI đỏ — đó là mục đích:
+    lúc đó exact rerank không được lấy vector từ index nén nữa.
+    """
+    index = KeyframeIndex.build(small_records)
+    rows = [0, 3, 7]
+    got = index._vectors("clip", rows)
+    want = l2_normalize(np.stack([small_records[r].clip_embedding for r in rows]))
+    assert np.array_equal(got, want), "vector lấy từ Faiss không khớp bit-for-bit"
+
+
+def test_load_ignores_legacy_matrix_payload(tmp_path, small_records) -> None:
+    """Index CŨ trên đĩa còn field clip_matrix/siglip_matrix — vẫn phải nạp được,
+    không bắt người dùng index lại vài trăm giờ video."""
+    import pickle
+
+    index = KeyframeIndex.build(small_records)
+    index.save(tmp_path)
+    # Giả lập file cũ: nhét lại ma trận vào payload.
+    meta = tmp_path / "meta.pkl"
+    with meta.open("rb") as fh:
+        payload = pickle.load(fh)
+    payload["clip_matrix"] = np.zeros((len(small_records), 4), dtype=np.float32)
+    payload["siglip_matrix"] = None
+    with meta.open("wb") as fh:
+        pickle.dump(payload, fh)
+
+    loaded = KeyframeIndex.load(tmp_path)
+    target = small_records[3]
+    res = CoarseRetriever(loaded).search(query_clip_vec=target.clip_embedding, top_k=3)
+    assert res[0].keyframe_id == target.id   # ma trận rác trong file cũ bị bỏ qua

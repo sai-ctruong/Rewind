@@ -458,6 +458,42 @@ vượt kết quả dense tốt. **Cách sửa:** tách "độ sâu fusion" (c�
 khỏi "số kết quả trả về" → kết quả ổn định bất kể `top_k`.
 
 
+### ✅ A9 — bỏ ma trận float trùng lặp: **−46.6% RAM**, và còn NHANH HƠN (2026-07-17)
+
+`IndexHNSWFlat` **vốn đã lưu nguyên vector float32** bên trong (Flat = không nén), nhưng
+ta còn giữ thêm `_clip_matrix`/`_siglip_matrix` chứa **đúng những vector đó** — cùng một
+dữ liệu lưu hai lần, trong RAM **và** trong `meta.pkl`.
+
+| đo trên 20k × 768 | |
+|---|---|
+| ma trận float (thừa) | 58.6 MB |
+| HNSW index (đã gồm vector) | 67.2 MB |
+| **bỏ ma trận** | **−46.6% RAM** |
+
+**Không phải đánh đổi RAM ↔ tốc độ — `reconstruct_batch` còn NHANH HƠN:**
+
+| subset | `matrix[rows]` | `reconstruct_batch` | vòng lặp `reconstruct` |
+|---|---|---|---|
+| 1 000 | 1.50 ms | **1.11 ms** | 6.20 ms |
+| 10 000 | 10.46 ms | **5.92 ms** | 51.97 ms ⚠️ |
+
+Vì `matrix[rows]` (fancy-indexing) phải gather tạo bản sao, còn Faiss làm trong C++.
+⚠️ Gọi `reconstruct` **từng dòng** trong vòng lặp Python thì **chậm gấp 5** — luôn dùng
+bản batch.
+
+**Kiểm chứng, không chỉ tin test xanh:** chạy song song code cũ (`git stash`) và mới
+trên cùng dữ liệu → `exact_dense_search`, `dense_search`, `mean_embedding` **giống hệt
+từng ký tự**. Faiss trả vector khớp **từng bit** (HNSWFlat không nén).
+
+**Ngoại suy quy mô thật** (1 triệu keyframe × 768 × 2 encoder): tiết kiệm **~5.7 GB RAM**.
+
+3 test khoá: (1) index không được giữ ma trận trùng — *đã kiểm chứng test này bắt được
+khi cố tình thêm lại*; (2) vector từ Faiss khớp bit-for-bit với embedding gốc — **test
+này PHẢI đỏ nếu sau này đổi sang IVF-PQ** (A5), vì lúc đó exact rerank không được lấy
+vector từ index nén nữa; (3) index CŨ trên đĩa (còn field `clip_matrix`) vẫn nạp được —
+không bắt người dùng index lại vài trăm giờ video. **File:** `ingestion/build_index.py`
+
+
 ## 7. 📊 KẾT QUẢ BENCHMARK ĐÃ CHỐT (RTX 3060, **51 nhãn** — chi tiết `evaluation/benchmarks/`)
 
 **Bảng chính (index có OCR, sample 1.0):**

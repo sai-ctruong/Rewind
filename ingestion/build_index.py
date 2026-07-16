@@ -11,10 +11,19 @@ Index gồm 3 thành phần song song, phục vụ tầng coarse "recall-first" 
 VÌ SAO HNSW (Mục 2.2): cân bằng tốc độ/độ chính xác, KHÔNG nén (giữ float) -> ưu tiên
 accuracy theo Mục 1.1. Dùng METRIC_INNER_PRODUCT trên vector đã chuẩn hoá L2 = cosine.
 
-VÌ SAO GIỮ THÊM MA TRẬN FLOAT (self._clip_matrix, _siglip_matrix): để tầng coarse có
-thể EXACT search trên tập con nhỏ sau metadata pre-filter (Mục 11.1: pre-filter +
-exact trên subset thay vì ANN post-filter, tránh mất recall). HNSW dùng khi KHÔNG có
-filter (toàn dataset).
+VÌ SAO KHÔNG GIỮ MA TRẬN FLOAT RIÊNG (A9, [ĐO 2026-07-17]): tầng coarse cần EXACT
+search trên tập con sau metadata pre-filter (Mục 11.1: pre-filter + exact trên subset
+thay vì ANN post-filter, tránh mất recall). Trước đây ta giữ thêm `_clip_matrix` /
+`_siglip_matrix` cho việc đó — nhưng `IndexHNSWFlat` VỐN ĐÃ lưu nguyên vector float32
+bên trong (Flat = không nén), nên ta đang giữ CÙNG một dữ liệu hai lần.
+
+Đo trên 20k×768: ma trận 58.6 MB + HNSW 67.2 MB = 125.8 MB -> bỏ ma trận tiết kiệm
+**46.6% RAM** (và cả dung lượng file, vì ma trận còn được pickle vào meta.pkl).
+
+KHÔNG mất gì: `reconstruct_batch` trả vector khớp TỪNG BIT, và còn NHANH HƠN fancy-
+indexing của numpy (subset 10k: 5.9ms vs 10.5ms) vì `matrix[rows]` phải gather tạo bản
+sao, còn Faiss làm trong C++. Lưu ý: gọi `reconstruct` từng dòng trong vòng lặp Python
+thì CHẬM GẤP 5 (52ms) — luôn dùng bản batch.
 """
 from __future__ import annotations
 
@@ -86,8 +95,6 @@ class KeyframeIndex:
     def __post_init__(self) -> None:
         self._clip_index = None
         self._siglip_index = None
-        self._clip_matrix: Optional[np.ndarray] = None
-        self._siglip_matrix: Optional[np.ndarray] = None
         self._bm25 = None
         self._id_to_row = {kid: i for i, kid in enumerate(self.ids)}
 
@@ -106,15 +113,16 @@ class KeyframeIndex:
             objects=[list(r.objects) for r in records],
             config=config,
         )
-        # DENSE: dựng HNSW cho từng encoder có mặt.
+        # DENSE: dựng HNSW cho từng encoder có mặt. Ma trận float chỉ là biến TẠM để
+        # nạp vào Faiss — không giữ lại (A9): HNSWFlat đã lưu nguyên vector bên trong.
         clip_mat = np.stack([r.clip_embedding for r in records]).astype(np.float32)
-        idx._clip_matrix = l2_normalize(clip_mat)
-        idx._clip_index = idx._build_hnsw(idx._clip_matrix)
+        idx._clip_index = idx._build_hnsw(l2_normalize(clip_mat))
+        del clip_mat
 
         if all(r.siglip_embedding is not None for r in records):
             sig_mat = np.stack([r.siglip_embedding for r in records]).astype(np.float32)
-            idx._siglip_matrix = l2_normalize(sig_mat)
-            idx._siglip_index = idx._build_hnsw(idx._siglip_matrix)
+            idx._siglip_index = idx._build_hnsw(l2_normalize(sig_mat))
+            del sig_mat
 
         # SPARSE: BM25 trên text gộp.
         from rank_bm25 import BM25Okapi
@@ -136,8 +144,18 @@ class KeyframeIndex:
         return index
 
     # --------------------------------------------------------------- search
-    def _matrix(self, encoder: EncoderName) -> Optional[np.ndarray]:
-        return self._clip_matrix if encoder == "clip" else self._siglip_matrix
+    def _vectors(self, encoder: EncoderName, rows: "Sequence[int]") -> np.ndarray:
+        """Lấy embedding (đã L2-norm) của các `rows` — đọc THẲNG từ trong Faiss.
+
+        Thay cho `matrix[rows]` trước đây (A9): HNSWFlat đã giữ nguyên vector float32,
+        nên ma trận riêng chỉ là bản sao thừa (-46.6% RAM khi bỏ). `reconstruct_batch`
+        khớp từng bit và nhanh hơn fancy-indexing numpy — KHÔNG dùng vòng lặp
+        `reconstruct` từng dòng (chậm gấp 5).
+        """
+        index = self._index(encoder)
+        if index is None:
+            raise ValueError(f"Index cho encoder {encoder!r} chưa được dựng.")
+        return index.reconstruct_batch(np.asarray(rows, dtype=np.int64))
 
     def _index(self, encoder: EncoderName):
         return self._clip_index if encoder == "clip" else self._siglip_index
@@ -152,13 +170,12 @@ class KeyframeIndex:
 
         Dùng cho relevance feedback (Rocchio): dịch vector truy vấn về phía các ảnh
         người dùng đánh dấu. Trả None nếu encoder chưa dựng hoặc không id nào hợp lệ."""
-        matrix = self._matrix(encoder)
-        if matrix is None:
+        if not self.has_encoder(encoder):
             return None
         rows = [self._id_to_row[i] for i in ids if i in self._id_to_row]
         if not rows:
             return None
-        return matrix[rows].mean(axis=0)
+        return self._vectors(encoder, rows).mean(axis=0)
 
     def dense_search(
         self, query_vec: np.ndarray, encoder: EncoderName, top_k: int
@@ -180,14 +197,11 @@ class KeyframeIndex:
     ) -> list[tuple[int, float]]:
         """EXACT cosine trên TẬP CON đã lọc (Mục 11.1: pre-filter + exact, không mất
         recall). Dùng khi metadata filter đã thu hẹp đủ nhỏ."""
-        matrix = self._matrix(encoder)
-        if matrix is None:
-            raise ValueError(f"Ma trận cho encoder {encoder!r} chưa có.")
         if not candidate_rows:
             return []
         q = l2_normalize(np.asarray(query_vec, dtype=np.float32).reshape(1, -1))[0]
         rows = np.asarray(candidate_rows, dtype=np.int64)
-        sims = matrix[rows] @ q
+        sims = self._vectors(encoder, rows) @ q
         order = np.argsort(-sims)[:top_k]
         return [(int(rows[i]), float(sims[i])) for i in order]
 
@@ -227,8 +241,8 @@ class KeyframeIndex:
             "timestamps": self.timestamps,
             "objects": self.objects,
             "config": self.config,
-            "clip_matrix": self._clip_matrix,
-            "siglip_matrix": self._siglip_matrix,
+            # A9: KHÔNG lưu ma trận float nữa — vector đã nằm trong *.hnsw. Trước đây
+            # pickle cả hai nên meta.pkl phình gấp đôi một cách vô ích.
             "bm25": self._bm25,
         }
         with (directory / "meta.pkl").open("wb") as fh:
@@ -248,8 +262,9 @@ class KeyframeIndex:
             objects=payload["objects"],
             config=payload["config"],
         )
-        idx._clip_matrix = payload["clip_matrix"]
-        idx._siglip_matrix = payload["siglip_matrix"]
+        # A9: index CŨ trên đĩa còn field clip_matrix/siglip_matrix — cố ý BỎ QUA
+        # (vector lấy từ *.hnsw). Dùng .get() để file cũ vẫn nạp được, không phải
+        # build lại từ đầu.
         idx._bm25 = payload["bm25"]
         clip_path = directory / "clip.hnsw"
         sig_path = directory / "siglip.hnsw"
