@@ -94,7 +94,7 @@ python -m ingestion.video_ingest phim.mp4 --out artifacts/frames --every 1.0
 python -m retrieval.video_search_demo phim.mp4 "người đang đi bộ trên phố" --topk 5
 
 # Demo hội thoại KISC (dữ liệu mẫu)
-python -m kisc_module.demo
+python -m dialogue.demo
 ```
 
 ### C. Python API — linh hoạt nhất (phần 5 & 6 bên dưới)
@@ -118,7 +118,7 @@ python -m kisc_module.demo
 | Gợi ý từ khoá thu hẹp | `engine.suggest_concepts(entry, ids, "câu")` |
 | Hỏi–đáp trên video thật | `answer_on_video(engine, entry, "câu hỏi?")` |
 | **Lọc ảnh thu hẹp dần** (hội thoại) | `ImageFilterSession(engine, entry)` → `.start()` / `.refine()` · tab KISC |
-| Hỏi lại theo thuộc tính (Information Gain) | `python -m kisc_module.demo` |
+| Hỏi lại theo thuộc tính (Information Gain) | `python -m dialogue.demo` |
 | **Để hệ tự quyết mọi thứ** | `SearchAgent(engine, entry).run("câu")` |
 | **Hội thoại có trí nhớ** | `agent.chat("câu", positive_ids=[…])` |
 
@@ -289,10 +289,10 @@ giảm dần** — đúng mô hình "bộ lọc". Đánh đổi: ảnh đã lo�
 thuộc tính (chọn câu hỏi giảm entropy nhanh nhất, hội tụ ~2 lượt):
 
 ```powershell
-python -m kisc_module.demo
+python -m dialogue.demo
 ```
 
-Nối vào retriever thật: `retrieval/kisc_adapter.py`, `retrieval/kisc_real_demo.py`.
+Nối vào retriever thật: `retrieval/dialogue_adapter.py`, `retrieval/dialogue_real_demo.py`.
 
 ---
 

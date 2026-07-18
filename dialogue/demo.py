@@ -2,10 +2,10 @@
 demo.py
 Mô phỏng lại đúng kịch bản Case Study KISC trong slide tập huấn AIC 2026
 (slide 15: "Tìm giúp tôi đoạn video tôi gặp một người bạn cũ vào tuần trước").
-Chạy: python -m kisc_module.demo   (từ thư mục cha chứa kisc_module/)
+Chạy: python -m dialogue.demo   (từ thư mục cha chứa dialogue/)
 """
-from kisc_module.retriever import MockRetriever
-from kisc_module.dialogue_manager import KISCDialogueManager
+from dialogue.retriever import MockRetriever
+from dialogue.dialogue_manager import KISCDialogueManager
 
 
 def run_demo():

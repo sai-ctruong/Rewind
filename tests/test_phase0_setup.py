@@ -8,8 +8,8 @@ nhưng CÓ Ý NGHĨA để bắt lỗi cấu hình sớm:
   1. Cấu trúc thư mục Mục 6 tồn tại đầy đủ.
   2. configs/settings.yaml parse được và chứa đúng các ngưỡng mặc định Phase 0
      (dedup=0.97, coarse top-K=1000, rerank top-K=100, time_budget=20s).
-  3. Package kisc_module đã dời vào subfolder vẫn import được nguyên vẹn
-     (không vỡ do việc di dời — Mục 10.6 cấm refactor kisc_module).
+  3. Package dialogue đã dời vào subfolder vẫn import được nguyên vẹn
+     (không vỡ do việc di dời — Mục 10.6 cấm refactor dialogue).
 
 Test chạy hoàn toàn offline, không cần GPU/API (Mục 1.5).
 """
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # -----------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "rel_dir",
-    ["kisc_module", "ingestion", "retrieval", "evaluation", "ui", "tests", "configs"],
+    ["dialogue", "ingestion", "retrieval", "evaluation", "ui", "tests", "configs"],
 )
 def test_required_directories_exist(rel_dir: str) -> None:
     """Mỗi thư mục bắt buộc trong Mục 6 phải tồn tại."""
@@ -85,11 +85,11 @@ def test_brute_force_limit_matches_constraint(settings: dict) -> None:
 
 
 # -----------------------------------------------------------------------------
-# 3. kisc_module vẫn import được sau khi dời vào subfolder
+# 3. dialogue vẫn import được sau khi dời vào subfolder
 # -----------------------------------------------------------------------------
-def test_kisc_module_imports_after_move() -> None:
-    """Việc di dời KISC vào kisc_module/ không được làm vỡ import công khai."""
-    from kisc_module import (  # noqa: F401  (import để kiểm tra, không dùng trực tiếp)
+def test_dialogue_imports_after_move() -> None:
+    """Việc di dời KISC vào dialogue/ không được làm vỡ import công khai."""
+    from dialogue import (  # noqa: F401  (import để kiểm tra, không dùng trực tiếp)
         HybridRetriever,
         KISCDialogueManager,
         MockRetriever,

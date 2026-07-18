@@ -32,7 +32,7 @@ trong đó `p_i` là tỷ lệ ứng viên hiện tại có giá trị `i` ở t
 ## 2. Kiến trúc module
 
 ```
-kisc_module/
+dialogue/
 ├── schemas.py            # Keyframe, DialogueTurn, DialogueState
 ├── ambiguity.py           # entropy(), best_attribute_to_ask(), is_confident_enough()
 ├── retriever.py           # HybridRetriever (interface) + MockRetriever (demo)
@@ -69,8 +69,8 @@ QuestionGenerator.generate()     -> câu hỏi tự nhiên gửi lại người 
 ## 3. Chạy demo (offline, không cần API/GPU)
 
 ```bash
-cd <thư mục cha chứa kisc_module/>
-python3 -m kisc_module.demo
+cd <thư mục cha chứa dialogue/>
+python3 -m dialogue.demo
 ```
 
 Demo tái hiện đúng kịch bản trong slide (Case Study 2 / KISC): "Tìm giúp tôi đoạn

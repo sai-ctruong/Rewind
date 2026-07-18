@@ -8,7 +8,7 @@
 
 MỌI thứ chạy trên index của video THẬT (video_state["videos"]) — không còn dataset
 lifelog tổng hợp. Demo hội thoại theo THUỘC TÍNH (Information Gain) nằm ở
-`python -m kisc_module.demo` và `retrieval/kisc_real_demo.py`, không phơi qua HTTP nữa.
+`python -m dialogue.demo` và `retrieval/dialogue_real_demo.py`, không phơi qua HTTP nữa.
 
 Frontend (ui/index.html) là 1 trang tĩnh tự gọi các API này.
 

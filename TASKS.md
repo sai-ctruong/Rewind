@@ -141,7 +141,7 @@ tìm cảnh tương tự. Test explore phủ nhiều video + similar cùng màu.
 ## 4. TRỤ CỘT [3] — PHẢN HỒI NGƯỜI DÙNG (Relevance Feedback)
 
 ### ✅ Đã có
-**KISC** (`kisc_module/`): hội thoại hỏi lại, entropy/information-gain — đúng tinh thần
+**KISC** (`dialogue/`): hội thoại hỏi lại, entropy/information-gain — đúng tinh thần
 "khám phá (exploration) ↔ khai phá (exploitation)". NHƯNG chạy trên **data mẫu**.
 
 ### ✅ F1. KISC cho video thật (hỏi lại bằng hình ảnh)  ĐÃ XONG (2026-07-14)

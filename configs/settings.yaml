@@ -145,7 +145,7 @@ fine_rerank:
   # Batch nhiều candidate/request để giảm round-trip mạng (giảm ĐỘ TRỄ) — Mục 4.4.
   batch_size: 8                 # [PROVISIONAL]
   # Early stopping (Mục 11.1.4): dừng sớm khi Top-1 vượt trội rõ rệt, tái dùng
-  # logic kisc_module/ambiguity.py::is_confident_enough.
+  # logic dialogue/ambiguity.py::is_confident_enough.
   early_stopping:
     enabled: true
     # [PROVISIONAL] ngưỡng tự tin để dừng sớm — chốt bằng thực nghiệm Phase 5.
@@ -170,7 +170,7 @@ runtime:
 # 8. KISC — module hội thoại đã có sẵn (Mục 9, tích hợp ở Phase 8)
 # -----------------------------------------------------------------------------
 kisc:
-  # Khi độ tự tin của kết quả thấp hơn ngưỡng này -> gọi kisc_module hỏi lại người
+  # Khi độ tự tin của kết quả thấp hơn ngưỡng này -> gọi dialogue hỏi lại người
   # dùng để thu hẹp phạm vi (Mục 3, bước [6] KISC).
   low_confidence_threshold: 0.5  # [PROVISIONAL] căn chỉnh cùng ambiguity.py
 

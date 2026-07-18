@@ -1,12 +1,12 @@
-"""Adapter tích hợp kisc_module với retriever THẬT (CLAUDE.md Phase 8, Mục 8).
+"""Adapter tích hợp dialogue với retriever THẬT (CLAUDE.md Phase 8, Mục 8).
 
-MỤC TIÊU: thay `MockRetriever` của kisc_module bằng một `HybridRetriever` thật chạy
+MỤC TIÊU: thay `MockRetriever` của dialogue bằng một `HybridRetriever` thật chạy
 trên KeyframeIndex + CoarseRetriever (Phase 3), để vòng hội thoại KISC hoạt động trên
 index thật thay vì dữ liệu sinh ngẫu nhiên trong bộ nhớ.
 
-TÔN TRỌNG Mục 10.6: KHÔNG sửa bất kỳ file nào trong kisc_module/. Ta chỉ:
-  - Kế thừa interface `kisc_module.HybridRetriever` (đã có sẵn) và implement `search`.
-  - Trả về đúng kiểu `kisc_module.Keyframe` để dialogue_manager/ambiguity dùng như cũ.
+TÔN TRỌNG Mục 10.6: KHÔNG sửa bất kỳ file nào trong dialogue/. Ta chỉ:
+  - Kế thừa interface `dialogue.HybridRetriever` (đã có sẵn) và implement `search`.
+  - Trả về đúng kiểu `dialogue.Keyframe` để dialogue_manager/ambiguity dùng như cũ.
 
 CẦU NỐI 2 SCHEMA (điểm mấu chốt): KISC lọc theo các thuộc tính lifelog rời rạc
 (location_type, gender, clothing_color, activity, time_period, location_desc) lưu trong
@@ -26,16 +26,16 @@ import numpy as np
 from ingestion.build_index import KeyframeIndex
 from ingestion.embed_clip import CLIP_DIM, deterministic_unit_vector
 from ingestion.schemas import KeyframeRecord
-from kisc_module.dialogue_manager import CANDIDATE_ATTRIBUTES
-from kisc_module.retriever import HybridRetriever
-from kisc_module.schemas import Keyframe
+from dialogue.dialogue_manager import CANDIDATE_ATTRIBUTES
+from dialogue.retriever import HybridRetriever
+from dialogue.schemas import Keyframe
 from retrieval.coarse_retriever import CoarseRetriever
 
 # Chỉ mã hoá các thuộc tính KISC biết cách hỏi (khớp CANDIDATE_ATTRIBUTES).
 KNOWN_ATTRS = list(CANDIDATE_ATTRIBUTES)
 
 # Từ vựng tiếng Việt để sinh caption từ giá trị thuộc tính -> giúp BM25 khớp câu người
-# dùng (dùng CHÍNH từ khoá mà kisc_module/slot_extractor.py nhận diện).
+# dùng (dùng CHÍNH từ khoá mà dialogue/slot_extractor.py nhận diện).
 _VALUE_TO_VI = {
     "location_type": {"outdoor": "ngoài trời", "indoor": "trong nhà"},
     "location_desc": {
@@ -110,7 +110,7 @@ def build_lifelog_record(kf_id: str, video_id: str, timestamp: float, attrs: dic
 
 
 class RealKISCRetriever(HybridRetriever):
-    """HybridRetriever THẬT cho kisc_module, chạy trên KeyframeIndex/CoarseRetriever.
+    """HybridRetriever THẬT cho dialogue, chạy trên KeyframeIndex/CoarseRetriever.
 
     Thay thế MockRetriever: dialogue_manager gọi search(query_text, filters, top_k) y
     như cũ, nhưng giờ truy vấn trên index thật.
@@ -153,7 +153,7 @@ class RealKISCRetriever(HybridRetriever):
 
 
 # ---------------------------------------------------------------- dataset mẫu
-# Không gian thuộc tính khớp kisc_module/retriever.py::MockRetriever để tái hiện đúng
+# Không gian thuộc tính khớp dialogue/retriever.py::MockRetriever để tái hiện đúng
 # kịch bản case-study (slide 15).
 LOCATION_TYPES = ["indoor", "outdoor"]
 LOCATION_DESCS = ["coffee_shop", "restaurant", "park", "home", "office", "street", "mall"]

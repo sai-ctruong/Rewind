@@ -4,7 +4,7 @@ VAI TRÒ: CLIP feature do BTC CẤP SẴN (ViT-L/14) — ta KHÔNG trích xuất
 kiệm compute, Mục 2.1). Nhiệm vụ module này chỉ là NẠP đúng feature cho từng
 keyframe theo id.
 
-THIẾT KẾ (pattern ABC + Mock, giống kisc_module/retriever.py::MockRetriever, Mục 1.5):
+THIẾT KẾ (pattern ABC + Mock, giống dialogue/retriever.py::MockRetriever, Mục 1.5):
   - `ClipEmbeddingProvider` (ABC): interface `embed(raw) -> np.ndarray`.
   - `NpyClipEmbeddingProvider`: bản THẬT nạp từ file .npy BTC cấp. Định dạng thật
     của BTC chưa biết chắc -> code này giả định một layout phổ biến và ĐÁNH DẤU RÕ

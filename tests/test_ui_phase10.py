@@ -44,7 +44,7 @@ def test_health_reports_real_indexed_numbers(client) -> None:
 
 def test_synthetic_kisc_endpoints_are_gone(client) -> None:
     """Đã gỡ dataset lifelog tổng hợp + API không còn UI nào gọi. Thuật toán hội thoại
-    theo thuộc tính vẫn được phủ ở tests/test_kisc_integration_phase8.py."""
+    theo thuộc tính vẫn được phủ ở tests/test_dialogue_integration_phase8.py."""
     assert client.post("/api/kisc/start", json={"query": "x"}).status_code == 404
     assert client.post("/api/kisc/respond", json={"answer": "x"}).status_code == 404
     assert client.post("/api/search", json={"query": "x"}).status_code == 404

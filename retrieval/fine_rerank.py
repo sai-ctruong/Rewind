@@ -7,7 +7,7 @@ query, rồi xếp lại hạng. Đây là tầng đắt (chậm) nên CHỈ ch�
 RÀNG BUỘC LÀ ĐỘ TRỄ, KHÔNG PHẢI CHI PHÍ (Mục 2.3, 4.4): BTC cấp API miễn phí, nên
 giới hạn thực sự là TIME BUDGET của vòng thi. Vì vậy tầng này có:
   - `time_budget_s`: tổng ngân sách thời gian; dừng chấm khi sắp vượt (Mục 4.4).
-  - Early stopping (Mục 11.1.4): TÁI DÙNG kisc_module/ambiguity.py::is_confident_enough
+  - Early stopping (Mục 11.1.4): TÁI DÙNG dialogue/ambiguity.py::is_confident_enough
     — khi Top-1 đã vượt trội rõ rệt so với phần còn lại thì dừng sớm, khỏi tốn thêm
     lượt LVLM.
   - `max_candidates`: trần số ứng viên rerank (từ settings.yaml -> fine_rerank.top_k).
@@ -26,14 +26,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from kisc_module.ambiguity import is_confident_enough
+from dialogue.ambiguity import is_confident_enough
 from retrieval.coarse_retriever import Candidate
 
 
 @dataclass
 class RerankedCandidate:
     """Ứng viên sau rerank. `score` = điểm LVLM chuẩn hoá [0,1] (đặt tên `score` để
-    tương thích duck-typing với is_confident_enough của kisc_module)."""
+    tương thích duck-typing với is_confident_enough của dialogue)."""
 
     keyframe_id: str
     row: int
@@ -135,7 +135,7 @@ class FineReranker:
 
 def _dominant_top1(scored: list[RerankedCandidate], margin: float) -> bool:
     """Top-1 có vượt Top-2 tối thiểu `margin` không? Dùng lại is_confident_enough của
-    kisc_module (duck-typing trên .score). max_candidates=1 để VÔ HIỆU tiêu chí "ít
+    dialogue (duck-typing trên .score). max_candidates=1 để VÔ HIỆU tiêu chí "ít
     ứng viên" — chỉ dừng dựa trên KHOẢNG CÁCH ĐIỂM, đúng ý early-stop khi rerank."""
     return is_confident_enough(scored, max_candidates=1, score_gap_threshold=margin)
 

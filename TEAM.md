@@ -70,7 +70,7 @@ tầng lọc thô ưu tiên recall, tầng rerank tối ưu precision, **không 
 ## 3. 🗺️ Bản đồ thư mục (file nào làm gì)
 
 ```
-kisc_module/            💬 Hội thoại KISC (entropy/Information Gain) — CÓ SẴN, ít sửa
+dialogue/            💬 Hội thoại KISC (entropy/Information Gain) — CÓ SẴN, ít sửa
 ingestion/
   ├─ schemas.py          KeyframeRecord, RawKeyframe, StructuredQuery
   ├─ video_ingest.py     .mp4 → keyframe (cv2)
@@ -91,7 +91,7 @@ retrieval/
   ├─ query_understanding.py / query_expansion.py
   ├─ temporal_check.py   lọc thứ tự thời gian
   ├─ vqa_module.py       hỏi–đáp video
-  ├─ kisc_adapter.py     cầu nối KISC ↔ retriever thật
+  ├─ dialogue_adapter.py     cầu nối KISC ↔ retriever thật
   └─ video_search_demo.py  CLI tìm video
 ui/
   ├─ app.py              backend Flask (API: kisc/search/vqa/video/index_folder…)
@@ -142,7 +142,7 @@ python -m ui.app            # http://127.0.0.1:5000
 | Tìm 1 video (CLI) | `python -m retrieval.video_search_demo data\videos\clip.mp4 "câu tìm" --topk 5` |
 | Đánh giá | `python -m evaluation.run_eval` |
 | Benchmark encoder | `python -m evaluation.bench_video_engine` |
-| Demo KISC | `python -m retrieval.kisc_real_demo` |
+| Demo KISC | `python -m retrieval.dialogue_real_demo` |
 | Test | `pytest` |
 
 ---

@@ -2,10 +2,10 @@
 #
 # Vì sao cần file này ở Phase 0:
 #   - Đặt pythonpath = ["."] để cả package con (ingestion/, retrieval/, ...) LẪN
-#     package kisc_module/ đều import được khi chạy pytest từ project root. Nhờ đó
-#     absolute import trong kisc_module/demo.py ("from kisc_module.retriever ...")
+#     package dialogue/ đều import được khi chạy pytest từ project root. Nhờ đó
+#     absolute import trong dialogue/demo.py ("from dialogue.retriever ...")
 #     tiếp tục hoạt động sau khi đã dời KISC vào subfolder — không phải sửa code
-#     KISC (tôn trọng Mục 10.6: không refactor kisc_module trừ khi được yêu cầu).
+#     KISC (tôn trọng Mục 10.6: không refactor dialogue trừ khi được yêu cầu).
 #   - Khai báo yêu cầu Python >=3.10 đúng ràng buộc Mục 1.4.
 
 [project]

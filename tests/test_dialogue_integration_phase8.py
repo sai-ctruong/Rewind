@@ -1,18 +1,18 @@
-"""Unit test Phase 8 — tích hợp kisc_module với retriever THẬT (CLAUDE.md Mục 8).
+"""Unit test Phase 8 — tích hợp dialogue với retriever THẬT (CLAUDE.md Mục 8).
 
-DoD Phase 8: "kisc_module/demo.py chạy đúng trên dữ liệu thật thay vì mock".
+DoD Phase 8: "dialogue/demo.py chạy đúng trên dữ liệu thật thay vì mock".
 
 Ta chứng minh vòng hội thoại KISC (KISCDialogueManager + ambiguity + slot_extractor,
-KHÔNG sửa gì trong kisc_module — Mục 10.6) chạy trên RealKISCRetriever/KeyframeIndex
+KHÔNG sửa gì trong dialogue — Mục 10.6) chạy trên RealKISCRetriever/KeyframeIndex
 thật và hội tụ đúng về đáp án ground-truth như kịch bản case-study.
 
 Chạy offline (index thật nhưng dữ liệu mẫu, không GPU/API).
 """
 from __future__ import annotations
 
-from kisc_module.dialogue_manager import KISCDialogueManager
-from kisc_module.schemas import Keyframe
-from retrieval.kisc_adapter import (
+from dialogue.dialogue_manager import KISCDialogueManager
+from dialogue.schemas import Keyframe
+from retrieval.dialogue_adapter import (
     RealKISCRetriever,
     TARGET_ATTRS,
     attributes_to_caption,
@@ -21,7 +21,7 @@ from retrieval.kisc_adapter import (
     build_sample_index,
     tags_to_attributes,
 )
-from retrieval.kisc_real_demo import run_real_demo
+from retrieval.dialogue_real_demo import run_real_demo
 
 
 # -----------------------------------------------------------------------------
