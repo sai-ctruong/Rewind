@@ -431,7 +431,17 @@ class VideoSearchEngine:
         vào searchable_text -> BM25 tìm được cảnh theo điều người ta nói."""
         from ingestion.ocr_asr_extract import segment_text_at
 
-        asr = self._get_asr()
+        # Whisper là phụ thuộc NẶNG, TÙY CHỌN (requirements-full). Nếu chưa cài, dựng
+        # engine sẽ ném ImportError NGAY tại đây — TRƯỚC vòng lặp có try/except bên dưới.
+        # Không bắt ở đây thì thiếu một thư viện phụ sẽ giật sập cả mẻ index (embedding
+        # + OCR đã tốn hàng phút) -> đúng thứ docstring hứa KHÔNG xảy ra. Bỏ qua ASR,
+        # giữ nguyên phần còn lại: index vẫn thành công, chỉ thiếu tín hiệu 'lời nói'.
+        try:
+            asr = self._get_asr()
+        except ImportError as e:
+            print(f"[video_engine] Bỏ qua ASR: chưa cài Whisper ({e}). "
+                  f"Index vẫn chạy (ảnh + OCR); cài 'openai-whisper' để bật tìm theo lời nói.")
+            return
         seg_cache: dict[str, list] = {}
         for raw, rec in zip(raws, records):
             src = raw.source_video

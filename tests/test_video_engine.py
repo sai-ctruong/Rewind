@@ -301,6 +301,30 @@ def test_asr_text_search_finds_spoken_word(tmp_path) -> None:
     assert "bm25" in res[0].source_ranks
 
 
+def test_index_survives_missing_whisper(tmp_path, monkeypatch, capsys) -> None:
+    """ASR bật nhưng CHƯA CÀI Whisper -> index KHÔNG được sập (giữ đúng lời hứa của
+    docstring _apply_asr). Trước đây `_get_asr()` ném ImportError NGOÀI try/except ->
+    thiếu 1 thư viện phụ giật sập cả mẻ index (embedding + OCR đã tốn hàng phút).
+
+    Kỳ vọng: index thành công (vẫn có ảnh), chỉ thiếu asr_text, và có cảnh báo rõ."""
+    video = tmp_path / "scenes.mp4"
+    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
+    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
+    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
+    engine.enable_asr = True
+
+    def _boom():
+        raise ImportError("No module named 'whisper'")
+    monkeypatch.setattr(engine, "_get_asr", _boom)
+
+    entry = engine.index_video(video, tmp_path / "f")   # KHÔNG được ném ImportError
+
+    assert entry.num_indexed > 0                          # index vẫn xong
+    assert not any(entry.asr_by_id.values())              # nhưng không có lời nói
+    assert engine.search(entry, "màu đỏ", top_k=3)        # tìm ảnh vẫn chạy
+    assert "Bỏ qua ASR" in capsys.readouterr().out        # có cảnh báo cho người dùng
+
+
 @pytest.mark.parametrize("query,expected", [
     ("cửa hàng SAMSUNG bên đường", 3.0),     # IN HOA -> query chữ -> cao
     ("biển STREET FOOD trong hẻm", 3.0),

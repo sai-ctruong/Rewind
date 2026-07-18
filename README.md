@@ -8,7 +8,7 @@ Công cụ tìm kiếm ngữ nghĩa cho video quy mô lớn — tìm bất kỳ 
 <p align="center">
   <a href="https://github.com/sai-ctruong/Rewind/actions/workflows/ci.yml"><img src="https://github.com/sai-ctruong/Rewind/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/tests-286%20passing-2f9e6f" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-287%20passing-2f9e6f" alt="Tests">
   <img src="https://img.shields.io/badge/ANN-Faiss%20HNSW-F5A623" alt="Faiss">
   <img src="https://img.shields.io/badge/encoder-SigLIP2-6E8BFF" alt="SigLIP">
   <img src="https://img.shields.io/badge/layer-Agentic-8B5CF6" alt="Agentic">
@@ -136,7 +136,7 @@ bạn xem nó đã gọi tool nào, vì sao**.
 | 🤝 **Ensemble 2 encoder** | SigLIP2 + SigLIP đa ngôn ngữ — giảm "cùng sai", **Việt lẫn Anh** |
 | 🔎 **Hybrid dense + sparse** | SigLIP trộn BM25 (OCR/ASR/caption) qua RRF, trọng số **thích ứng** |
 | 🧪 **Mock-first** | mọi thứ cần GPU/API đều có bản Mock chạy **offline**; bản thật *lazy-import* |
-| ✅ **286 unit test** | `pytest` chạy hoàn toàn offline (~7s) — không cần GPU/API key |
+| ✅ **287 unit test** | `pytest` chạy hoàn toàn offline (~7s) — không cần GPU/API key |
 
 <img src="docs/assets/divider.svg" width="100%" alt="">
 
@@ -191,7 +191,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 2. Chạy toàn bộ test — offline, không cần GPU/API
-pytest                            # → 286 passed (~7s, không cần GPU)
+pytest                            # → 287 passed (~7s, không cần GPU)
 
 # 3. Web demo (pipeline thật)
 python -m ui.app                  # → http://127.0.0.1:5000
@@ -392,5 +392,5 @@ reasoning CoT/ToT (cần LLM) · IVF-PQ/sharding (khi profiling cho thấy RAM l
 </p>
 <p align="center"><i>Rewind — tua lại tìm khoảnh khắc.</i></p>
 <p align="center">
-  <sub>Chạy offline bằng mock · cắm model/API thật là dùng · 286 test xanh</sub>
+  <sub>Chạy offline bằng mock · cắm model/API thật là dùng · 287 test xanh</sub>
 </p>
