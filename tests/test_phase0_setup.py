@@ -8,8 +8,7 @@ nhưng CÓ Ý NGHĨA để bắt lỗi cấu hình sớm:
   1. Cấu trúc thư mục Mục 6 tồn tại đầy đủ.
   2. configs/settings.yaml parse được và chứa đúng các ngưỡng mặc định Phase 0
      (dedup=0.97, coarse top-K=1000, rerank top-K=100, time_budget=20s).
-  3. Package dialogue đã dời vào subfolder vẫn import được nguyên vẹn
-     (không vỡ do việc di dời — Mục 10.6 cấm refactor dialogue).
+  3. Competition mode does not depend on legacy dialogue modules.
 
 Test chạy hoàn toàn offline, không cần GPU/API (Mục 1.5).
 """
@@ -29,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # -----------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "rel_dir",
-    ["dialogue", "ingestion", "retrieval", "evaluation", "ui", "tests", "configs"],
+    ["ingestion", "retrieval", "evaluation", "ui", "tests", "configs"],
 )
 def test_required_directories_exist(rel_dir: str) -> None:
     """Mỗi thư mục bắt buộc trong Mục 6 phải tồn tại."""
@@ -82,19 +81,3 @@ def test_rrf_k_is_standard_default(settings: dict) -> None:
 def test_brute_force_limit_matches_constraint(settings: dict) -> None:
     # Mục 1.3: cấm brute-force khi vượt ~50.000 vector.
     assert settings["index"]["brute_force_max_vectors"] == 50000
-
-
-# -----------------------------------------------------------------------------
-# 3. dialogue vẫn import được sau khi dời vào subfolder
-# -----------------------------------------------------------------------------
-def test_dialogue_imports_after_move() -> None:
-    """Việc di dời KISC vào dialogue/ không được làm vỡ import công khai."""
-    from dialogue import (  # noqa: F401  (import để kiểm tra, không dùng trực tiếp)
-        HybridRetriever,
-        KISCDialogueManager,
-        MockRetriever,
-    )
-
-    # MockRetriever phải khởi tạo được offline (Mục 1.5) — không cần API/GPU.
-    retriever = MockRetriever()
-    assert retriever is not None

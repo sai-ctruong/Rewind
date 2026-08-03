@@ -39,8 +39,8 @@ embedding:
   # Ensemble 2 encoder để giảm rủi ro "cùng sai" (correlated errors) — Mục 2.1.
   clip:
     # CLIP ViT-L/14 do BTC cấp sẵn feature -> không tốn compute trích xuất lại.
-    model_name: "ViT-L/14"
-    dim: 768                     # [FIXED] chiều embedding CLIP ViT-L/14
+    model_name: "openai/clip-vit-base-patch32"
+    dim: 512                     # AIC clip-features-32
   siglip:
     # SigLIP tự trích xuất (zero-shot tốt hơn CLIP ở benchmark retrieval — Mục 2.1).
     # Engine video (retrieval/video_engine.py) ENSEMBLE 2 encoder: siglip2-base +
@@ -105,12 +105,22 @@ coarse:
 # 5. RETRIEVAL — Score Fusion (RRF) (Mục 4.3)
 # -----------------------------------------------------------------------------
 fusion:
+  clip_weight: 1.0
+  object_weight: 0.20
+  metadata_weight: 0.10
+  sparse_weight: 0.25
+  adaptive: true
   method: "RRF"                 # Reciprocal Rank Fusion — chuẩn IR cho việc gộp
                                  # nhiều ranked list khác đơn vị đo (CLIP/BM25/meta).
   # [FIXED] Hằng số k trong công thức RRF_score = Σ 1/(k + rank). k=60 là mặc định
   # chuẩn trong tài liệu IR (Mục 4.3).
   rrf_k: 60
   # [ĐO 2026-07-16 — bench_retrieval.py --fusion-depth, 51 nhãn/2679 kf] Độ sâu fusion:
+  clip_weight: 1.0
+  object_weight: 0.20
+  metadata_weight: 0.10
+  sparse_weight: 0.25
+  adaptive: true
   # mỗi nguồn (clip/siglip/bm25) đóng góp bấy nhiêu rank vào RRF.
   #
   # PHẢI TÁCH RIÊNG khỏi "số kết quả trả về". Bug đã đo: khi hai thứ này là MỘT tham
@@ -144,8 +154,7 @@ fine_rerank:
   top_k: 100
   # Batch nhiều candidate/request để giảm round-trip mạng (giảm ĐỘ TRỄ) — Mục 4.4.
   batch_size: 8                 # [PROVISIONAL]
-  # Early stopping (Mục 11.1.4): dừng sớm khi Top-1 vượt trội rõ rệt, tái dùng
-  # logic dialogue/ambiguity.py::is_confident_enough.
+  # Early stopping: dừng sớm khi Top-1 vượt trội rõ rệt.
   early_stopping:
     enabled: true
     # [PROVISIONAL] ngưỡng tự tin để dừng sớm — chốt bằng thực nghiệm Phase 5.
@@ -159,20 +168,15 @@ fine_rerank:
 # LƯU Ý: time_budget là NGÂN SÁCH ĐỘ TRỄ online lúc thi, dùng để suy ra top-K
 # rerank tối đa. KHÔNG áp cho giai đoạn indexing (offline, không giới hạn — Mục 2.3).
 runtime:
+  production_mode: false
+  seed: 42
+  device: "auto"
   # [PROVISIONAL] Blueprint Phase 0 đặt 20s. Đây là tổng thời gian tối đa cho 1
   # query online. Phải kiểm bằng đo thực nghiệm ở Phase 5 (Mục 4.4).
   time_budget_seconds: 20
   # Số lời gọi LVLM đồng thời (concurrent) — bị chặn bởi rate limit API, KHÔNG
   # phải chi phí (Mục 11.1.5). Chốt theo rate limit thực tế.
   max_concurrent_lvlm_calls: 8  # [PROVISIONAL]
-
-# -----------------------------------------------------------------------------
-# 8. KISC — module hội thoại đã có sẵn (Mục 9, tích hợp ở Phase 8)
-# -----------------------------------------------------------------------------
-kisc:
-  # Khi độ tự tin của kết quả thấp hơn ngưỡng này -> gọi dialogue hỏi lại người
-  # dùng để thu hẹp phạm vi (Mục 3, bước [6] KISC).
-  low_confidence_threshold: 0.5  # [PROVISIONAL] căn chỉnh cùng ambiguity.py
 
 # -----------------------------------------------------------------------------
 # 9. LLM / LVLM API (Claude) (Mục 2.3, 2.4)
@@ -224,3 +228,51 @@ video_engine:
   enable_asr: false             # Whisper nặng, opt-in (cần openai-whisper + ffmpeg)
   # A3 decode: "auto" ưu tiên decord/NVDEC nếu cài, else cv2 (chỉ decode frame lấy mẫu).
   decode_backend: "auto"
+# AIC 2026 competition pipeline. Values are starting points until measured on one label split.
+encoder:
+  type: "clip"
+  model_name: "openai/clip-vit-base-patch32"
+  normalize: true
+  batch_size: 32
+  allow_hashing_fallback: true
+
+ranking:
+  top_k: 100
+  max_frames_per_video: 12
+  min_frame_gap: 30
+  neighbor_offsets: [-2, -1, 1, 2]
+  diversity_lambda: 0.25
+  precision_head_size: 5
+  recall_tail_size: 50
+
+refinement:
+  enabled: true
+  uncertainty_only: true
+  margin_threshold: 0.03
+  window_before_s: 4.0
+  window_after_s: 4.0
+  fine_fps: 4.0
+  max_frames: 32
+  cache_size_mb: 256
+
+trake:
+  per_event_top_k: 40
+  top_video_hypotheses: 20
+  min_gap_s: 0.001
+  max_gap_s: null
+  coverage_bonus: 0.20
+  missing_event_penalty: 0.35
+  transition_penalty: 0.02
+  local_refinement: true
+
+qa:
+  evidence_frame_count: 8
+  retrieval_query_mode: "event_only"
+  answer_confidence_threshold: 0.35
+  abstain_enabled: true
+
+evaluation:
+  ks: [1, 5, 20, 50, 100]
+  output_dir: "evaluation/benchmarks/aic2026"
+  save_predictions: true
+  save_errors: true

@@ -308,7 +308,7 @@ class ClaudeVqaAnswerer(VqaAnswerer):
 # KHÁC VqaModule: VQA trả lời một CÂU HỎI trên một cửa sổ thời gian; Reader TÓM TẮT/GIẢI
 # THÍCH kết quả TRUY XUẤT (top-K keyframe rời rạc, có thể khác video) theo truy vấn. Dùng
 # lại đúng hạ tầng (VqaAnswer-style, Claude vision lazy) nhưng đầu vào là KẾT QUẢ TOOL đã
-# chuẩn hoá (dict) + entry để tra text/ảnh — nối thẳng được vào G2 SearchAgent.
+# chuẩn hoá (dict) + entry để tra text/ảnh cho luồng Q&A competition.
 
 
 @dataclass

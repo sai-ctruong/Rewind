@@ -128,6 +128,7 @@ class VideoIndexEntry:
                 id=r.id, video_id=r.video_id, timestamp=r.timestamp,
                 image_path=r.image_path, source_video=r.source_video,
                 frame_idx=r.frame_idx, objects=list(r.objects),
+                object_detections=list(getattr(r, "object_detections", [])),
             )
             for rid, r in self.raws.items()
         }
@@ -708,128 +709,6 @@ class VideoSearchEngine:
             out.append(l2_normalize(mean.reshape(1, -1))[0])
         return out
 
-    def encode_image_query(self, image_bytes: bytes) -> list[np.ndarray]:
-        """Encode 1 ẢNH truy vấn vào CÙNG không gian với keyframe (mỗi encoder 1 vector).
-
-        VÌ SAO: SigLIP là mô hình image-text -> vector ảnh và vector keyframe cùng không
-        gian, so cosine trực tiếp. Bọc ảnh vào RawKeyframe rồi gọi encoder.embed(raw) —
-        đúng interface chung nên chạy cả bản thật lẫn mock. Đây là 'đổi phương thức truy
-        vấn' (slide Buổi 2): đưa ẢNH MẪU thay vì mô tả chữ, liên kết chặt hơn."""
-        query_raw = RawKeyframe(id="__imgquery__", video_id="__query__",
-                                timestamp=0.0, image_bytes=image_bytes)
-        out: list[np.ndarray] = []
-        for enc in self._load_encoders():
-            v = np.asarray(enc.embed(query_raw), dtype=np.float32).reshape(1, -1)
-            out.append(l2_normalize(v)[0])
-        return out
-
-    # Từ dừng (không mang concept) — loại khỏi gợi ý. Việt + Anh thường gặp.
-    _STOPWORDS = {
-        "và", "là", "của", "có", "một", "các", "những", "người", "cảnh", "trong",
-        "trên", "với", "đang", "này", "cho", "được", "tại", "mô", "tả", "video",
-        "the", "a", "an", "of", "in", "on", "with", "and", "to", "at", "is", "are",
-        "photo", "image", "scene",
-    }
-
-    def suggest_concepts(
-        self, entry: VideoIndexEntry, candidate_ids: Sequence[str], query: str,
-        top_n: int = 8,
-    ) -> list[str]:
-        """Gợi ý CONCEPT liên quan từ top-K kết quả (slide Buổi 2 — khám phá/khai phá).
-
-        Đếm từ khoá hay xuất hiện trong caption/OCR/ASR của các keyframe top-K (trừ từ
-        đã có trong câu + từ dừng) -> gợi ý người dùng thêm vào truy vấn để THU HẸP
-        (khai phá) hoặc MỞ RỘNG hướng (khám phá). Rỗng nếu keyframe chưa có tín hiệu chữ
-        (chưa bật caption/OCR/ASR)."""
-        from collections import Counter
-
-        from ingestion.build_index import tokenize
-
-        qtok = set(tokenize(query))
-        cnt: Counter = Counter()
-        for kid in candidate_ids:
-            text = " ".join(t for t in (
-                entry.caption_by_id.get(kid), entry.ocr_by_id.get(kid),
-                entry.asr_by_id.get(kid)) if t)
-            for tok in tokenize(text):
-                if len(tok) >= 3 and tok not in qtok and tok not in self._STOPWORDS:
-                    cnt[tok] += 1
-        return [w for w, _ in cnt.most_common(top_n)]
-
-    def _diverse_pick(self, entry: VideoIndexEntry, ids: list[str], k: int) -> list[str]:
-        """Chọn `k` id ĐA DẠNG nhất bằng greedy farthest-point trên embedding (bắt đầu
-        từ id đầu = top-1). Cho tập lựa chọn 'khác nhau rõ' để hỏi lại hiệu quả."""
-        idx = entry.index
-        vecs = {i: idx.mean_embedding([i], "clip") for i in ids}
-        ids = [i for i in ids if vecs[i] is not None]
-        if not ids:
-            return []
-        picked = [ids[0]]
-        while len(picked) < min(k, len(ids)):
-            best, best_d = None, -1.0
-            for i in ids:
-                if i in picked:
-                    continue
-                d = min(float(np.linalg.norm(vecs[i] - vecs[p])) for p in picked)
-                if d > best_d:
-                    best_d, best = d, i
-            picked.append(best)
-        return picked
-
-    def disambiguation(
-        self, entry: VideoIndexEntry, candidates: list, k: int = 4,
-        score_gap: float = 0.02,
-    ) -> Optional[list[str]]:
-        """F1 (KISC cho video thật): khi kết quả CÒN MƠ HỒ, CHỦ ĐỘNG chọn `k` ứng viên
-        ĐA DẠNG để hỏi người dùng 'cái nào giống ý bạn nhất?' — thu hẹp bằng phản hồi
-        hình ảnh (không cần thuộc tính, chỉ embedding). Trả None nếu đã đủ tự tin
-        (ít ứng viên, hoặc top-1 nổi trội — tái dùng ý is_confident_enough của KISC)."""
-        if len(candidates) <= k:
-            return None
-        top = sorted(candidates, key=lambda c: float(c.score), reverse=True)
-        if len(top) >= 2 and (float(top[0].score) - float(top[1].score)) >= score_gap:
-            return None
-        return self._diverse_pick(entry, [c.keyframe_id for c in top], k)
-
-    def explore(
-        self, entry: VideoIndexEntry, per_video: int = 3, limit: int = 30,
-    ) -> list[RawKeyframe]:
-        """Chọn mẫu keyframe ĐA DẠNG khắp dataset (slide Buổi 2 — 'hiển thị gì khi người
-        dùng chưa biết bắt đầu từ đâu'). Mỗi video lấy `per_video` frame RẢI ĐỀU theo thời
-        gian (đầu/giữa/cuối) -> lướt nhanh để chọn hướng, thay vì phải gõ câu trước."""
-        by_video: dict[str, list] = {}
-        for kid in entry.index.ids:
-            r = entry.raws.get(kid)
-            if r is not None:
-                by_video.setdefault(r.video_id, []).append((r.timestamp, r))
-        out: list[RawKeyframe] = []
-        for items in by_video.values():
-            items.sort(key=lambda x: x[0])
-            n = min(per_video, len(items))
-            picks = ([0] if n <= 1 else
-                     [round(i * (len(items) - 1) / (n - 1)) for i in range(n)])
-            for i in sorted(set(picks)):
-                out.append(items[i][1])
-        return out[:limit]
-
-    def search_similar(
-        self, entry: VideoIndexEntry, keyframe_id: str, top_k: int = 8,
-    ) -> list:
-        """Tìm keyframe GIỐNG một keyframe cho trước — dùng THẲNG embedding đã lưu (không
-        cần encode lại ảnh). Nền cho D2: bấm 1 ảnh khám phá -> ra các cảnh tương tự."""
-        idx = entry.index
-        qvecs: list[np.ndarray] = []
-        for enc in ("clip", "siglip"):
-            if idx.has_encoder(enc):
-                m = idx.mean_embedding([keyframe_id], enc)
-                if m is not None:
-                    qvecs.append(l2_normalize(m.reshape(1, -1))[0])
-        if not qvecs:
-            return []
-        # +1 rồi bỏ chính nó khỏi kết quả (luôn giống nó nhất).
-        res = self._run_search(entry, qvecs, "", top_k + 1, rerank=False)
-        return [c for c in res if c.keyframe_id != keyframe_id][:top_k]
-
     def neighbors(
         self, entry: VideoIndexEntry, frame_id: str, before: int = 4, after: int = 4,
     ) -> list[RawKeyframe]:
@@ -846,45 +725,6 @@ class VideoSearchEngine:
         if idx is None:
             return []
         return same[max(0, idx - before): idx + after + 1]
-
-    def search_by_image(
-        self, entry: VideoIndexEntry, image_bytes: bytes, top_k: int = 8,
-    ) -> list:
-        """Tìm keyframe GIỐNG một ảnh mẫu (image-to-video). Chỉ dùng tín hiệu THỊ GIÁC
-        (dense ensemble), KHÔNG BM25 (ảnh không có 'chữ' để so). Trả top_k coarse."""
-        qvecs = self.encode_image_query(image_bytes)
-        retriever = CoarseRetriever(entry.index, fusion_depth=self.fusion_depth)
-        coarse = retriever.search(
-            query_clip_vec=qvecs[0],
-            query_siglip_vec=qvecs[1] if len(qvecs) > 1 else None,
-            query_text=None,          # query ẢNH: không có nhánh BM25
-            top_k=top_k,
-        )
-        return coarse[:top_k]
-
-    def search_multimodal(
-        self, entry: VideoIndexEntry, query_text: str, image_bytes: bytes, *,
-        text_weight: float = 0.5, top_k: int = 8, rerank: bool = False,
-    ) -> list:
-        """KẾT HỢP truy vấn CHỮ + ẢNH (slide Buổi 2 — 'kết hợp nhiều kiểu truy vấn').
-
-        SigLIP đưa cả câu và ảnh vào CÙNG không gian nên trộn được ở MỨC VECTOR:
-        q = chuẩn_hoá(w·vec_chữ + (1−w)·vec_ảnh) cho từng encoder. Cho phép mô tả bằng
-        lời VÀ chỉ 'giống ảnh này' cùng lúc -> liên kết chặt hơn mỗi loại đơn lẻ. Câu chữ
-        vẫn dùng cho BM25 + rerank."""
-        tvecs = self.encode_query(query_text) if query_text else None
-        ivecs = self.encode_image_query(image_bytes) if image_bytes else None
-        if tvecs is None and ivecs is None:
-            raise ValueError("search_multimodal cần ít nhất câu chữ HOẶC ảnh.")
-        if ivecs is None:  # chỉ có chữ -> như search thường
-            return self._run_search(entry, tvecs, query_text, top_k, rerank)
-        if tvecs is None:  # chỉ có ảnh -> dense thuần (không BM25/rerank text)
-            return self._run_search(entry, ivecs, "", top_k, rerank=False)
-        fused: list[np.ndarray] = []
-        for tv, iv in zip(tvecs, ivecs):
-            v = text_weight * tv + (1.0 - text_weight) * iv
-            fused.append(l2_normalize(v.reshape(1, -1))[0])
-        return self._run_search(entry, fused, query_text, top_k, rerank)
 
     def search(
         self, entry: VideoIndexEntry, query: str, top_k: int = 8, rerank: bool = False,
@@ -904,7 +744,7 @@ class VideoSearchEngine:
         top_k: int, rerank: bool,
     ) -> list:
         """Chạy coarse (dense qvecs + BM25 theo `query`) rồi rerank (nếu bật). Tách ra
-        để `search` và `search_with_feedback` DÙNG CHUNG — feedback chỉ đổi qvecs."""
+        để `search` giữ luồng coarse/rerank tập trung cho competition mode."""
         retriever = CoarseRetriever(entry.index, fusion_depth=self.fusion_depth)
         # `pool` = số ứng viên đưa cho VLM chấm. KHÔNG còn là độ sâu fusion — độ sâu đó
         # nay cố định theo self.fusion_depth nên thứ hạng không đổi theo top_k người xin.
@@ -935,34 +775,6 @@ class VideoSearchEngine:
         finally:
             if offloaded:
                 self._offload_encoders(to_cpu=False)
-
-    def search_with_feedback(
-        self, entry: VideoIndexEntry, query: str,
-        positive_ids: Sequence[str] = (), negative_ids: Sequence[str] = (),
-        top_k: int = 8, rerank: bool = False,
-        alpha: float = 1.0, beta: float = 0.75, gamma: float = 0.15,
-    ) -> list:
-        """RELEVANCE FEEDBACK (Rocchio) — slide Buổi 2, trụ cột phản hồi người dùng.
-
-        Người dùng đánh dấu kết quả LIÊN QUAN (positive) / KHÔNG (negative). Ta dịch vector
-        truy vấn về phía trung bình embedding các ảnh 'thích' và ra xa các ảnh 'không
-        thích': q' = α·q + β·mean(pos) − γ·mean(neg), chuẩn hoá lại. Đây là vòng khám
-        phá↔khai phá chạy THẲNG trên embedding (không cần thuộc tính). Câu chữ giữ nguyên
-        (BM25 không đổi), chỉ tín hiệu THỊ GIÁC dịch theo phản hồi."""
-        slots = ["clip", "siglip"]
-        qvecs = self.encode_query(query)
-        adjusted: list[np.ndarray] = []
-        for i, v in enumerate(qvecs):
-            enc = slots[i] if i < len(slots) else slots[-1]
-            vv = alpha * np.asarray(v, dtype=np.float32)
-            pos = entry.index.mean_embedding(positive_ids, enc)
-            neg = entry.index.mean_embedding(negative_ids, enc)
-            if pos is not None:
-                vv = vv + beta * pos
-            if neg is not None:
-                vv = vv - gamma * neg
-            adjusted.append(l2_normalize(vv.reshape(1, -1))[0])
-        return self._run_search(entry, adjusted, query, top_k, rerank)
 
     def search_temporal(
         self, entry: VideoIndexEntry, events: Sequence[str], *,

@@ -1,3 +1,23 @@
+# AIC 2026 Current Work
+
+The active implementation is documented in AUDIT.md and PHASE_REPORT.md.
+
+- [x] Repository/data audit
+- [x] Production CLIP safeguards and encoder health
+- [x] Multi-signal fusion and ablation registry
+- [x] Video-aware Top-100 ranking
+- [x] Bounded local refinement and missing-MP4 fallback
+- [x] Joint monotonic TRAKE DP
+- [x] Grounded multi-frame Q&A and answer normalization
+- [x] Official evaluation artifact contract and annotation template
+- [x] Competition UI status, corrections and background evaluation
+- [x] Install requirements-full.txt and cache the real CLIP model
+- [ ] Supply AIC-format labels and run the first fixed-split baseline
+- [ ] Run paper related-work review only after that baseline
+
+The content below is retained as historical engineering notes for the pre-AIC refactor. It is not the active competition task list.
+
+---
 # 📋 TASKS.md — Kế hoạch đầy đủ (Hệ thống tìm kiếm video AIC 2026)
 
 > **Nguồn yêu cầu:** `CLAUDE.md` (blueprint kỹ thuật) + **Slide Buổi 2** (khung "Hệ

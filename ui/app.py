@@ -1,563 +1,348 @@
-"""Web UI của Rewind — backend Flask nối thẳng pipeline THẬT trên video người dùng nạp.
-
-  - Tìm kiếm video (chữ / ảnh / sketch / đa phương thức / chuỗi thời gian), rerank VLM,
-    relevance feedback, gợi ý concept, duyệt lân cận  ->  /api/video/*
-  - Bộ lọc ẢNH hội thoại (thu hẹp dần)               ->  /api/filter/*
-  - Agent tự điều phối công cụ (smart path)          ->  /api/agent/*
-  - Hỏi–đáp VQA trên video đã nạp                    ->  /api/video/vqa
-
-MỌI thứ chạy trên index của video THẬT (video_state["videos"]) — không còn dataset
-lifelog tổng hợp. Demo hội thoại theo THUỘC TÍNH (Information Gain) nằm ở
-`python -m dialogue.demo` và `retrieval/dialogue_real_demo.py`, không phơi qua HTTP nữa.
-
-Frontend (ui/index.html) là 1 trang tĩnh tự gọi các API này.
-
-Chạy:  python -m ui.app   rồi mở http://127.0.0.1:5000
-"""
+"""Flask backend for the AIC 2026 competition-oriented Rewind UI."""
 from __future__ import annotations
 
-import os
 from io import BytesIO
 from pathlib import Path
+from threading import Thread
 
 from flask import Flask, jsonify, request, send_file
 
-from ingestion import model_cache  # noqa: F401 -- đặt HF_HOME (ổ D) sớm nhất
+from ingestion import model_cache  # noqa: F401 -- configure model cache early
+
+from aic2026.dataset import AICDataPaths, official_frame_id
+from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
+from aic2026.metrics import write_submission
+from evaluation.official_eval import evaluate_labels, load_jsonl
 
 _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
-VIDEO_DIR = _ROOT / "data" / "videos"          # nơi bỏ file video của người dùng
-FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
-INDEX_DIR = _ROOT / "artifacts" / "index"      # nơi lưu index (A2 — nạp lại, không embed lại)
+DATA_ROOT = _ROOT / "data"
+AIC_CACHE_DIR = _ROOT / "artifacts" / "aic2026_index"
+SUBMISSION_DIR = _ROOT / "artifacts" / "submissions"
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    state: dict = {
+        "engine": None,
+        "load": None,
+        "progress": {"active": False, "count": 0, "fps": 0.0, "elapsed": 0.0, "label": ""},
+        "evaluation": {"active": False, "summary": None, "run_dir": None, "error": None},
+    }
+
+    def _engine_or_error():
+        engine = state.get("engine")
+        if engine is None:
+            return None, (jsonify(error="AIC index is not loaded. Click Dataset first."), 400)
+        return engine, None
+
+    def _prediction_json(pred):
+        return {
+            "video_id": pred.video_id,
+            "frame_id": pred.frame_id,
+            "id": pred.keyframe_id,
+            "score": round(float(pred.score), 6),
+            "answer": pred.answer,
+            "event_frame_ids": pred.event_frame_ids,
+            "timestamp": round(float(pred.timestamp), 3),
+            "score_breakdown": pred.score_breakdown,
+            "evidence": pred.evidence,
+            "image": f"/api/video/frame/{pred.keyframe_id}" if pred.keyframe_id else None,
+            "video_url": f"/api/video/file/{pred.video_id}" if (DATA_ROOT / "video" / f"{pred.video_id}.mp4").exists() else None,
+        }
+
+    def _frame_json(engine: AICCompetitionEngine, keyframe_id: str, extra: dict | None = None):
+        raw = engine.entry.raws[keyframe_id]
+        out = {
+            "video_id": raw.video_id,
+            "frame_id": official_frame_id(engine.entry, keyframe_id),
+            "id": keyframe_id,
+            "timestamp": round(float(raw.timestamp), 3),
+            "image": f"/api/video/frame/{keyframe_id}",
+        }
+        if extra:
+            out.update(extra)
+        return out
+
     @app.get("/")
     def home():
-        # index.html là NỘI DUNG TRANG (không có <html>/<head>) để cũng publish được
-        # làm Artifact; ở đây bọc vào skeleton đầy đủ để phục vụ như 1 trang web.
         body = (_UI_DIR / "index.html").read_text(encoding="utf-8")
         return (
             "<!doctype html><html lang='vi'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            "<title>Trợ lý Truy xuất Đa phương tiện · AIC 2026</title></head><body>"
+            "<title>AIC 2026 Rewind</title></head><body>"
             f"{body}</body></html>"
         )
 
     @app.get("/api/health")
     def health():
-        """Trạng thái backend + số liệu THẬT: bao nhiêu video đã index, tổng bao nhiêu
-        keyframe. (Trước đây trả kích thước một dataset lifelog TỔNG HỢP -> con số hiện
-        trên UI không liên quan gì tới video người dùng nạp.)"""
-        vids = video_state["videos"]
-        return jsonify(ok=True, videos=len(vids),
-                       dataset_size=sum(e.num_indexed for e in vids.values()))
-
-    # ===================== TÌM KIẾM TRÊN VIDEO THẬT (SigLIP) ==================
-    # VideoSearchEngine (retrieval/video_engine.py): ensemble SigLIP2 + SigLIP
-    # multilingual, query prompt ensemble, lấy mẫu dày + dedup ngữ nghĩa.
-    # Model nạp LƯỜI (lần index đầu); mỗi video index xong được cache.
-    from retrieval.video_engine import VideoIndexEntry, VideoSearchEngine
-
-    video_state: dict = {"engine": VideoSearchEngine(), "videos": {},
-                         "progress": {"active": False, "count": 0, "fps": 0.0,
-                                      "elapsed": 0.0, "label": ""}}
-
-    def _progress_cb(label: str):
-        """Trả callback engine gọi khi index -> cập nhật video_state['progress'] để
-        endpoint /api/video/progress đọc (A6). Đánh dấu active; caller tự tắt ở finally."""
-        p = video_state["progress"]
-        p.update(active=True, count=0, fps=0.0, elapsed=0.0, label=label)
-        def cb(n, elapsed):
-            p.update(count=n, fps=round(n / max(elapsed, 1e-6), 1),
-                     elapsed=round(elapsed, 1), active=True, label=label)
-        return cb
-
-    def _progress_done():
-        video_state["progress"]["active"] = False
-
-    def _safe_name(vid: str) -> str:
-        """Tên thư mục an toàn cho video_id (đề phòng ký tự lạ)."""
-        return "".join(c if c.isalnum() or c in "-_." else "_" for c in vid)
-
-    # Tự NẠP LẠI các index đã lưu ở lần chạy trước (A2) — không phải embed lại.
-    if INDEX_DIR.exists():
-        for d in sorted(INDEX_DIR.iterdir()):
-            if (d / "entry.pkl").exists():
-                try:
-                    entry = VideoIndexEntry.load(d)
-                    video_state["videos"][entry.video_id] = entry
-                    print(f"[ui] Đã nạp index từ đĩa: {entry.video_id} "
-                          f"({entry.num_indexed} keyframe)")
-                except Exception as e:  # pragma: no cover - index hỏng thì bỏ qua
-                    print(f"[ui] Bỏ qua index hỏng {d}: {e!r}")
-
-    def _index_opts(data: dict) -> dict:
-        """Tuỳ chọn nạp từ request: chỉ còn bật/tắt OCR. LUÔN quét TOÀN BỘ video —
-        engine dùng mặc định sample_every_s=1s và max_frames=None (không giới hạn),
-        không cho người dùng chọn giây/số frame nữa (sẽ scale lên cả dataset lớn)."""
-        o: dict = {}
-        if "ocr" in data:
-            o["enable_ocr"] = bool(data["ocr"])
-        if "asr" in data:
-            o["enable_asr"] = bool(data["asr"])
-        if "caption" in data:
-            o["enable_caption"] = bool(data["caption"])
-        return o
+        engine = state.get("engine")
+        paths = AICDataPaths.from_root(DATA_ROOT)
+        feature_count = len(list(paths.features_dir.glob("*.npy"))) if paths.features_dir.exists() else 0
+        loaded = engine is not None
+        encoder = None if engine is None else engine.encoder_status()
+        mp4_count = len(list(paths.video_dir.glob("*.mp4"))) if paths.video_dir.exists() else 0
+        return jsonify(
+            ok=True,
+            mode="aic2026",
+            loaded=loaded,
+            videos=0 if engine is None else len({r.video_id for r in engine.entry.raws.values()}),
+            dataset_size=0 if engine is None else engine.entry.num_indexed,
+            data_root=str(DATA_ROOT),
+            feature_videos=feature_count,
+            cache_dir=str(AIC_CACHE_DIR),
+            mp4_available=mp4_count,
+            encoder=encoder,
+            warning=None if encoder is None else encoder.get("warning"),
+        )
 
     @app.get("/api/video/progress")
     def video_progress():
-        """A6: tiến độ index hiện tại (UI poll khi đang nạp) — count + fps + elapsed."""
-        return jsonify(video_state["progress"])
+        return jsonify(state["progress"])
 
     @app.get("/api/video/list")
     def video_list():
-        vids = (sorted(p.name for p in VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists()
-                else [])
-        return jsonify(videos=vids, indexed=sorted(video_state["videos"].keys()),
-                       folder=str(VIDEO_DIR))
+        paths = AICDataPaths.from_root(DATA_ROOT)
+        videos = sorted(p.stem for p in paths.features_dir.glob("*.npy")) if paths.features_dir.exists() else []
+        indexed = ["__aic2026__"] if state.get("engine") is not None else []
+        return jsonify(videos=videos, indexed=indexed, folder=str(DATA_ROOT))
 
     @app.post("/api/video/index")
     def video_index():
-        name = (request.json or {}).get("video", "")
-
-        # --- Chế độ TOÀN BỘ DATASET: index mọi .mp4 trong data/videos/ vào 1 index.
-        if name == "__dataset__":
-            if "__dataset__" in video_state["videos"]:
-                entry = video_state["videos"]["__dataset__"]
-                return jsonify(video="__dataset__", cached=True, frames=entry.num_indexed)
-            vids = sorted(VIDEO_DIR.glob("*.mp4")) if VIDEO_DIR.exists() else []
-            if not vids:
-                return jsonify(error="Không có video nào trong data/videos/"), 404
-            try:
-                entry = video_state["engine"].index_dataset(
-                    vids, FRAMES_DIR, progress_cb=_progress_cb("toàn bộ dataset"),
-                    **_index_opts(request.json or {}))
-            except RuntimeError as e:
-                return jsonify(error=str(e)), 400
-            finally:
-                _progress_done()
-            video_state["videos"]["__dataset__"] = entry
-            return jsonify(video="__dataset__", frames=entry.num_indexed,
-                           sampled=entry.num_sampled, videos=len(vids))
-
-        path = VIDEO_DIR / name
-        if not name or not path.exists():
-            return jsonify(error=f"Không thấy video: {name}"), 404
-        # Đã index rồi -> trả cache ngay (dùng lại giữa các tab KIS/AVS/Video).
-        if path.stem in video_state["videos"]:
-            entry = video_state["videos"][path.stem]
-            return jsonify(video=path.stem, cached=True, frames=entry.num_indexed)
+        data = request.json or {}
+        rebuild = bool(data.get("rebuild", False))
         try:
-            entry = video_state["engine"].index_video(
-                path, FRAMES_DIR, progress_cb=_progress_cb(name),
-                **_index_opts(request.json or {}))
-        except RuntimeError as e:
-            return jsonify(error=str(e)), 400
-        finally:
-            _progress_done()
-        video_state["videos"][entry.video_id] = entry
-        return jsonify(video=entry.video_id, frames=entry.num_indexed,
-                       sampled=entry.num_sampled)
-
-    # Đuôi file video chấp nhận khi quét thư mục dataset.
-    VIDEO_EXTS = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".m4v", ".mpg", ".mpeg"}
+            engine, load = AICCompetitionEngine.from_data_root(
+                DATA_ROOT,
+                cache_dir=AIC_CACHE_DIR,
+                rebuild=rebuild,
+                limit_videos=data.get("limit_videos"),
+                limit_frames_per_video=data.get("limit_frames_per_video"),
+                load_objects=bool(data.get("objects", False)),
+                production_mode=bool(data.get("production_mode", False)),
+                allow_hashing_fallback=bool(data.get("allow_hashing_fallback", True)),
+                device=data.get("device"),
+            )
+        except Exception as exc:
+            return jsonify(error=str(exc)), 400
+        state["engine"] = engine
+        state["load"] = load
+        return jsonify(
+            video="__aic2026__",
+            cached=load.cache_hit,
+            build_seconds=round(load.build_seconds, 3),
+            frames=engine.entry.num_indexed,
+            stats=None if load.stats is None else load.stats.__dict__,
+        )
 
     @app.post("/api/video/index_folder")
     def video_index_folder():
-        """Index TOÀN BỘ video trong một THƯ MỤC BẤT KỲ trên máy (đệ quy) vào 1 index
-        dataset chung -> tìm xuyên suốt. Không cần chép video vào data/videos/."""
-        raw_path = (request.json or {}).get("path", "").strip().strip('"')
+        data = request.json or {}
+        raw_path = (data.get("path") or "").strip().strip('"')
         if not raw_path:
-            return jsonify(error="Nhập đường dẫn thư mục dataset."), 400
+            return jsonify(error="AIC DATA_ROOT path is required."), 400
         folder = Path(raw_path)
         if not folder.is_dir():
-            return jsonify(error=f"Không phải thư mục hợp lệ: {raw_path}"), 400
-        vids = sorted(p for p in folder.rglob("*")
-                      if p.suffix.lower() in VIDEO_EXTS and p.is_file())
-        if not vids:
-            return jsonify(error=f"Không tìm thấy video trong: {raw_path}"), 404
+            return jsonify(error=f"Invalid AIC DATA_ROOT: {raw_path}"), 400
         try:
-            entry = video_state["engine"].index_dataset(
-                vids, FRAMES_DIR, progress_cb=_progress_cb(f"{len(vids)} video"),
-                **_index_opts(request.json or {}))
-        except RuntimeError as e:
-            return jsonify(error=str(e)), 400
-        finally:
-            _progress_done()
-        video_state["videos"]["__dataset__"] = entry
-        video_state["dataset_folder"] = str(folder)
-        return jsonify(video="__dataset__", frames=entry.num_indexed,
-                       sampled=entry.num_sampled, videos=len(vids), folder=str(folder))
+            engine, load = AICCompetitionEngine.from_data_root(
+                folder,
+                cache_dir=AIC_CACHE_DIR,
+                rebuild=bool(data.get("rebuild", False)),
+                load_objects=bool(data.get("objects", False)),
+                production_mode=bool(data.get("production_mode", False)),
+                allow_hashing_fallback=bool(data.get("allow_hashing_fallback", True)),
+                device=data.get("device"),
+            )
+        except Exception as exc:
+            return jsonify(error=str(exc)), 400
+        state["engine"] = engine
+        state["load"] = load
+        return jsonify(video="__aic2026__", cached=load.cache_hit, frames=engine.entry.num_indexed, folder=str(folder))
 
     @app.post("/api/video/search")
     def video_search():
+        engine, err = _engine_or_error()
+        if err:
+            return err
         data = request.json or {}
-        vid, query = data.get("video", ""), (data.get("query", "") or "").strip()
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
+        query = (data.get("query") or "").strip()
         if not query:
-            return jsonify(error="Nhập câu mô tả cần tìm."), 400
-        rerank = bool(data.get("rerank", False))
-        pos = [i for i in (data.get("positive") or []) if i]
-        neg = [i for i in (data.get("negative") or []) if i]
-        topk = int(data.get("topk", 6))
-        eng = video_state["engine"]
+            return jsonify(error="Query is required."), 400
+        topk = max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20))))
+        preds = engine.search_kis(query, top_k=topk)
+        return jsonify(
+            task="kis",
+            video="__aic2026__",
+            query=query,
+            count=len(preds),
+            results=[_prediction_json(p) for p in preds],
+            predictions=[p.row() for p in preds],
+            encoder=engine.encoder_status(),
+        )
 
-        # Q4: HIỂU CÂU (không khi đang lọc theo phản hồi F2). Parse -> hiện cấu trúc +
-        # TỰ ĐỊNH TUYẾN sang tìm chuỗi nếu câu có thứ tự thời gian ("A trước khi B").
-        parsed = None
-        if not (pos or neg) and data.get("understand", True):
-            st = eng.understand(query)
-            parsed = {"objects": st.objects, "actions": st.actions,
-                      "location": st.location, "attributes": st.attributes,
-                      "time_constraint": st.time_constraint,
-                      "temporal_order": st.temporal_order, "query_type": st.query_type}
-            events = eng.temporal_events(query)
-            if events:  # có thứ tự thời gian -> trả CHUỖI thay vì danh sách phẳng
-                matches = eng.search_temporal(entry, events, max_results=topk)
-                chains = [{
-                    "video_id": m.video_id, "total_score": round(float(m.total_score), 3),
-                    "steps": [{"event": events[i], "timestamp": round(s.timestamp, 1),
-                               "image": f"/api/video/frame/{s.keyframe_id}"}
-                              for i, s in enumerate(m.steps)],
-                } for m in matches]
-                return jsonify(video=vid, query=query, parsed=parsed,
-                               temporal=chains, events=events, results=[])
-
-        if pos or neg:  # F2: relevance feedback (Rocchio) — dịch truy vấn theo phản hồi
-            cands = eng.search_with_feedback(
-                entry, query, positive_ids=pos, negative_ids=neg, top_k=topk, rerank=rerank)
-        else:
-            cands = eng.search(entry, query, top_k=topk, rerank=rerank)
-        results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
-                    "score": round(float(c.score), 3), "video_id": c.video_id,
-                    "explanation": getattr(c, "explanation", None),
-                    "ocr": entry.ocr_by_id.get(c.keyframe_id),
-                    "asr": entry.asr_by_id.get(c.keyframe_id),
-                    "caption": entry.caption_by_id.get(c.keyframe_id),
-                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
-        # F3: gợi ý concept liên quan từ top kết quả (khám phá/khai phá).
-        suggestions = eng.suggest_concepts(
-            entry, [c.keyframe_id for c in cands], query)
-        # F1: nếu kết quả còn mơ hồ -> chọn vài ảnh ĐA DẠNG để CHỦ ĐỘNG hỏi lại.
-        disambig = []
-        if not (pos or neg):
-            ids = eng.disambiguation(entry, cands)
-            if ids:
-                by_id = {c.keyframe_id: c for c in cands}
-                disambig = [{"id": i, "timestamp": round(by_id[i].timestamp, 1),
-                             "video_id": by_id[i].video_id,
-                             "image": f"/api/video/frame/{i}"} for i in ids if i in by_id]
-        return jsonify(video=vid, query=query, reranked=rerank, parsed=parsed,
-                       results=results, suggestions=suggestions, disambiguation=disambig)
-
-    @app.post("/api/video/search_image")
-    def video_search_image():
-        """Q1: tìm bằng ẢNH mẫu. Nhận file ảnh (multipart 'image') + 'video' (form).
-        SigLIP encode ảnh -> search thị giác thuần."""
-        vid = request.form.get("video", "")
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
-        f = request.files.get("image")
-        if f is None or not f.filename:
-            return jsonify(error="Chưa chọn ảnh mẫu."), 400
-        data = f.read()
-        if not data:
-            return jsonify(error="Ảnh rỗng."), 400
-        text = (request.form.get("query") or "").strip()
-        topk = int(request.form.get("topk", 8))
-        try:
-            if text:  # Q3: có CẢ chữ -> multimodal (trộn vector chữ + ảnh)
-                cands = video_state["engine"].search_multimodal(
-                    entry, text, data, top_k=topk)
-            else:      # chỉ ảnh
-                cands = video_state["engine"].search_by_image(entry, data, top_k=topk)
-        except Exception as e:  # pragma: no cover
-            return jsonify(error=f"Lỗi tìm bằng ảnh: {e}"), 500
-        results = [{"id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
-                    "score": round(float(c.score), 3), "video_id": c.video_id,
-                    "caption": entry.caption_by_id.get(c.keyframe_id),
-                    "ocr": entry.ocr_by_id.get(c.keyframe_id),
-                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands]
-        return jsonify(video=vid, count=len(results), results=results)
+    @app.post("/api/video/vqa")
+    def video_vqa():
+        engine, err = _engine_or_error()
+        if err:
+            return err
+        data = request.json or {}
+        question = (data.get("question") or "").strip()
+        event_text = (data.get("event") or data.get("query") or "").strip()
+        if not question and not event_text:
+            return jsonify(error="Question or event text is required."), 400
+        preds, info = engine.answer_qa(
+            event_text,
+            question,
+            top_k=max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20)))),
+            window_s=float(data.get("window", 8.0)),
+        )
+        frames = [_frame_json(engine, fid) for fid in info.get("frame_ids", []) if fid in engine.entry.raws]
+        return jsonify(
+            task="qa",
+            video="__aic2026__",
+            question=question,
+            event=event_text,
+            answer=info.get("answer"),
+            value=info.get("value"),
+            reasoning=info.get("reasoning"),
+            answer_normalized=info.get("answer_normalized"),
+            grounding_score=info.get("grounding_score"),
+            answer_confidence=info.get("answer_confidence"),
+            warning=info.get("warning"),
+            evidence_roles=info.get("evidence_roles", []),
+            used_frame_ids=info.get("used_frame_ids", []),
+            frames=frames,
+            center_time=info.get("center_time"),
+            video_id=info.get("video_id"),
+            predictions=[p.row() for p in preds],
+            encoder=engine.encoder_status(),
+        )
 
     @app.post("/api/video/temporal")
     def video_temporal():
-        """B4: tìm chuỗi 'cảnh A TRƯỚC cảnh B (…)'. `events` = danh sách câu mô tả cảnh
-        theo thứ tự thời gian. Trả các tổ hợp cùng video, timestamp tăng dần."""
+        engine, err = _engine_or_error()
+        if err:
+            return err
         data = request.json or {}
-        vid = data.get("video", "")
         events = [e.strip() for e in (data.get("events") or []) if e and e.strip()]
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
         if len(events) < 2:
-            return jsonify(error="Nhập ít nhất 2 cảnh (mỗi dòng 1 cảnh) theo thứ tự."), 400
-        matches = video_state["engine"].search_temporal(
-            entry, events, per_event_k=int(data.get("per_event_k", 20)),
-            max_results=int(data.get("max_results", 20)))
-        out = [{
-            "video_id": m.video_id, "total_score": round(float(m.total_score), 3),
-            "steps": [{"event": events[i], "timestamp": round(s.timestamp, 1),
-                       "image": f"/api/video/frame/{s.keyframe_id}"}
-                      for i, s in enumerate(m.steps)],
-        } for m in matches]
-        return jsonify(video=vid, events=events, count=len(out), matches=out)
+            return jsonify(error="At least two ordered events are required."), 400
+        try:
+            preds, matches = engine.search_trake(
+                events,
+                per_event_k=int(data.get("per_event_k", 40)),
+                max_results=max(1, min(MAX_PREDICTIONS, int(data.get("max_results", 20)))),
+                refine_window_s=float(data.get("refine_window", 6.0)),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        out = []
+        for match in matches:
+            steps = []
+            for i, step in enumerate(match.steps):
+                steps.append(_frame_json(engine, step.keyframe_id, {"event": events[i]}))
+            out.append({"video_id": match.video_id, "total_score": round(float(match.total_score), 6), "steps": steps})
+        return jsonify(task="trake", video="__aic2026__", events=events, count=len(out), matches=out, predictions=[p.row() for p in preds])
 
+    @app.get("/api/evaluation/status")
+    def evaluation_status():
+        return jsonify(state["evaluation"])
+
+    @app.post("/api/evaluation/run")
+    def evaluation_run():
+        engine, err = _engine_or_error()
+        if err:
+            return err
+        data = request.json or {}
+        labels_path = Path((data.get("labels") or "").strip())
+        if not labels_path.is_file():
+            return jsonify(error="AIC JSONL ground-truth file is required."), 400
+        if state["evaluation"]["active"]:
+            return jsonify(error="An evaluation run is already active."), 409
+        state["evaluation"] = {"active": True, "summary": None, "run_dir": None, "error": None}
+
+        def worker():
+            try:
+                labels = load_jsonl(labels_path)
+
+                def predictor(label):
+                    task = label["task"].lower()
+                    if task == "kis":
+                        return [p.row() for p in engine.search_kis(label["query"], top_k=100)]
+                    if task in {"qa", "q&a", "vqa"}:
+                        predictions, _ = engine.answer_qa(
+                            label.get("query", ""), label.get("question", ""), top_k=100
+                        )
+                        return [p.row() for p in predictions]
+                    events = label.get("events") or []
+                    event_text = [item.get("event", "") if isinstance(item, dict) else str(item) for item in events]
+                    predictions, _ = engine.search_trake(event_text, max_results=100)
+                    return [p.row() for p in predictions]
+
+                summary, run_dir = evaluate_labels(labels, predictor, run_name="ui")
+                state["evaluation"] = {
+                    "active": False, "summary": summary, "run_dir": str(run_dir), "error": None
+                }
+            except Exception as exc:
+                state["evaluation"] = {
+                    "active": False, "summary": None, "run_dir": None, "error": str(exc)
+                }
+
+        Thread(target=worker, daemon=True).start()
+        return jsonify(started=True), 202
     @app.post("/api/video/save")
     def video_save():
-        """Lưu MỌI index đang có ra đĩa (A2) — lần sau mở app tự nạp lại, không embed lại."""
-        saved = []
-        for vid, entry in video_state["videos"].items():
-            try:
-                entry.save(INDEX_DIR / _safe_name(vid))
-                saved.append(vid)
-            except Exception as e:  # pragma: no cover
-                return jsonify(error=f"Lỗi lưu {vid}: {e}"), 500
-        if not saved:
-            return jsonify(error="Chưa có index nào để lưu. Nạp video trước."), 400
-        return jsonify(saved=saved, dir=str(INDEX_DIR))
+        engine, err = _engine_or_error()
+        if err:
+            return err
+        engine.entry.save(AIC_CACHE_DIR / "entry")
+        return jsonify(saved=["__aic2026__"], dir=str(AIC_CACHE_DIR))
 
-    @app.get("/api/video/explore")
-    def video_explore():
-        """D2: mẫu keyframe đa dạng khắp video để 'khám phá' khi chưa biết bắt đầu."""
-        vid = request.args.get("video", "")
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp."), 400
-        raws = video_state["engine"].explore(
-            entry, per_video=int(request.args.get("per_video", 3)),
-            limit=int(request.args.get("limit", 30)))
-        return jsonify(frames=[{"id": r.id, "timestamp": round(r.timestamp, 1),
-                                "video_id": r.video_id,
-                                "image": f"/api/video/frame/{r.id}"} for r in raws])
-
-    @app.get("/api/video/similar/<path:frame_id>")
-    def video_similar(frame_id: str):
-        """D2: tìm keyframe tương tự 1 keyframe (bấm từ trang khám phá)."""
-        for entry in video_state["videos"].values():
-            if frame_id in entry.raws:
-                cands = video_state["engine"].search_similar(
-                    entry, frame_id, top_k=int(request.args.get("topk", 8)))
-                return jsonify(results=[{
-                    "id": c.keyframe_id, "timestamp": round(c.timestamp, 1),
-                    "score": round(float(c.score), 3), "video_id": c.video_id,
-                    "caption": entry.caption_by_id.get(c.keyframe_id),
-                    "image": f"/api/video/frame/{c.keyframe_id}"} for c in cands])
-        return jsonify(error="Không thấy keyframe."), 404
+    @app.post("/api/submission/save")
+    def submission_save():
+        data = request.json or {}
+        rows = data.get("rows") or []
+        task = data.get("task") or "submission"
+        if not rows:
+            return jsonify(error="No rows to save."), 400
+        path = write_submission(rows, SUBMISSION_DIR / f"{task}.csv")
+        return jsonify(path=str(path), rows=min(len(rows), MAX_PREDICTIONS))
 
     @app.get("/api/video/neighbors/<path:frame_id>")
     def video_neighbors(frame_id: str):
-        """D1: keyframe lân cận (cùng video, quanh thời điểm) để duyệt bối cảnh."""
-        for entry in video_state["videos"].values():
-            if frame_id in entry.raws:
-                raws = video_state["engine"].neighbors(entry, frame_id)
-                return jsonify(frames=[{
-                    "id": r.id, "timestamp": round(r.timestamp, 1), "video_id": r.video_id,
-                    "is_ref": r.id == frame_id, "image": f"/api/video/frame/{r.id}",
-                } for r in raws])
-        return jsonify(error="Không thấy keyframe."), 404
-
-    # ============ BỘ LỌC ẢNH HỘI THOẠI (thu hẹp dần trên video THẬT) ============
-    # Thay cho KISC-trên-dữ-liệu-tổng-hợp: mỗi lượt trả về LƯỚI ẢNH THẬT co lại dần.
-    # Thu hẹp bằng 3 tín hiệu dùng đồng thời: thêm mô tả · 👍/👎 (Rocchio) · chọn ảnh
-    # đại diện khi hệ hỏi lại. Logic ở retrieval/image_filter.py (test offline được).
-    from retrieval.image_filter import ImageFilterSession
-
-    filter_state: dict = {"session": None}
-
-    def _filter_json(res) -> dict:
-        """Gắn URL ảnh thật vào từng ứng viên để UI vẽ lưới ảnh."""
-        d = res.to_dict()
-        for it in d["results"]:
-            it["image"] = f"/api/video/frame/{it['id']}"
-        for it in d["disambiguation"]:
-            it["image"] = f"/api/video/frame/{it['id']}"
-        return d
-
-    @app.post("/api/filter/start")
-    def filter_start():
-        data = request.json or {}
-        vid = data.get("video", "")
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
-        query = (data.get("query", "") or "").strip()
-        if not query:
-            return jsonify(error="Nhập mô tả để bắt đầu lọc."), 400
-        sess = ImageFilterSession(video_state["engine"], entry,
-                                  start_k=int(data.get("k", 20)))
-        try:
-            res = sess.start(query)
-        except ValueError as e:
-            return jsonify(error=str(e)), 400
-        filter_state["session"] = sess
-        return jsonify(_filter_json(res))
-
-    @app.post("/api/filter/refine")
-    def filter_refine():
-        sess = filter_state["session"]
-        if sess is None:
-            return jsonify(error="Chưa có phiên lọc. Hãy mô tả để bắt đầu."), 400
-        data = request.json or {}
-        try:
-            res = sess.refine(
-                text=(data.get("text") or "").strip() or None,
-                positive=[i for i in (data.get("positive") or []) if i],
-                negative=[i for i in (data.get("negative") or []) if i],
-                pick=data.get("pick") or None,
-                others=[i for i in (data.get("others") or []) if i],
-            )
-        except RuntimeError as e:
-            return jsonify(error=str(e)), 400
-        return jsonify(_filter_json(res))
-
-    @app.post("/api/filter/reset")
-    def filter_reset():
-        if filter_state["session"] is not None:
-            filter_state["session"].reset()
-        filter_state["session"] = None
-        return jsonify(ok=True)
-
-    # ==================== AGENT (smart path — tự điều phối công cụ) ==============
-    # Đưa lớp Agentic (G1–G4) lên UI: Search Agent tự quyết chuỗi tool (understand ->
-    # search / search_temporal / search_with_feedback -> disambiguation), giữ trí nhớ
-    # xuyên lượt (SessionMemory), và Reader tổng hợp đáp án có trích dẫn keyframe.
-    # Không cần API key: mặc định MockPlanner + MockReader (tất định, offline).
-    from retrieval.search_agent import SearchAgent
-    from retrieval.vqa_module import MockReader
-
-    agent_state: dict = {"agent": None, "video": None}
-    AGENT_MAX_CHAINS = 8      # trần số chuỗi temporal vẽ ra UI (tổng thật vẫn báo)
-
-    def _get_agent(entry, vid: str) -> SearchAgent:
-        """Một Agent cho mỗi video (đổi video -> phiên mới, trí nhớ mới).
-
-        Có ANTHROPIC_API_KEY -> dùng bộ não thật (ClaudePlanner + ClaudeReader);
-        không có -> MockPlanner/MockReader vẫn tự định tuyến, chạy offline."""
-        if agent_state["agent"] is not None and agent_state["video"] == vid:
-            return agent_state["agent"]
-        planner = None
-        reader = MockReader()
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            try:
-                from retrieval.search_agent import ClaudePlanner
-                from retrieval.vqa_module import ClaudeReader
-                planner, reader = ClaudePlanner(), ClaudeReader()
-            except Exception as e:  # pragma: no cover - thiếu SDK -> lùi về mock
-                print(f"[ui] Không dùng được Claude ({e!r}); dùng MockPlanner.")
-                planner, reader = None, MockReader()
-        agent_state["agent"] = SearchAgent(video_state["engine"], entry,
-                                           planner=planner, reader=reader)
-        agent_state["video"] = vid
-        return agent_state["agent"]
-
-    def _agent_json(run) -> dict:
-        """Gói AgentRun cho UI: trace các bước + kết quả (ảnh) hoặc chuỗi thời gian."""
-        steps = [{
-            "kind": s.action.kind, "tool": s.action.tool,
-            "rationale": s.action.rationale,
-            "ok": (None if s.result is None else s.result.ok),
-            "n": (None if s.result is None else len(s.result.items)),
-        } for s in run.steps]
-        results, chains = [], []
-        for it in run.results:
-            if it.get("keyframe_id"):          # nhánh tìm keyframe phẳng
-                results.append({**it, "id": it["keyframe_id"],
-                                "image": f"/api/video/frame/{it['keyframe_id']}"})
-            elif it.get("steps"):              # nhánh temporal: chuỗi cảnh đúng thứ tự
-                chains.append({**it, "steps": [
-                    {**s, "image": f"/api/video/frame/{s['keyframe_id']}"}
-                    for s in it["steps"]]})
-        meta = dict(run.meta or {})
-        clar = [{"id": i, "image": f"/api/video/frame/{i}"}
-                for i in (meta.get("need_clarification") or [])]
-        # Temporal có thể ra hàng chục tổ hợp -> chỉ vẽ vài chuỗi đầu cho đỡ nghẽn UI,
-        # nhưng VẪN báo tổng số thật (chains_total) thay vì lặng lẽ cắt bớt.
-        return {"query": run.query, "answer": run.answer,
-                "tools_used": run.tools_used(), "steps": steps,
-                "route": meta.get("route"), "results": results,
-                "chains": chains[:AGENT_MAX_CHAINS], "chains_total": len(chains),
-                "clarify": clar, "cited": meta.get("cited_frame_ids") or [],
-                "memory": meta.get("memory") or {}}
-
-    @app.post("/api/agent/ask")
-    def agent_ask():
-        data = request.json or {}
-        vid = data.get("video", "")
-        entry = video_state["videos"].get(vid)
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
-        agent = _get_agent(entry, vid)
-        query = (data.get("query") or "").strip()
-        if not query:   # lượt chỉ-phản-hồi -> dùng lại câu hỏi gần nhất trong trí nhớ
-            recent = agent.memory.recent(1) if agent.memory else []
-            query = recent[0].query if recent else ""
-        if not query:
-            return jsonify(error="Nhập câu để Agent tìm."), 400
-        run = agent.chat(
-            query,
-            positive_ids=[i for i in (data.get("positive") or []) if i],
-            negative_ids=[i for i in (data.get("negative") or []) if i],
+        engine, err = _engine_or_error()
+        if err:
+            return err
+        if frame_id not in engine.entry.raws:
+            return jsonify(error="Frame not found."), 404
+        raws = sorted(
+            (r for r in engine.entry.raws.values() if r.video_id == engine.entry.raws[frame_id].video_id),
+            key=lambda r: r.timestamp,
         )
-        return jsonify(_agent_json(run))
+        idx = next(i for i, r in enumerate(raws) if r.id == frame_id)
+        chosen = raws[max(0, idx - 4): idx + 5]
+        return jsonify(frames=[_frame_json(engine, r.id, {"is_ref": r.id == frame_id}) for r in chosen])
 
-    @app.post("/api/agent/reset")
-    def agent_reset():
-        agent_state["agent"] = None
-        agent_state["video"] = None
-        return jsonify(ok=True)
-
-    # ===================== VQA TRÊN VIDEO THẬT ==============================
-    # Trước đây tab VQA chỉ chạy trên bộ keyframe mẫu "sinh nhật" (chữ cứng). Giờ hỏi
-    # thẳng trên video người dùng nạp: tìm cửa sổ thời gian khớp câu hỏi rồi mới trả lời
-    # (blueprint bước [6]) — xem retrieval/vqa_module.answer_on_video.
-    @app.post("/api/video/vqa")
-    def video_vqa():
-        from retrieval.vqa_module import answer_on_video
-
-        data = request.json or {}
-        entry = video_state["videos"].get(data.get("video", ""))
-        if entry is None:
-            return jsonify(error="Video chưa được nạp. Bấm 'Nạp video' trước."), 400
-        question = (data.get("question") or "").strip()
-        if not question:
-            return jsonify(error="Nhập câu hỏi."), 400
-        try:
-            ans, info = answer_on_video(
-                video_state["engine"], entry, question,
-                window_s=float(data.get("window", 8.0)))
-        except ValueError as e:
-            return jsonify(error=str(e)), 400
-        frames = [{"id": i, "image": f"/api/video/frame/{i}",
-                   "timestamp": round(entry.raws[i].timestamp, 1)}
-                  for i in info["frame_ids"] if i in entry.raws]
-        # Nhắc thật: mock suy luận trên CHỮ -> không bật OCR/ASR/Caption thì gần như
-        # không có gì để suy luận. Nói thẳng cho người dùng thay vì trả lời rỗng.
-        has_text = bool(entry.caption_by_id or entry.ocr_by_id or entry.asr_by_id)
-        return jsonify(
-            answer=ans.answer, value=ans.value, reasoning=ans.reasoning,
-            used_frame_ids=ans.used_frame_ids, frames=frames,
-            center_time=info["center_time"], video_id=info["video_id"],
-            claude=bool(os.environ.get("ANTHROPIC_API_KEY")), has_text=has_text)
-
+    @app.get("/api/video/file/<video_id>")
+    def video_file(video_id: str):
+        path = DATA_ROOT / "video" / f"{video_id}.mp4"
+        if not path.is_file():
+            return jsonify(error="Original MP4 is unavailable."), 404
+        return send_file(path, mimetype="video/mp4", conditional=True)
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
-        from ingestion.schemas import frame_jpeg_bytes
-
-        for entry in video_state["videos"].values():
-            raw = entry.raws.get(frame_id)
-            if raw is None:
-                continue
-            data = frame_jpeg_bytes(raw)   # RAM -> đĩa -> decode lại từ video gốc
-            if data:
-                return send_file(BytesIO(data), mimetype="image/jpeg")
-        return jsonify(error="Không thấy keyframe."), 404
+        engine, err = _engine_or_error()
+        if err:
+            return err
+        raw = engine.entry.raws.get(frame_id)
+        if raw is None:
+            return jsonify(error="Frame not found."), 404
+        data = frame_jpeg_bytes(raw)
+        if data:
+            return send_file(BytesIO(data), mimetype="image/jpeg")
+        return jsonify(error="Frame image unavailable."), 404
 
     return app
 
@@ -565,6 +350,4 @@ def create_app() -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    # threaded=True: cho phép poll /api/video/progress SONG SONG khi 1 request index
-    # đang chạy (blocking) -> progress bar mới cập nhật được (A6).
     app.run(debug=False, port=5000, threaded=True)

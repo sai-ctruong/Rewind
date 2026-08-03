@@ -42,6 +42,7 @@ class RawKeyframe:
     image_bytes: Optional[bytes] = None   # ẢNH TRONG RAM (JPEG) — dùng khi KHÔNG ghi ảnh ra đĩa
     audio_path: Optional[str] = None      # đoạn audio quanh timestamp (cho ASR)
     objects: list[str] = field(default_factory=list)  # Open Images 600 categories (BTC cấp)
+    object_detections: list[dict] = field(default_factory=list)  # label, confidence, bounding_box
     source_video: Optional[str] = None    # đường dẫn VIDEO GỐC -> decode lại frame khi cần
     frame_idx: Optional[int] = None       # số thứ tự frame trong video (seek chính xác)
 

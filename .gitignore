@@ -17,6 +17,9 @@ evaluation/benchmarks/*.json
 evaluation/benchmarks/*.csv
 evaluation/benchmarks/*.mp4
 evaluation/benchmarks/bench_frames/
+evaluation/benchmarks/
+*.log
+aic2026_links_copy.xlsx
 
 # --- Dữ liệu BTC cấp (nặng, không commit) ---
 data/

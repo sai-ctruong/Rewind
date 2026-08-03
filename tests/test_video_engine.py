@@ -353,30 +353,6 @@ def test_caption_search_finds_by_relationship(tmp_path) -> None:
     assert "bm25" in res[0].source_ranks
 
 
-def test_search_by_image_finds_matching_scene(tmp_path) -> None:
-    """Q1: truy vấn bằng ẢNH — đưa ảnh ĐỎ thuần -> tìm ra cảnh đỏ (~[0,1)s).
-    Mock encoder đọc màu trung bình ảnh nên ảnh đỏ khớp keyframe đỏ."""
-    import cv2
-    import numpy as np
-
-    video = tmp_path / "scenes.mp4"
-    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
-    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
-    entry = engine.index_video(video, tmp_path / "frames")
-
-    # Ảnh mẫu ĐỎ thuần (BGR đỏ) -> JPEG bytes.
-    red = np.zeros((64, 64, 3), np.uint8); red[:] = (0, 0, 255)
-    ok, buf = cv2.imencode(".jpg", red)
-    res = engine.search_by_image(entry, buf.tobytes(), top_k=3)
-    assert res and res[0].timestamp < 1.0                # cảnh đỏ đầu video
-    # Ảnh xanh dương -> ra cảnh xanh dương (~[2,3)s).
-    blue = np.zeros((64, 64, 3), np.uint8); blue[:] = (255, 0, 0)
-    _ok, bbuf = cv2.imencode(".jpg", blue)
-    res2 = engine.search_by_image(entry, bbuf.tobytes(), top_k=3)
-    assert res2 and res2[0].timestamp >= 2.0
-
-
 def test_neighbors_returns_same_video_window(engine_and_entry) -> None:
     """D1: lân cận = keyframe CÙNG video, quanh thời điểm, sắp theo timestamp tăng dần."""
     engine, entry = engine_and_entry
@@ -387,37 +363,6 @@ def test_neighbors_returns_same_video_window(engine_and_entry) -> None:
     assert ts == sorted(ts)                 # đúng thứ tự thời gian
     assert any(r.id == mid.id for r in nb)  # có chính frame tham chiếu
     assert engine.neighbors(entry, "khong-co-id") == []
-
-
-def test_suggest_concepts_from_captions(tmp_path) -> None:
-    """F3: gợi ý concept lấy từ caption/OCR/ASR của top-K, loại từ đã có trong câu."""
-    video = tmp_path / "scenes.mp4"
-    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
-    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
-    engine.set_captioner(CaptionMockCaptioner())
-    entry = engine.index_video(video, tmp_path / "frames")
-
-    ids = list(entry.caption_by_id.keys())
-    sug = engine.suggest_concepts(entry, ids, query="tưới hoa", top_n=8)
-    assert sug, "phải có concept gợi ý từ caption"
-    assert "tưới" not in sug and "hoa" not in sug   # từ trong câu bị loại
-    assert all(len(w) >= 3 for w in sug)            # bỏ token quá ngắn
-    # Không có tín hiệu chữ -> rỗng.
-    assert engine.suggest_concepts(entry, [], query="x") == []
-
-
-def test_search_with_feedback_shifts_toward_positive(engine_and_entry) -> None:
-    """F2: đánh dấu 1 keyframe XANH LÁ là 'liên quan' -> Rocchio dịch truy vấn trung
-    tính về phía xanh lá -> top-1 rơi vào cảnh xanh lá (~[1,2)s)."""
-    engine, entry = engine_and_entry
-    green_id = next(i for i in entry.index.ids if 1.0 <= entry.raws[i].timestamp < 2.0)
-    # Câu TRUNG TÍNH (mock không nhận màu) -> phản hồi quyết định hướng.
-    res = engine.search_with_feedback(entry, "khong-mau-gi",
-                                      positive_ids=[green_id], top_k=3)
-    assert res and 1.0 <= res[0].timestamp < 2.0
-    # Không phản hồi -> giữ nguyên hành vi search thường (không lỗi).
-    assert engine.search_with_feedback(entry, "màu đỏ", top_k=3)[0].timestamp < 1.0
 
 
 def test_progress_cb_invoked_during_index(tmp_path) -> None:
@@ -432,26 +377,6 @@ def test_progress_cb_invoked_during_index(tmp_path) -> None:
     assert calls and calls == sorted(calls) and calls[-1] >= 1
 
 
-def test_search_multimodal_combines_text_and_image(engine_and_entry, tmp_path) -> None:
-    """Q3: kết hợp CHỮ + ẢNH. text_weight lệch về chữ -> theo chữ; lệch về ảnh -> theo ảnh."""
-    import cv2
-    import numpy as np
-
-    engine, entry = engine_and_entry
-    blue = np.zeros((64, 64, 3), np.uint8); blue[:] = (255, 0, 0)  # BGR xanh dương
-    _ok, bbytes = cv2.imencode(".jpg", blue)
-    bbytes = bbytes.tobytes()
-
-    # Chữ "màu đỏ" + ảnh xanh dương. Nghiêng về CHỮ -> ra cảnh ĐỎ (~[0,1)s).
-    r_text = engine.search_multimodal(entry, "màu đỏ", bbytes, text_weight=0.9, top_k=3)
-    assert r_text and r_text[0].timestamp < 1.0
-    # Nghiêng về ẢNH -> ra cảnh XANH DƯƠNG (~[2,3)s).
-    r_img = engine.search_multimodal(entry, "màu đỏ", bbytes, text_weight=0.1, top_k=3)
-    assert r_img and r_img[0].timestamp >= 2.0
-    # Chỉ ảnh (không chữ) -> vẫn ra xanh dương.
-    assert engine.search_multimodal(entry, "", bbytes, top_k=3)[0].timestamp >= 2.0
-
-
 def test_understand_and_temporal_routing() -> None:
     """Q4: hiểu câu -> StructuredQuery; câu có 'A TRƯỚC KHI B' -> temporal_events tách
     2 sự kiện đúng thứ tự; câu thường -> None (không auto-route)."""
@@ -461,45 +386,6 @@ def test_understand_and_temporal_routing() -> None:
     events = engine.temporal_events("cởi mũ trước khi vào phòng")
     assert events == ["cởi mũ", "vào phòng"]           # đúng thứ tự
     assert engine.temporal_events("một người đi bộ trên phố") is None  # câu thường
-
-
-def test_explore_and_search_similar(tmp_path) -> None:
-    """D2: explore lấy mẫu đa dạng (nhiều video); search_similar trả cảnh CÙNG MÀU,
-    loại bỏ chính nó."""
-    va = tmp_path / "a.mp4"; vb = tmp_path / "b.mp4"
-    _make_video(va, [(0, 0, 255), (0, 255, 0), (0, 0, 255)], frames_per_color=10)  # đỏ,lá,đỏ
-    _make_video(vb, [(255, 0, 0)], frames_per_color=10)                             # xanh dương
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=50, enable_ocr=False)
-    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
-    entry = engine.index_dataset([va, vb], tmp_path / "f")
-
-    ex = engine.explore(entry, per_video=2, limit=10)
-    assert ex and {r.video_id for r in ex} == {"a", "b"}   # phủ cả 2 video
-
-    # Từ cảnh ĐỎ ĐẦU (~[0,1)s) -> tương tự nhất là cảnh ĐỎ SAU (~[2,3)s), KHÔNG phải chính nó.
-    red1 = next(i for i in entry.index.ids
-                if entry.raws[i].video_id == "a" and entry.raws[i].timestamp < 1.0)
-    sim = engine.search_similar(entry, red1, top_k=3)
-    assert sim and all(c.keyframe_id != red1 for c in sim)
-    assert sim[0].timestamp >= 2.0                          # cảnh đỏ thứ hai (cùng màu)
-
-
-def test_disambiguation_picks_diverse(tmp_path) -> None:
-    """F1: khi nhiều ứng viên mơ hồ -> chọn k ảnh ĐA DẠNG (không trùng nhau) để hỏi lại;
-    ít ứng viên -> None (đủ tự tin)."""
-    video = tmp_path / "scenes.mp4"
-    _make_video(video, [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)], frames_per_color=10)
-    engine = VideoSearchEngine(sample_every_s=0.2, max_frames=60, enable_ocr=False)
-    engine.set_encoders([ColorMockEncoder(salt=0.0), ColorMockEncoder(salt=0.3)])
-    entry = engine.index_video(video, tmp_path / "frames")
-
-    # Câu trung tính -> nhiều ứng viên điểm sát nhau -> hỏi lại.
-    cands = engine.search(entry, "khong-mau-gi", top_k=8)
-    dis = engine.disambiguation(entry, cands, k=3)
-    assert dis is not None and len(dis) <= 3 and len(set(dis)) == len(dis)
-    assert all(i in {c.keyframe_id for c in cands} for i in dis)
-    # Ít ứng viên -> đủ tự tin, không hỏi.
-    assert engine.disambiguation(entry, cands[:2], k=3) is None
 
 
 def test_get_captioner_prefers_claude_when_key(tmp_path, monkeypatch) -> None:

@@ -1,0 +1,455 @@
+"""Competition search service for AIC 2026 tasks."""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional, Sequence
+
+import numpy as np
+
+from ingestion.build_index import l2_normalize
+from ingestion.embed_clip import deterministic_unit_vector
+from ingestion.schemas import frame_jpeg_bytes
+from retrieval.coarse_retriever import DEFAULT_FUSION_DEPTH, Candidate, CoarseRetriever
+from retrieval.temporal_check import TemporalMatch, TemporalStep, temporal_consistency_filter
+from retrieval.vqa_module import VqaAnswerer, VqaModule, default_answerer, entry_records, retrieve_temporal_window
+from retrieval.video_engine import VideoIndexEntry, adaptive_bm25_weight
+
+from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
+from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
+from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
+from .ranking import RankingConfig, video_aware_top100
+from .trake import AlignmentConfig, EventCandidate, joint_trake_alignment
+from .text_encoder import (
+    AutoCLIPTextEncoder,
+    HashingTextEncoder,
+    TextQueryEncoder,
+    encode_many,
+    encoder_status,
+)
+
+MAX_PREDICTIONS = 100
+QUERY_TEMPLATES = (
+    "{q}",
+    "a photo of {q}.",
+    "a video frame of {q}.",
+    "mot khung hinh ve {q}.",
+)
+
+
+@dataclass
+class AICPrediction:
+    video_id: str
+    frame_id: str
+    keyframe_id: str
+    score: float = 0.0
+    answer: Optional[str] = None
+    event_frame_ids: list[str] = field(default_factory=list)
+    timestamp: float = 0.0
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+    evidence: dict = field(default_factory=dict)
+
+    def row(self) -> list[str]:
+        if self.event_frame_ids:
+            return [self.video_id, *self.event_frame_ids]
+        if self.answer is not None:
+            return [self.video_id, self.frame_id, self.answer]
+        return [self.video_id, self.frame_id]
+
+
+@dataclass
+class AICLoadResult:
+    entry: VideoIndexEntry
+    stats: Optional[AICDatasetStats]
+    build_seconds: float
+    cache_hit: bool
+
+
+class AICCompetitionEngine:
+    """One service for Textual KIS, Q&A, and TRAKE."""
+
+    def __init__(
+        self,
+        entry: VideoIndexEntry,
+        *,
+        text_encoder: Optional[TextQueryEncoder] = None,
+        query_templates: Sequence[str] = QUERY_TEMPLATES,
+        fusion_depth: int = DEFAULT_FUSION_DEPTH,
+        bm25_weight: float = 1.0,
+        bm25_weight_high: float = 3.0,
+        adaptive_bm25: bool = True,
+        production_mode: bool = False,
+        allow_hashing_fallback: bool = True,
+        encoder_model_name: str = "openai/clip-vit-base-patch32",
+        device: Optional[str] = None,
+        encoder_batch_size: int = 32,
+        fusion_config: FusionConfig = FusionConfig(),
+    ):
+        self.entry = entry
+        dim = int(getattr(getattr(entry.index, "_clip_index", None), "d", 512) or 512)
+        if production_mode and isinstance(text_encoder, HashingTextEncoder):
+            raise RuntimeError("HashingTextEncoder cannot be used when production_mode=true.")
+        self.feature_dim = dim
+        self.production_mode = bool(production_mode)
+        self.text_encoder = text_encoder or AutoCLIPTextEncoder(
+            feature_dim=dim,
+            model_name=encoder_model_name,
+            device=device,
+            batch_size=encoder_batch_size,
+            production_mode=production_mode,
+            allow_hashing_fallback=allow_hashing_fallback,
+        )
+        self.query_templates = list(query_templates)
+        self.fusion_depth = fusion_depth
+        self.bm25_weight = bm25_weight
+        self.bm25_weight_high = bm25_weight_high
+        self.adaptive_bm25 = adaptive_bm25
+        self.fusion_config = fusion_config
+
+    @classmethod
+    def from_data_root(
+        cls,
+        data_root: str | Path,
+        *,
+        cache_dir: str | Path = "artifacts/aic2026_index",
+        rebuild: bool = False,
+        limit_videos: Optional[int] = None,
+        limit_frames_per_video: Optional[int] = None,
+        load_objects: bool = False,
+        include_media_text: bool = False,
+        verify_keyframes: bool = False,
+        index_kind: str = "flat",
+        text_encoder: Optional[TextQueryEncoder] = None,
+        production_mode: bool = False,
+        allow_hashing_fallback: bool = True,
+        encoder_model_name: str = "openai/clip-vit-base-patch32",
+        device: Optional[str] = None,
+        encoder_batch_size: int = 32,
+    ) -> tuple["AICCompetitionEngine", AICLoadResult]:
+        start = time.perf_counter()
+        cache_dir = Path(cache_dir)
+        entry_dir = cache_dir / "entry"
+        stats_path = cache_dir / "stats.json"
+        if not rebuild and (entry_dir / "entry.pkl").exists():
+            entry = VideoIndexEntry.load(entry_dir)
+            stats = None
+            if stats_path.exists():
+                try:
+                    stats = AICDatasetStats(**json.loads(stats_path.read_text(encoding="utf-8")))
+                except Exception:
+                    stats = None
+            result = AICLoadResult(entry, stats, time.perf_counter() - start, True)
+            return cls(
+                entry, text_encoder=text_encoder, production_mode=production_mode,
+                allow_hashing_fallback=allow_hashing_fallback,
+                encoder_model_name=encoder_model_name, device=device,
+                encoder_batch_size=encoder_batch_size,
+            ), result
+
+        loader = AICDatasetLoader(data_root, load_objects=load_objects, include_media_text=include_media_text, verify_keyframes=verify_keyframes, index_kind=index_kind)
+        entry, stats = loader.build_entry(
+            limit_videos=limit_videos,
+            limit_frames_per_video=limit_frames_per_video,
+        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        entry.save(entry_dir)
+        stats_path.write_text(json.dumps(stats.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
+        result = AICLoadResult(entry, stats, time.perf_counter() - start, False)
+        return cls(
+                entry, text_encoder=text_encoder, production_mode=production_mode,
+                allow_hashing_fallback=allow_hashing_fallback,
+                encoder_model_name=encoder_model_name, device=device,
+                encoder_batch_size=encoder_batch_size,
+            ), result
+
+    def encode_query(self, query: str) -> np.ndarray:
+        variants = encode_many(
+            self.text_encoder,
+            [tpl.format(q=query) for tpl in self.query_templates],
+            self.feature_dim,
+        )
+        mean = np.mean(variants, axis=0).astype(np.float32)
+        return l2_normalize(mean.reshape(1, -1))[0]
+
+    def encoder_status(self, *, initialize: bool = False) -> dict:
+        status_fn = getattr(self.text_encoder, "status", None)
+        if initialize and callable(status_fn):
+            try:
+                status = status_fn(initialize=True)
+            except TypeError:
+                status = status_fn()
+        else:
+            status = encoder_status(self.text_encoder, self.feature_dim)
+        return status.to_dict()
+
+    def search(
+        self,
+        entry: VideoIndexEntry,
+        query: str,
+        top_k: int = 20,
+        rerank: bool = False,
+    ) -> list[Candidate]:
+        return self.search_candidates(query, top_k=top_k)
+
+    def search_candidates(
+        self,
+        query: str,
+        *,
+        top_k: int = 20,
+        filters: Optional[dict] = None,
+    ) -> list[Candidate]:
+        top_k = max(1, min(self.fusion_depth, int(top_k)))
+        qvec = self.encode_query(query)
+        retriever = CoarseRetriever(self.entry.index, fusion_depth=self.fusion_depth)
+        rows = retriever._apply_filters(filters)
+        depth = min(self.fusion_depth, len(self.entry.index.ids))
+        if rows is None:
+            dense_pairs = self.entry.index.dense_search(qvec, "clip", depth)
+        else:
+            dense_pairs = self.entry.index.exact_dense_search(qvec, "clip", rows, depth)
+        sparse_pairs = self.entry.index.sparse_search(query, depth, rows)
+        dense = dict(dense_pairs)
+        sparse = dict(sparse_pairs)
+        union = set(dense) | set(sparse)
+        ranked: list[RankedCandidate] = []
+        for row in union:
+            keyframe_id = self.entry.index.ids[row]
+            raw = self.entry.raws[keyframe_id]
+            object_score, matched_objects = object_match_score(
+                query, getattr(raw, "object_detections", None) or [
+                    {"label": label, "confidence": 0.5} for label in raw.objects
+                ]
+            )
+            metadata = self.entry.caption_by_id.get(keyframe_id, "")
+            metadata_score, metadata_terms = token_overlap_score(query, metadata)
+            ranked.append(RankedCandidate(
+                video_id=raw.video_id,
+                frame_id=official_frame_id(self.entry, keyframe_id),
+                timestamp=raw.timestamp,
+                keyframe_path=raw.image_path,
+                dense_score=float(dense.get(row, 0.0)),
+                object_score=object_score,
+                metadata_score=metadata_score,
+                bm25_score=float(sparse.get(row, 0.0)),
+                evidence=CandidateEvidence(
+                    matched_objects=matched_objects,
+                    metadata_terms=metadata_terms,
+                    sparse_terms=metadata_terms,
+                ),
+            ))
+        fused = fuse_candidates(query, ranked, self.fusion_config)
+        row_by_id = {self.entry.index.ids[row]: row for row in union}
+        out: list[Candidate] = []
+        for item in fused.candidates[:top_k]:
+            keyframe_id = f"{item.video_id}/{item.frame_id}"
+            row = row_by_id.get(keyframe_id)
+            if row is None:
+                continue
+            candidate = Candidate(
+                keyframe_id=keyframe_id,
+                row=row,
+                score=item.fused_score,
+                video_id=item.video_id,
+                timestamp=item.timestamp,
+                source_ranks={},
+            )
+            candidate.score_breakdown = {
+                "dense": item.dense_score,
+                "object": item.object_score,
+                "metadata": item.metadata_score,
+                "bm25": item.bm25_score,
+                "fused": item.fused_score,
+            }
+            candidate.evidence = item.evidence
+            out.append(candidate)
+        return out
+    def search_kis(self, query: str, *, top_k: int = MAX_PREDICTIONS) -> list[AICPrediction]:
+        requested = max(1, min(MAX_PREDICTIONS, int(top_k)))
+        pool = self.search_candidates(query, top_k=min(self.fusion_depth, max(requested * 3, 100)))
+
+        def nearby(anchor: Candidate, offsets: Sequence[int]) -> list[Candidate]:
+            rows = [
+                row for row, video in enumerate(self.entry.index.video_ids)
+                if video == anchor.video_id
+            ]
+            try:
+                position = rows.index(anchor.row)
+            except ValueError:
+                return []
+            out: list[Candidate] = []
+            for offset in offsets:
+                target = position + offset
+                if 0 <= target < len(rows):
+                    row = rows[target]
+                    out.append(Candidate(
+                        keyframe_id=self.entry.index.ids[row],
+                        row=row,
+                        score=anchor.score * 0.98,
+                        video_id=anchor.video_id,
+                        timestamp=self.entry.index.timestamps[row],
+                        source_ranks={"neighbor": abs(offset)},
+                    ))
+            return out
+
+        ranked = video_aware_top100(
+            pool,
+            video_id=lambda c: c.video_id,
+            frame_id=lambda c: int(official_frame_id(self.entry, c.keyframe_id)),
+            score=lambda c: c.score,
+            neighbors=nearby,
+            config=RankingConfig(top_k=requested),
+        )
+        return [self._from_candidate(c) for c in ranked]
+
+    def answer_qa(
+        self,
+        event_text: str,
+        question: str,
+        *,
+        top_k: int = MAX_PREDICTIONS,
+        window_s: float = 8.0,
+        answerer: Optional[VqaAnswerer] = None,
+        expected_answer_type: Optional[str] = None,
+        retrieval_query_mode: str = "event_only",
+        evidence_frame_count: int = 8,
+        answer_confidence_threshold: float = 0.35,
+        abstain_enabled: bool = True,
+    ) -> tuple[list[AICPrediction], dict]:
+        qa_input = QAInput(event_text, question, expected_answer_type)
+        ground_query = build_retrieval_query(qa_input, retrieval_query_mode)
+        candidates = self.search_candidates(ground_query, top_k=top_k)
+        if not candidates:
+            return [], {
+                "answer": "unknown", "answer_normalized": "unknown", "frame_ids": [],
+                "center_time": None, "video_id": None, "answer_confidence": 0.0,
+                "warning": "No grounding candidate was retrieved.",
+            }
+        center = candidates[0]
+        records = entry_records(self.entry, video_id=center.video_id)
+        window = retrieve_temporal_window(records, center.timestamp, window_s, center.video_id)
+        evidence = select_diverse_evidence(
+            window, center.timestamp, max(1, evidence_frame_count), query=question
+        )
+        selected_records = [item.record for item in evidence]
+        images: dict[str, bytes] = {}
+        for frame in selected_records:
+            raw = self.entry.raws.get(frame.id)
+            if raw is not None:
+                data = frame_jpeg_bytes(raw)
+                if data:
+                    images[frame.id] = data
+        ans = VqaModule(answerer or default_answerer()).answer(
+            question or ground_query,
+            selected_records,
+            video_id=center.video_id,
+            center_time=None,
+            window_s=window_s,
+            images=images,
+        )
+        answer_text = str(ans.value) if ans.value is not None else ans.answer
+        normalized = normalize_answer(answer_text)
+        # RRF scores are small, so use rank-relative grounding evidence rather than pretending
+        # they are calibrated probabilities.
+        margin = max(0.0, float(center.score - candidates[1].score)) if len(candidates) > 1 else float(center.score)
+        grounding_score = min(1.0, 0.5 + margin * 10.0)
+        confidence = confidence_from_evidence(grounding_score, len(selected_records), answer_text)
+        warning = None
+        if confidence < answer_confidence_threshold:
+            warning = "Weak grounding or answer evidence; prediction is uncertain."
+            if abstain_enabled and not answer_text.strip():
+                answer_text = "unknown"
+                normalized = "unknown"
+        preds = [self._from_candidate(candidate, answer=answer_text) for candidate in candidates]
+        info = {
+            "answer": ans.answer,
+            "value": ans.value,
+            "answer_normalized": normalized,
+            "reasoning": ans.reasoning,
+            "used_frame_ids": ans.used_frame_ids,
+            "frame_ids": [item.record.id for item in evidence],
+            "evidence_roles": [item.role for item in evidence],
+            "center_time": round(center.timestamp, 3),
+            "video_id": center.video_id,
+            "ground_query": ground_query,
+            "retrieval_query_mode": retrieval_query_mode,
+            "grounding_score": grounding_score,
+            "answer_confidence": confidence,
+            "warning": warning,
+        }
+        return preds, info
+    def search_trake(
+        self,
+        events: Sequence[str],
+        *,
+        per_event_k: int = 40,
+        max_results: int = MAX_PREDICTIONS,
+        refine_window_s: float = 6.0,
+    ) -> tuple[list[AICPrediction], list[TemporalMatch]]:
+        clean = [event.strip() for event in events if event and event.strip()]
+        if len(clean) < 2:
+            raise ValueError("TRAKE requires at least two ordered events.")
+        by_event: dict[int, list[EventCandidate]] = {}
+        for event_index, event in enumerate(clean):
+            by_event[event_index] = [
+                EventCandidate(
+                    event_index=event_index,
+                    video_id=c.video_id,
+                    keyframe_id=c.keyframe_id,
+                    frame_id=official_frame_id(self.entry, c.keyframe_id),
+                    timestamp=c.timestamp,
+                    score=float(c.score),
+                )
+                for c in self.search_candidates(event, top_k=per_event_k)
+            ]
+        aligned = joint_trake_alignment(
+            clean,
+            by_event,
+            AlignmentConfig(),
+            max_results=max_results,
+        )
+        matches: list[TemporalMatch] = []
+        predictions: list[AICPrediction] = []
+        for result in aligned:
+            selected = [alignment for alignment in result.alignments if alignment.candidate is not None]
+            steps = [
+                TemporalStep(
+                    event=alignment.event.text,
+                    keyframe_id=alignment.candidate.keyframe_id,
+                    timestamp=alignment.candidate.timestamp,
+                )
+                for alignment in selected
+            ]
+            if not steps:
+                continue
+            match = TemporalMatch(result.video_id, steps, result.score)
+            matches.append(match)
+            predictions.append(self._from_match(match))
+        return predictions[:max_results], matches[:max_results]
+    def _from_candidate(self, c: Candidate, answer: Optional[str] = None) -> AICPrediction:
+        return AICPrediction(
+            video_id=c.video_id,
+            frame_id=official_frame_id(self.entry, c.keyframe_id),
+            keyframe_id=c.keyframe_id,
+            score=float(c.score),
+            answer=answer,
+            timestamp=float(c.timestamp),
+            score_breakdown=dict(getattr(c, "score_breakdown", {})),
+            evidence={
+                "matched_objects": list(getattr(getattr(c, "evidence", None), "matched_objects", ())),
+                "metadata_terms": list(getattr(getattr(c, "evidence", None), "metadata_terms", ())),
+                "sparse_terms": list(getattr(getattr(c, "evidence", None), "sparse_terms", ())),
+            },
+        )
+
+    def _from_match(self, match: TemporalMatch) -> AICPrediction:
+        frame_ids = [official_frame_id(self.entry, s.keyframe_id) for s in match.steps]
+        key = match.steps[0].keyframe_id if match.steps else ""
+        return AICPrediction(
+            video_id=match.video_id,
+            frame_id=frame_ids[0] if frame_ids else "",
+            keyframe_id=key,
+            score=float(match.total_score),
+            event_frame_ids=frame_ids,
+        )

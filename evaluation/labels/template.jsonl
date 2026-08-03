@@ -1,0 +1,3 @@
+{"query_id":"kis-001","query":"describe the target moment","task":"kis","video_id":"L00_V000","start":100,"end":160}
+{"query_id":"qa-001","query":"event description","question":"question","task":"qa","video_id":"L00_V000","start":100,"end":160,"answer":"answer|accepted alias"}
+{"query_id":"trake-001","query":"ordered events","task":"trake","video_id":"L00_V000","events":[{"event":"first","start":100,"end":160},{"event":"second","start":200,"end":260}],"start_1":100,"end_1":160,"start_2":200,"end_2":260}
