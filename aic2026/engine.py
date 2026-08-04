@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -17,6 +17,7 @@ from retrieval.temporal_check import TemporalMatch, TemporalStep, temporal_consi
 from retrieval.vqa_module import VqaAnswerer, VqaModule, default_answerer, entry_records, retrieve_temporal_window
 from retrieval.video_engine import VideoIndexEntry, adaptive_bm25_weight
 
+from .config import AppConfig, config_hash, config_to_dict
 from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
 from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
@@ -80,56 +81,75 @@ class AICCompetitionEngine:
         bm25_weight: float = 1.0,
         bm25_weight_high: float = 3.0,
         adaptive_bm25: bool = True,
-        production_mode: bool = False,
-        allow_hashing_fallback: bool = True,
-        encoder_model_name: str = "openai/clip-vit-base-patch32",
+        production_mode: Optional[bool] = None,
+        allow_hashing_fallback: Optional[bool] = None,
+        encoder_model_name: Optional[str] = None,
         device: Optional[str] = None,
-        encoder_batch_size: int = 32,
-        fusion_config: FusionConfig = FusionConfig(),
+        encoder_batch_size: Optional[int] = None,
+        fusion_config: Optional[FusionConfig] = None,
+        app_config: Optional[AppConfig] = None,
     ):
         self.entry = entry
-        dim = int(getattr(getattr(entry.index, "_clip_index", None), "d", 512) or 512)
-        if production_mode and isinstance(text_encoder, HashingTextEncoder):
+        self.app_config = app_config or AppConfig()
+        dim = int(getattr(getattr(entry.index, "_clip_index", None), "d", self.app_config.encoder.feature_dim) or self.app_config.encoder.feature_dim)
+        effective_production = self.app_config.runtime.production_mode if production_mode is None else bool(production_mode)
+        effective_allow_fallback = self.app_config.encoder.allow_hashing_fallback if allow_hashing_fallback is None else bool(allow_hashing_fallback)
+        effective_model = encoder_model_name or self.app_config.encoder.model_name
+        effective_device = device or (None if self.app_config.runtime.device == "auto" else self.app_config.runtime.device)
+        effective_batch = int(encoder_batch_size or self.app_config.encoder.batch_size)
+        if effective_production and isinstance(text_encoder, HashingTextEncoder):
             raise RuntimeError("HashingTextEncoder cannot be used when production_mode=true.")
         self.feature_dim = dim
-        self.production_mode = bool(production_mode)
+        self.production_mode = bool(effective_production)
         self.text_encoder = text_encoder or AutoCLIPTextEncoder(
             feature_dim=dim,
-            model_name=encoder_model_name,
-            device=device,
-            batch_size=encoder_batch_size,
-            production_mode=production_mode,
-            allow_hashing_fallback=allow_hashing_fallback,
+            model_name=effective_model,
+            device=effective_device,
+            batch_size=effective_batch,
+            production_mode=effective_production,
+            allow_hashing_fallback=effective_allow_fallback,
         )
         self.query_templates = list(query_templates)
         self.fusion_depth = fusion_depth
         self.bm25_weight = bm25_weight
         self.bm25_weight_high = bm25_weight_high
         self.adaptive_bm25 = adaptive_bm25
-        self.fusion_config = fusion_config
+        self.fusion_config = fusion_config or self.app_config.fusion
+        self.ranking_config = self.app_config.ranking
+        self.refinement_config = self.app_config.refinement
+        self.trake_config = self.app_config.trake
+        self.qa_config = self.app_config.qa
+        self.config_hash = config_hash(self.app_config)
 
     @classmethod
     def from_data_root(
         cls,
-        data_root: str | Path,
+        data_root: str | Path | None = None,
         *,
-        cache_dir: str | Path = "artifacts/aic2026_index",
+        cache_dir: str | Path | None = None,
         rebuild: bool = False,
         limit_videos: Optional[int] = None,
         limit_frames_per_video: Optional[int] = None,
-        load_objects: bool = False,
-        include_media_text: bool = False,
-        verify_keyframes: bool = False,
-        index_kind: str = "flat",
+        load_objects: Optional[bool] = None,
+        include_media_text: Optional[bool] = None,
+        verify_keyframes: Optional[bool] = None,
+        index_kind: Optional[str] = None,
         text_encoder: Optional[TextQueryEncoder] = None,
-        production_mode: bool = False,
-        allow_hashing_fallback: bool = True,
-        encoder_model_name: str = "openai/clip-vit-base-patch32",
+        production_mode: Optional[bool] = None,
+        allow_hashing_fallback: Optional[bool] = None,
+        encoder_model_name: Optional[str] = None,
         device: Optional[str] = None,
-        encoder_batch_size: int = 32,
+        encoder_batch_size: Optional[int] = None,
+        app_config: Optional[AppConfig] = None,
     ) -> tuple["AICCompetitionEngine", AICLoadResult]:
+        app_config = app_config or AppConfig()
+        data_root = data_root if data_root is not None else app_config.dataset.root
+        cache_dir = Path(cache_dir if cache_dir is not None else app_config.dataset.cache_dir)
+        load_objects = app_config.dataset.load_objects if load_objects is None else bool(load_objects)
+        include_media_text = app_config.dataset.include_media_text if include_media_text is None else bool(include_media_text)
+        verify_keyframes = app_config.dataset.verify_keyframes if verify_keyframes is None else bool(verify_keyframes)
+        index_kind = index_kind or app_config.dataset.index_kind
         start = time.perf_counter()
-        cache_dir = Path(cache_dir)
         entry_dir = cache_dir / "entry"
         stats_path = cache_dir / "stats.json"
         if not rebuild and (entry_dir / "entry.pkl").exists():
@@ -142,13 +162,23 @@ class AICCompetitionEngine:
                     stats = None
             result = AICLoadResult(entry, stats, time.perf_counter() - start, True)
             return cls(
-                entry, text_encoder=text_encoder, production_mode=production_mode,
+                entry,
+                text_encoder=text_encoder,
+                production_mode=production_mode,
                 allow_hashing_fallback=allow_hashing_fallback,
-                encoder_model_name=encoder_model_name, device=device,
+                encoder_model_name=encoder_model_name,
+                device=device,
                 encoder_batch_size=encoder_batch_size,
+                app_config=app_config,
             ), result
 
-        loader = AICDatasetLoader(data_root, load_objects=load_objects, include_media_text=include_media_text, verify_keyframes=verify_keyframes, index_kind=index_kind)
+        loader = AICDatasetLoader(
+            data_root,
+            load_objects=load_objects,
+            include_media_text=include_media_text,
+            verify_keyframes=verify_keyframes,
+            index_kind=index_kind,
+        )
         entry, stats = loader.build_entry(
             limit_videos=limit_videos,
             limit_frames_per_video=limit_frames_per_video,
@@ -158,11 +188,15 @@ class AICCompetitionEngine:
         stats_path.write_text(json.dumps(stats.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
         result = AICLoadResult(entry, stats, time.perf_counter() - start, False)
         return cls(
-                entry, text_encoder=text_encoder, production_mode=production_mode,
-                allow_hashing_fallback=allow_hashing_fallback,
-                encoder_model_name=encoder_model_name, device=device,
-                encoder_batch_size=encoder_batch_size,
-            ), result
+            entry,
+            text_encoder=text_encoder,
+            production_mode=production_mode,
+            allow_hashing_fallback=allow_hashing_fallback,
+            encoder_model_name=encoder_model_name,
+            device=device,
+            encoder_batch_size=encoder_batch_size,
+            app_config=app_config,
+        ), result
 
     def encode_query(self, query: str) -> np.ndarray:
         variants = encode_many(
@@ -265,8 +299,8 @@ class AICCompetitionEngine:
             candidate.evidence = item.evidence
             out.append(candidate)
         return out
-    def search_kis(self, query: str, *, top_k: int = MAX_PREDICTIONS) -> list[AICPrediction]:
-        requested = max(1, min(MAX_PREDICTIONS, int(top_k)))
+    def search_kis(self, query: str, *, top_k: Optional[int] = None) -> list[AICPrediction]:
+        requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.ranking_config.final_top_k)))
         pool = self.search_candidates(query, top_k=min(self.fusion_depth, max(requested * 3, 100)))
 
         def nearby(anchor: Candidate, offsets: Sequence[int]) -> list[Candidate]:
@@ -299,7 +333,7 @@ class AICCompetitionEngine:
             frame_id=lambda c: int(official_frame_id(self.entry, c.keyframe_id)),
             score=lambda c: c.score,
             neighbors=nearby,
-            config=RankingConfig(top_k=requested),
+            config=replace(self.ranking_config, final_top_k=requested, top_k=None),
         )
         return [self._from_candidate(c) for c in ranked]
 
@@ -308,18 +342,23 @@ class AICCompetitionEngine:
         event_text: str,
         question: str,
         *,
-        top_k: int = MAX_PREDICTIONS,
+        top_k: Optional[int] = None,
         window_s: float = 8.0,
         answerer: Optional[VqaAnswerer] = None,
         expected_answer_type: Optional[str] = None,
-        retrieval_query_mode: str = "event_only",
-        evidence_frame_count: int = 8,
-        answer_confidence_threshold: float = 0.35,
-        abstain_enabled: bool = True,
+        retrieval_query_mode: Optional[str] = None,
+        evidence_frame_count: Optional[int] = None,
+        answer_confidence_threshold: Optional[float] = None,
+        abstain_enabled: Optional[bool] = None,
     ) -> tuple[list[AICPrediction], dict]:
+        retrieval_query_mode = retrieval_query_mode or self.qa_config.retrieval_query_mode
         qa_input = QAInput(event_text, question, expected_answer_type)
         ground_query = build_retrieval_query(qa_input, retrieval_query_mode)
-        candidates = self.search_candidates(ground_query, top_k=top_k)
+        requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.qa_config.max_answers)))
+        evidence_frame_count = int(evidence_frame_count if evidence_frame_count is not None else self.qa_config.evidence_frame_count)
+        answer_confidence_threshold = float(answer_confidence_threshold if answer_confidence_threshold is not None else self.qa_config.answer_confidence_threshold)
+        abstain_enabled = self.qa_config.abstain_enabled if abstain_enabled is None else bool(abstain_enabled)
+        candidates = self.search_candidates(ground_query, top_k=requested)
         if not candidates:
             return [], {
                 "answer": "unknown", "answer_normalized": "unknown", "frame_ids": [],
@@ -383,13 +422,15 @@ class AICCompetitionEngine:
         self,
         events: Sequence[str],
         *,
-        per_event_k: int = 40,
-        max_results: int = MAX_PREDICTIONS,
-        refine_window_s: float = 6.0,
+        per_event_k: Optional[int] = None,
+        max_results: Optional[int] = None,
+        refine_window_s: Optional[float] = None,
     ) -> tuple[list[AICPrediction], list[TemporalMatch]]:
         clean = [event.strip() for event in events if event and event.strip()]
         if len(clean) < 2:
             raise ValueError("TRAKE requires at least two ordered events.")
+        per_event_k = int(per_event_k if per_event_k is not None else self.trake_config.per_event_top_k)
+        max_results = max(1, min(MAX_PREDICTIONS, int(max_results if max_results is not None else self.trake_config.final_top_k)))
         by_event: dict[int, list[EventCandidate]] = {}
         for event_index, event in enumerate(clean):
             by_event[event_index] = [
@@ -406,7 +447,7 @@ class AICCompetitionEngine:
         aligned = joint_trake_alignment(
             clean,
             by_event,
-            AlignmentConfig(),
+            self.trake_config,
             max_results=max_results,
         )
         matches: list[TemporalMatch] = []

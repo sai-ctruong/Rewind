@@ -9,6 +9,7 @@ from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- configure model cache early
 
+from aic2026.config import AppConfig, config_hash, load_app_config
 from aic2026.dataset import AICDataPaths, official_frame_id
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
 from aic2026.metrics import write_submission
@@ -21,16 +22,41 @@ AIC_CACHE_DIR = _ROOT / "artifacts" / "aic2026_index"
 SUBMISSION_DIR = _ROOT / "artifacts" / "submissions"
 
 
-def create_app() -> Flask:
+def create_app(config_path: str | Path | None = None, app_config: AppConfig | None = None) -> Flask:
+    if app_config is None:
+        if config_path is None:
+            config_path = _ROOT / "configs" / "settings.yaml"
+            app_config = load_app_config(config_path, {"dataset": {"root": str(DATA_ROOT), "cache_dir": str(AIC_CACHE_DIR)}})
+        else:
+            app_config = load_app_config(config_path)
+    config_path_text = str(config_path or "<in-memory>")
     app = Flask(__name__)
 
     state: dict = {
         "engine": None,
         "load": None,
+        "config": app_config,
+        "config_path": config_path_text,
+        "config_hash": config_hash(app_config),
         "progress": {"active": False, "count": 0, "fps": 0.0, "elapsed": 0.0, "label": ""},
         "evaluation": {"active": False, "summary": None, "run_dir": None, "error": None},
     }
 
+    def _config_summary() -> dict:
+        cfg: AppConfig = state["config"]
+        return {
+            "path": state["config_path"],
+            "hash": state["config_hash"],
+            "production_mode": cfg.runtime.production_mode,
+            "device": cfg.runtime.device,
+            "encoder_type": cfg.encoder.type,
+            "feature_dim": cfg.encoder.feature_dim,
+            "fusion_method": cfg.fusion.method,
+            "final_top_k": cfg.ranking.final_top_k,
+            "refinement_enabled": cfg.refinement.enabled,
+            "trake_alignment_method": cfg.trake.alignment_method,
+            "qa_top_video_hypotheses": cfg.qa.top_video_hypotheses,
+        }
     def _engine_or_error():
         engine = state.get("engine")
         if engine is None:
@@ -49,7 +75,7 @@ def create_app() -> Flask:
             "score_breakdown": pred.score_breakdown,
             "evidence": pred.evidence,
             "image": f"/api/video/frame/{pred.keyframe_id}" if pred.keyframe_id else None,
-            "video_url": f"/api/video/file/{pred.video_id}" if (DATA_ROOT / "video" / f"{pred.video_id}.mp4").exists() else None,
+            "video_url": f"/api/video/file/{pred.video_id}" if (Path(state["config"].dataset.root) / "video" / f"{pred.video_id}.mp4").exists() else None,
         }
 
     def _frame_json(engine: AICCompetitionEngine, keyframe_id: str, extra: dict | None = None):
@@ -78,7 +104,7 @@ def create_app() -> Flask:
     @app.get("/api/health")
     def health():
         engine = state.get("engine")
-        paths = AICDataPaths.from_root(DATA_ROOT)
+        paths = AICDataPaths.from_root(state["config"].dataset.root)
         feature_count = len(list(paths.features_dir.glob("*.npy"))) if paths.features_dir.exists() else 0
         loaded = engine is not None
         encoder = None if engine is None else engine.encoder_status()
@@ -89,12 +115,13 @@ def create_app() -> Flask:
             loaded=loaded,
             videos=0 if engine is None else len({r.video_id for r in engine.entry.raws.values()}),
             dataset_size=0 if engine is None else engine.entry.num_indexed,
-            data_root=str(DATA_ROOT),
+            data_root=str(state["config"].dataset.root),
             feature_videos=feature_count,
-            cache_dir=str(AIC_CACHE_DIR),
+            cache_dir=str(state["config"].dataset.cache_dir),
             mp4_available=mp4_count,
             encoder=encoder,
             warning=None if encoder is None else encoder.get("warning"),
+            config=_config_summary(),
         )
 
     @app.get("/api/video/progress")
@@ -103,10 +130,10 @@ def create_app() -> Flask:
 
     @app.get("/api/video/list")
     def video_list():
-        paths = AICDataPaths.from_root(DATA_ROOT)
+        paths = AICDataPaths.from_root(state["config"].dataset.root)
         videos = sorted(p.stem for p in paths.features_dir.glob("*.npy")) if paths.features_dir.exists() else []
         indexed = ["__aic2026__"] if state.get("engine") is not None else []
-        return jsonify(videos=videos, indexed=indexed, folder=str(DATA_ROOT))
+        return jsonify(videos=videos, indexed=indexed, folder=str(state["config"].dataset.root))
 
     @app.post("/api/video/index")
     def video_index():
@@ -114,15 +141,16 @@ def create_app() -> Flask:
         rebuild = bool(data.get("rebuild", False))
         try:
             engine, load = AICCompetitionEngine.from_data_root(
-                DATA_ROOT,
-                cache_dir=AIC_CACHE_DIR,
+                state["config"].dataset.root,
+                cache_dir=state["config"].dataset.cache_dir,
                 rebuild=rebuild,
                 limit_videos=data.get("limit_videos"),
                 limit_frames_per_video=data.get("limit_frames_per_video"),
-                load_objects=bool(data.get("objects", False)),
-                production_mode=bool(data.get("production_mode", False)),
-                allow_hashing_fallback=bool(data.get("allow_hashing_fallback", True)),
+                load_objects=bool(data["objects"]) if "objects" in data else None,
+                production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
+                allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
                 device=data.get("device"),
+                app_config=state["config"],
             )
         except Exception as exc:
             return jsonify(error=str(exc)), 400
@@ -148,12 +176,13 @@ def create_app() -> Flask:
         try:
             engine, load = AICCompetitionEngine.from_data_root(
                 folder,
-                cache_dir=AIC_CACHE_DIR,
+                cache_dir=state["config"].dataset.cache_dir,
                 rebuild=bool(data.get("rebuild", False)),
-                load_objects=bool(data.get("objects", False)),
-                production_mode=bool(data.get("production_mode", False)),
-                allow_hashing_fallback=bool(data.get("allow_hashing_fallback", True)),
+                load_objects=bool(data["objects"]) if "objects" in data else None,
+                production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
+                allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
                 device=data.get("device"),
+                app_config=state["config"],
             )
         except Exception as exc:
             return jsonify(error=str(exc)), 400
@@ -327,7 +356,7 @@ def create_app() -> Flask:
 
     @app.get("/api/video/file/<video_id>")
     def video_file(video_id: str):
-        path = DATA_ROOT / "video" / f"{video_id}.mp4"
+        path = Path(state["config"].dataset.root) / "video" / f"{video_id}.mp4"
         if not path.is_file():
             return jsonify(error="Original MP4 is unavailable."), 404
         return send_file(path, mimetype="video/mp4", conditional=True)

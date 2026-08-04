@@ -12,10 +12,15 @@ from retrieval.video_engine import VideoIndexEntry
 
 @dataclass(frozen=True)
 class RefinementConfig:
+    enabled: bool = True
+    uncertainty_only: bool = True
+    top_hypotheses: int = 10
     window_before_s: float = 4.0
     window_after_s: float = 4.0
     fine_fps: float = 4.0
     max_frames: int = 32
+    batch_size: int = 16
+    margin_threshold: float = 0.03
     cache_size_mb: int = 256
 
 
@@ -31,8 +36,8 @@ class RefinementResult:
 
 
 class LocalFrameRefiner:
-    def __init__(self, config: RefinementConfig = RefinementConfig()):
-        self.config = config
+    def __init__(self, config: RefinementConfig | None = None):
+        self.config = config or RefinementConfig()
         self._cache: OrderedDict[tuple, list[tuple[int, float, np.ndarray]]] = OrderedDict()
         self._cache_bytes = 0
 

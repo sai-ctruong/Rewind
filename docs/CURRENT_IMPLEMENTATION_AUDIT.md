@@ -116,4 +116,14 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 1. **Submission-invalid logic can pass silently**: dataset mismatch truncation, missing TRAKE events, copied Q&A answers, and no export validator can all produce a syntactically plausible but semantically wrong CSV.
 2. **Runtime/config/cache mismatch can invalidate benchmark runs**: YAML is not the source of truth, cache has no manifest, and UI custom DATA_ROOT does not propagate to all endpoints.
 3. **Documentation can overstate current capability**: local refinement and multi-frame visual Q&A exist as modules/interfaces, but are not fully integrated into engine runtime without fallback/mock limitations.
+## Phase 1 Status Update
 
+- Runtime config: fixed in Phase 1 commit `feat: wire validated runtime configuration`.
+- `aic2026/config.py` now provides validated `AppConfig`, deterministic `config_hash`, resolved snapshots and CLI/UI/engine wiring.
+- `configs/settings.yaml` now keeps legacy top-level sections for older tests and adds `aic2026:` as the runtime source for the competition pipeline.
+- Cache manifest: pending Phase 2.
+- Dataset strict validation: pending Phase 3.
+- DATA_ROOT dynamic propagation: pending Phase 4.
+- Local refinement integration: pending Phase 5.
+- Q&A per-video hypothesis: pending Phase 6.
+- TRAKE complete/k-best output: pending Phase 7-8.

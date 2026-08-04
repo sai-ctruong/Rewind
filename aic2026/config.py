@@ -1,0 +1,309 @@
+"""Validated runtime configuration for the AIC 2026 pipeline."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+from dataclasses import dataclass, field, fields, is_dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+from .fusion import FusionConfig
+from .local_refinement import RefinementConfig
+from .ranking import RankingConfig
+from .trake import AlignmentConfig as TrakeConfig
+
+
+class ConfigError(ValueError):
+    """Raised when runtime configuration is invalid."""
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    production_mode: bool = False
+    seed: int = 42
+    device: str = "auto"
+    time_budget_seconds: float = 20.0
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    root: str = "data"
+    cache_dir: str = "artifacts/aic2026_index"
+    load_objects: bool = False
+    include_media_text: bool = False
+    verify_keyframes: bool = False
+    index_kind: str = "flat"
+
+
+@dataclass(frozen=True)
+class EncoderConfig:
+    type: str = "auto_clip"
+    model_name: str = "openai/clip-vit-base-patch32"
+    feature_dim: int = 512
+    normalize: bool = True
+    batch_size: int = 32
+    allow_hashing_fallback: bool = True
+
+
+@dataclass(frozen=True)
+class RetrievalChannelConfig:
+    clip_enabled: bool = True
+    clip_top_k: int = 1200
+    bm25_enabled: bool = True
+    bm25_top_k: int = 800
+    objects_enabled: bool = True
+    objects_top_k: int = 800
+    object_confidence_threshold: float = 0.25
+    metadata_enabled: bool = True
+    metadata_top_k: int = 300
+
+
+@dataclass(frozen=True)
+class QAConfig:
+    top_video_hypotheses: int = 8
+    frame_hypotheses_per_video: int = 3
+    evidence_frame_count: int = 8
+    answerer_batch_size: int = 1
+    max_answers: int = 100
+    retrieval_query_mode: str = "event_only"
+    answer_confidence_threshold: float = 0.35
+    abstain_enabled: bool = True
+    default_answer_type: str = "auto"
+
+
+@dataclass(frozen=True)
+class SubmissionConfig:
+    max_predictions: int = 100
+    max_answers: int = 100
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    ks: tuple[int, ...] = (1, 5, 20, 50, 100)
+    output_dir: str = "evaluation/benchmarks/aic2026"
+    save_predictions: bool = True
+    save_errors: bool = True
+
+
+@dataclass(frozen=True)
+class UIConfig:
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    encoder: EncoderConfig = field(default_factory=EncoderConfig)
+    retrieval_channels: RetrievalChannelConfig = field(default_factory=RetrievalChannelConfig)
+    fusion: FusionConfig = field(default_factory=FusionConfig)
+    ranking: RankingConfig = field(default_factory=RankingConfig)
+    refinement: RefinementConfig = field(default_factory=RefinementConfig)
+    trake: TrakeConfig = field(default_factory=TrakeConfig)
+    qa: QAConfig = field(default_factory=QAConfig)
+    submission: SubmissionConfig = field(default_factory=SubmissionConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
+
+
+def _deep_merge(base: dict[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(base)
+    for key, value in overlay.items():
+        if isinstance(value, Mapping) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _construct(cls, raw: Mapping[str, Any] | None):
+    raw = dict(raw or {})
+    names = {field.name for field in fields(cls)}
+    return cls(**{k: v for k, v in raw.items() if k in names})
+
+
+def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
+    source = copy.deepcopy(dict(data))
+    raw = source.get("aic2026", source)
+    cfg = AppConfig(
+        runtime=_construct(RuntimeConfig, raw.get("runtime")),
+        dataset=_construct(DatasetConfig, raw.get("dataset")),
+        encoder=_construct(EncoderConfig, raw.get("encoder")),
+        retrieval_channels=_construct(RetrievalChannelConfig, raw.get("retrieval_channels")),
+        fusion=_construct(FusionConfig, raw.get("fusion")),
+        ranking=_construct(RankingConfig, raw.get("ranking")),
+        refinement=_construct(RefinementConfig, raw.get("refinement")),
+        trake=_construct(TrakeConfig, raw.get("trake")),
+        qa=_construct(QAConfig, raw.get("qa")),
+        submission=_construct(SubmissionConfig, raw.get("submission")),
+        evaluation=_construct(EvaluationConfig, raw.get("evaluation")),
+        ui=_construct(UIConfig, raw.get("ui")),
+    )
+    validate_app_config(cfg)
+    return cfg
+
+
+def load_app_config(
+    path: str | Path = "configs/settings.yaml",
+    overrides: Mapping[str, Any] | None = None,
+) -> AppConfig:
+    path = Path(path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if data is None:
+        data = {}
+    if not isinstance(data, Mapping):
+        raise ConfigError("config root must be a mapping")
+    merged = copy.deepcopy(dict(data))
+    if overrides:
+        overlay = {"aic2026": overrides} if "aic2026" not in overrides else overrides
+        merged = _deep_merge(merged, overlay)
+    return app_config_from_dict(merged)
+
+
+def config_to_dict(config: AppConfig) -> dict[str, Any]:
+    def convert(value):
+        if is_dataclass(value):
+            out = {}
+            for item in fields(value):
+                child = getattr(value, item.name)
+                if item.name == "top_k" and child is None:
+                    continue
+                out[item.name] = convert(child)
+            return out
+        if isinstance(value, tuple):
+            return [convert(v) for v in value]
+        if isinstance(value, list):
+            return [convert(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): convert(v) for k, v in value.items() if not (str(k) == "top_k" and v is None)}
+        return value
+
+    return convert(config)
+
+
+def config_hash(config: AppConfig) -> str:
+    blob = json.dumps(config_to_dict(config), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def validate_app_config(config: AppConfig) -> None:
+    _validate_runtime(config.runtime)
+    _validate_encoder(config.runtime, config.encoder)
+    _validate_fusion(config.fusion)
+    _validate_ranking(config.ranking)
+    _validate_refinement(config.refinement)
+    _validate_trake(config.trake)
+    _validate_qa(config.qa)
+    _validate_submission(config.submission)
+    _validate_evaluation(config.evaluation)
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ConfigError(message)
+
+
+def _validate_runtime(cfg: RuntimeConfig) -> None:
+    _require(int(cfg.seed) >= 0, "runtime.seed must be >= 0")
+    _require(
+        cfg.device in {"auto", "cpu", "cuda"} or bool(re.fullmatch(r"cuda:\d+", str(cfg.device))),
+        'runtime.device must be "auto", "cpu", "cuda", or cuda:N',
+    )
+
+
+def _validate_encoder(runtime: RuntimeConfig, cfg: EncoderConfig) -> None:
+    _require(int(cfg.feature_dim) > 0, "encoder.feature_dim must be > 0")
+    _require(int(cfg.batch_size) > 0, "encoder.batch_size must be > 0")
+    _require(bool(str(cfg.model_name).strip()), "encoder.model_name must be non-empty")
+    if runtime.production_mode:
+        _require(cfg.type not in {"hashing", "hashing_fallback", "hashing-only"}, "encoder.type cannot be hashing-only in production mode")
+
+
+def _validate_fusion(cfg: FusionConfig) -> None:
+    weights = [cfg.clip_weight, cfg.object_weight, cfg.metadata_weight, cfg.sparse_weight]
+    for name, value in zip(("clip_weight", "object_weight", "metadata_weight", "sparse_weight"), weights):
+        _require(float(value) >= 0, f"fusion.{name} must be >= 0")
+    _require(any(float(v) > 0 for v in weights), "fusion weights must not all be zero")
+    _require(str(cfg.method).lower() in {"adaptive", "weighted", "rrf", "rrf_full"}, "fusion.method must be one of adaptive, weighted, rrf, rrf_full")
+    _require(int(cfg.rrf_k) > 0, "fusion.rrf_k must be > 0")
+
+
+def _validate_ranking(cfg: RankingConfig) -> None:
+    final_top_k = int(cfg.final_top_k)
+    _require(1 <= final_top_k <= 100, "ranking.final_top_k must be in [1, 100]")
+    _require(int(cfg.precision_head_size) >= 0, "ranking.precision_head_size must be >= 0")
+    _require(int(cfg.recall_tail_size) >= 0, "ranking.recall_tail_size must be >= 0")
+    _require(int(cfg.min_frame_gap) >= 0, "ranking.min_frame_gap must be >= 0")
+    _require(int(cfg.max_frames_per_video) > 0, "ranking.max_frames_per_video must be > 0")
+    _require(0 <= float(cfg.diversity_lambda) <= 1, "ranking.diversity_lambda must be in [0, 1]")
+
+
+def _validate_refinement(cfg: RefinementConfig) -> None:
+    _require(float(cfg.window_before_s) >= 0, "refinement.window_before_s must be >= 0")
+    _require(float(cfg.window_after_s) >= 0, "refinement.window_after_s must be >= 0")
+    _require(float(cfg.fine_fps) > 0, "refinement.fine_fps must be > 0")
+    _require(int(cfg.max_frames) > 0, "refinement.max_frames must be > 0")
+    _require(int(cfg.batch_size) > 0, "refinement.batch_size must be > 0")
+    _require(int(cfg.cache_size_mb) >= 0, "refinement.cache_size_mb must be >= 0")
+    _require(float(cfg.margin_threshold) >= 0, "refinement.margin_threshold must be >= 0")
+
+
+def _validate_trake(cfg: TrakeConfig) -> None:
+    _require(str(cfg.alignment_method) == "beam_dp", "trake.alignment_method must be beam_dp for the current implementation")
+    _require(int(cfg.per_event_top_k) > 0, "trake.per_event_top_k must be > 0")
+    _require(int(cfg.top_video_hypotheses) > 0, "trake.top_video_hypotheses must be > 0")
+    _require(int(cfg.beam_width) > 0, "trake.beam_width must be > 0")
+    _require(float(cfg.min_gap_s) >= 0, "trake.min_gap_s must be >= 0")
+    if cfg.max_gap_s is not None:
+        _require(float(cfg.max_gap_s) >= float(cfg.min_gap_s), "trake.max_gap_s must be >= trake.min_gap_s")
+    _require(float(cfg.missing_event_penalty) >= 0, "trake.missing_event_penalty must be >= 0")
+    _require(float(cfg.transition_penalty) >= 0, "trake.transition_penalty must be >= 0")
+    _require(1 <= int(cfg.final_top_k) <= 100, "trake.final_top_k must be in [1, 100]")
+
+
+def _validate_qa(cfg: QAConfig) -> None:
+    _require(int(cfg.top_video_hypotheses) > 0, "qa.top_video_hypotheses must be > 0")
+    _require(int(cfg.frame_hypotheses_per_video) > 0, "qa.frame_hypotheses_per_video must be > 0")
+    _require(int(cfg.evidence_frame_count) > 0, "qa.evidence_frame_count must be > 0")
+    _require(1 <= int(cfg.max_answers) <= 100, "qa.max_answers must be in [1, 100]")
+    _require(str(cfg.default_answer_type) in {"auto", "number", "yes/no", "boolean", "color", "text"}, "qa.default_answer_type must be a supported answer type")
+
+
+def _validate_submission(cfg: SubmissionConfig) -> None:
+    _require(1 <= int(cfg.max_predictions) <= 100, "submission.max_predictions must be in [1, 100]")
+    _require(1 <= int(cfg.max_answers) <= 100, "submission.max_answers must be in [1, 100]")
+
+
+def _validate_evaluation(cfg: EvaluationConfig) -> None:
+    ks = list(cfg.ks)
+    _require(bool(ks), "evaluation.ks must be non-empty")
+    _require(ks == sorted(ks), "evaluation.ks must be sorted ascending")
+    for k in ks:
+        _require(1 <= int(k) <= 100, "evaluation.ks values must be in [1, 100]")
+
+
+__all__ = [
+    "AppConfig",
+    "ConfigError",
+    "DatasetConfig",
+    "EncoderConfig",
+    "EvaluationConfig",
+    "FusionConfig",
+    "QAConfig",
+    "RankingConfig",
+    "RefinementConfig",
+    "RetrievalChannelConfig",
+    "RuntimeConfig",
+    "SubmissionConfig",
+    "TrakeConfig",
+    "UIConfig",
+    "app_config_from_dict",
+    "config_hash",
+    "config_to_dict",
+    "load_app_config",
+    "validate_app_config",
+]

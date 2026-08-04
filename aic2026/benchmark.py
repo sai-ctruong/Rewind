@@ -23,7 +23,7 @@ class QueryLog:
     meta: dict = field(default_factory=dict)
 
 
-def environment_snapshot(*, encoder: dict | None = None, dataset: dict | None = None, seed: int = 42, query_count: int = 0) -> dict:
+def environment_snapshot(*, encoder: dict | None = None, dataset: dict | None = None, seed: int = 42, query_count: int = 0, config_hash: str | None = None) -> dict:
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
@@ -54,6 +54,7 @@ def environment_snapshot(*, encoder: dict | None = None, dataset: dict | None = 
         "dataset": dataset or {},
         "number_of_queries": query_count,
         "seed": seed,
+        "config_hash": config_hash,
     }
 
 
@@ -78,6 +79,7 @@ class BenchmarkLogger:
         predictions: Sequence[dict] = (),
         errors: Sequence[dict] = (),
         environment: dict | None = None,
+        config_hash: str | None = None,
     ) -> Path:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         run_dir = self.out_dir / f"{stamp}-{name}"
@@ -87,10 +89,12 @@ class BenchmarkLogger:
             suffix += 1
         run_dir.mkdir(parents=True, exist_ok=False)
         (run_dir / "config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        if config_hash is not None:
+            (run_dir / "config_hash.txt").write_text(str(config_hash), encoding="utf-8")
         self._jsonl(run_dir / "queries.jsonl", [asdict(log) for log in logs])
         self._jsonl(run_dir / "predictions.jsonl", list(predictions))
         self._jsonl(run_dir / "errors.jsonl", list(errors))
-        env = environment or environment_snapshot(query_count=len(logs))
+        env = environment or environment_snapshot(query_count=len(logs), config_hash=config_hash)
         (run_dir / "environment.json").write_text(json.dumps(env, ensure_ascii=False, indent=2), encoding="utf-8")
         (run_dir / "summary.json").write_text(json.dumps(summary or {}, ensure_ascii=False, indent=2), encoding="utf-8")
         return run_dir

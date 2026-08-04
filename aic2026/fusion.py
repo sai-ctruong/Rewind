@@ -128,7 +128,8 @@ def _minmax(values: Sequence[float]) -> list[float]:
     return [(value - lo) / (hi - lo) for value in values]
 
 
-def fuse_candidates(query: str, candidates: Sequence[RankedCandidate], config: FusionConfig = FusionConfig()) -> FusionResult:
+def fuse_candidates(query: str, candidates: Sequence[RankedCandidate], config: FusionConfig | None = None) -> FusionResult:
+    config = config or FusionConfig()
     items = list(candidates)
     weights = adaptive_weights(query, config)
     signals = {

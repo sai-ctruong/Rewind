@@ -30,14 +30,19 @@ class VideoEventCandidates:
 
 @dataclass(frozen=True)
 class AlignmentConfig:
+    alignment_method: str = "beam_dp"
+    per_event_top_k: int = 40
+    top_video_hypotheses: int = 20
+    alignments_per_video: int = 1
+    beam_width: int = 8
     min_gap_s: float = 0.001
     max_gap_s: float | None = None
     coverage_bonus: float = 0.20
     missing_event_penalty: float = 0.35
     transition_penalty: float = 0.02
     gap_penalty: float = 0.001
-    beam_width: int = 8
-    top_video_hypotheses: int = 20
+    sequence_overlap_threshold: float = 0.8
+    final_top_k: int = 100
 
 
 @dataclass
@@ -116,7 +121,8 @@ def _transition(previous: EventCandidate, current: EventCandidate, config: Align
     return config.transition_penalty + config.gap_penalty * gap
 
 
-def align_video_dp(events: Sequence[TrakeEvent], video: VideoEventCandidates, config: AlignmentConfig = AlignmentConfig()) -> TrakePrediction:
+def align_video_dp(events: Sequence[TrakeEvent], video: VideoEventCandidates, config: AlignmentConfig | None = None) -> TrakePrediction:
+    config = config or AlignmentConfig()
     # Each event keeps a bounded list of best paths ending at each candidate (or a missing-event state).
     states: list[AlignmentState] = [AlignmentState(0.0, -1, None, None, 0)]
     for event in events:
@@ -165,9 +171,10 @@ def align_video_dp(events: Sequence[TrakeEvent], video: VideoEventCandidates, co
 def joint_trake_alignment(
     events: Sequence[str],
     candidates_by_event: Mapping[int, Sequence[EventCandidate]],
-    config: AlignmentConfig = AlignmentConfig(),
+    config: AlignmentConfig | None = None,
     max_results: int = 100,
 ) -> list[TrakePrediction]:
+    config = config or AlignmentConfig()
     parsed = tuple(TrakeEvent(i, text.strip()) for i, text in enumerate(events))
     videos = group_candidates(candidates_by_event)
     hypotheses = sorted(

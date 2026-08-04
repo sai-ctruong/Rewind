@@ -276,3 +276,109 @@ evaluation:
   output_dir: "evaluation/benchmarks/aic2026"
   save_predictions: true
   save_errors: true
+# -----------------------------------------------------------------------------
+# AIC 2026 runtime config used by aic2026.config.AppConfig.
+# Legacy top-level sections above are retained for older modules/tests.
+# -----------------------------------------------------------------------------
+aic2026:
+  runtime:
+    production_mode: false
+    seed: 42
+    device: auto
+    time_budget_seconds: 20
+
+  dataset:
+    root: data
+    cache_dir: artifacts/aic2026_index
+    load_objects: false
+    include_media_text: false
+    verify_keyframes: false
+    index_kind: flat
+
+  encoder:
+    type: auto_clip
+    model_name: openai/clip-vit-base-patch32
+    feature_dim: 512
+    normalize: true
+    batch_size: 32
+    allow_hashing_fallback: true
+
+  retrieval_channels:
+    clip_enabled: true
+    clip_top_k: 1200
+    bm25_enabled: true
+    bm25_top_k: 800
+    objects_enabled: true
+    objects_top_k: 800
+    object_confidence_threshold: 0.25
+    metadata_enabled: true
+    metadata_top_k: 300
+
+  fusion:
+    method: adaptive
+    clip_weight: 1.0
+    object_weight: 0.20
+    metadata_weight: 0.10
+    sparse_weight: 0.25
+    rrf_k: 60
+    adaptive: true
+
+  ranking:
+    final_top_k: 100
+    max_frames_per_video: 12
+    min_frame_gap: 30
+    neighbor_offsets: [-2, -1, 1, 2]
+    diversity_lambda: 0.25
+    precision_head_size: 5
+    recall_tail_size: 50
+
+  refinement:
+    enabled: true
+    uncertainty_only: true
+    top_hypotheses: 10
+    window_before_s: 4.0
+    window_after_s: 4.0
+    fine_fps: 4.0
+    max_frames: 32
+    batch_size: 16
+    margin_threshold: 0.03
+    cache_size_mb: 256
+
+  trake:
+    alignment_method: beam_dp
+    per_event_top_k: 40
+    top_video_hypotheses: 20
+    alignments_per_video: 1
+    beam_width: 8
+    min_gap_s: 0.001
+    max_gap_s: null
+    coverage_bonus: 0.20
+    missing_event_penalty: 0.35
+    transition_penalty: 0.02
+    gap_penalty: 0.001
+    sequence_overlap_threshold: 0.8
+    final_top_k: 100
+
+  qa:
+    top_video_hypotheses: 8
+    frame_hypotheses_per_video: 3
+    evidence_frame_count: 8
+    answerer_batch_size: 1
+    max_answers: 100
+    retrieval_query_mode: event_only
+    answer_confidence_threshold: 0.35
+    abstain_enabled: true
+    default_answer_type: auto
+
+  submission:
+    max_predictions: 100
+    max_answers: 100
+
+  evaluation:
+    ks: [1, 5, 20, 50, 100]
+    output_dir: evaluation/benchmarks/aic2026
+    save_predictions: true
+    save_errors: true
+
+  ui:
+    enabled: true
