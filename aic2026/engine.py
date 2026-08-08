@@ -32,6 +32,7 @@ from .cache_manifest import (
 )
 from .config import AppConfig, config_hash, config_to_dict
 from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
+from .dataset_validation import write_dataset_report
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
 from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
 from .ranking import RankingConfig, video_aware_top100
@@ -200,6 +201,7 @@ class AICCompetitionEngine:
         entry_path = entry_dir / "entry.pkl"
         manifest_path = cache_dir / CACHE_MANIFEST_FILENAME
         stats_path = cache_dir / "dataset_stats.json"
+        dataset_report_path = cache_dir / "dataset_report.json"
         expected = cache_build_options_from_config(
             app_config,
             data_root=data_root,
@@ -225,6 +227,11 @@ class AICCompetitionEngine:
                         missing_objects=int(raw.get("missing_objects", 0)),
                         missing_videos=int(raw.get("missing_videos", 0)),
                         feature_dim=int(raw.get("feature_dim", 0)),
+                        feature_dtype=str(raw.get("feature_dtype", "unknown")),
+                        dataset_validated=bool(raw.get("dataset_validated", False)),
+                        dataset_report_path=raw.get("dataset_report_path"),
+                        invalid_video_count=int(raw.get("invalid_video_count", 0)),
+                        record_schema_version=int(raw.get("record_schema_version", 1)),
                     )
                 except Exception:
                     continue
@@ -346,15 +353,13 @@ class AICCompetitionEngine:
                 )
                 return make_engine(entry), result
 
-        # A rebuild invalidates the old usability marker before cache files are replaced.
-        if manifest_path.exists():
-            manifest_path.unlink()
         loader = AICDatasetLoader(
             data_root,
             load_objects=load_objects,
             include_media_text=include_media_text,
             verify_keyframes=verify_keyframes,
             index_kind=index_kind,
+            app_config=app_config,
         )
         entry, stats = loader.build_entry(
             limit_videos=limit_videos,
@@ -365,7 +370,13 @@ class AICCompetitionEngine:
                 f"Built feature_dim {stats.feature_dim} does not match configured "
                 f"encoder.feature_dim {app_config.encoder.feature_dim}."
             )
+        if loader.last_report is None or not loader.last_report.valid_for_index_build:
+            raise CacheManifestError("Dataset build completed without a valid inspection report.")
         cache_dir.mkdir(parents=True, exist_ok=True)
+        write_dataset_report(loader.last_report, dataset_report_path)
+        stats = replace(stats, dataset_report_path=str(dataset_report_path))
+        if manifest_path.exists():
+            manifest_path.unlink()
         entry.save(entry_dir)
         elapsed = time.perf_counter() - start
         resolved_config_path = cache_dir / "resolved_config.json"
@@ -381,25 +392,26 @@ class AICCompetitionEngine:
             "video_count": stats.videos,
             "frame_count": stats.frames,
             "feature_dim": stats.feature_dim,
-            "feature_dtype": expected.feature_dtype,
+            "feature_dtype": stats.feature_dtype,
             "missing_keyframes": stats.missing_keyframes,
             "missing_objects": stats.missing_objects,
-            "missing_media_info": 0,
+            "missing_media_info": len(loader.last_report.missing_sources.get("media_info", ())),
             "missing_videos": stats.missing_videos,
+            "dataset_validated": stats.dataset_validated,
+            "dataset_report_path": stats.dataset_report_path,
+            "invalid_video_count": stats.invalid_video_count,
+            "record_schema_version": stats.record_schema_version,
             "build_seconds": elapsed,
         }
         stats_path.write_text(json.dumps(stats_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        inspected_video_ids = sorted(
-            path.stem for path in (Path(data_root) / "clip-features-32").glob("*.npy")
-        )
-        if limit_videos is not None:
-            inspected_video_ids = inspected_video_ids[:limit_videos]
+        inspected_video_ids = sorted({raw.video_id for raw in entry.raws.values()})
         files = {
             "entry": "entry/entry.pkl",
             "index": "entry/index/meta.pkl",
             "clip_index": "entry/index/clip.hnsw",
             "config_snapshot": "resolved_config.json",
             "dataset_stats": "dataset_stats.json",
+            "dataset_report": "dataset_report.json",
             "manifest": CACHE_MANIFEST_FILENAME,
         }
         files = {
@@ -414,7 +426,7 @@ class AICCompetitionEngine:
             video_count=len(inspected_video_ids),
             frame_count=stats.frames,
             feature_dim=stats.feature_dim,
-            feature_dtype=expected.feature_dtype,
+            feature_dtype=stats.feature_dtype,
             index_kind=index_kind,
             index_params=expected.index_params,
             record_schema_version=expected.record_schema_version,

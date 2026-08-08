@@ -82,6 +82,7 @@ class BenchmarkLogger:
         config_hash: str | None = None,
         cache_manifest: Any | None = None,
         cache_status: Mapping[str, Any] | None = None,
+        dataset_report: Any | None = None,
     ) -> Path:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         run_dir = self.out_dir / f"{stamp}-{name}"
@@ -113,9 +114,30 @@ class BenchmarkLogger:
             cache_meta.setdefault("cache_manifest_schema", manifest_dict.get("schema_version"))
             cache_meta.setdefault("data_signature", manifest_dict.get("data_signature"))
             cache_meta.setdefault("code_version", manifest_dict.get("code_version"))
+        dataset_report_dict = None
+        if dataset_report is not None:
+            if isinstance(dataset_report, (str, Path)):
+                report_path = Path(dataset_report)
+                if report_path.is_file():
+                    dataset_report_dict = json.loads(report_path.read_text(encoding="utf-8"))
+            elif callable(getattr(dataset_report, "to_dict", None)):
+                dataset_report_dict = dataset_report.to_dict()
+            else:
+                dataset_report_dict = dict(dataset_report)
+            if dataset_report_dict is not None:
+                (run_dir / "dataset_report_snapshot.json").write_text(
+                    json.dumps(dataset_report_dict, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
         env = dict(environment or environment_snapshot(query_count=len(logs), config_hash=config_hash))
         if cache_meta:
             env["cache"] = cache_meta
+        if dataset_report_dict is not None:
+            env["dataset_validation"] = {
+                "valid_for_index_build": dataset_report_dict.get("valid_for_index_build"),
+                "invalid_video_count": dataset_report_dict.get("invalid_video_count"),
+                "schema_version": dataset_report_dict.get("schema_version"),
+            }
         (run_dir / "environment.json").write_text(json.dumps(env, ensure_ascii=False, indent=2), encoding="utf-8")
         summary_data = dict(summary or {})
         for key in (
@@ -129,6 +151,9 @@ class BenchmarkLogger:
         ):
             if key in cache_meta:
                 summary_data.setdefault(key, cache_meta[key])
+        if dataset_report_dict is not None:
+            summary_data.setdefault("dataset_validated", dataset_report_dict.get("valid_for_index_build"))
+            summary_data.setdefault("invalid_video_count", dataset_report_dict.get("invalid_video_count"))
         (run_dir / "summary.json").write_text(
             json.dumps(summary_data, ensure_ascii=False, indent=2), encoding="utf-8"
         )

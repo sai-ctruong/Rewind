@@ -1,18 +1,10 @@
-"""Loader for the official AIC 2026 preliminary-round data layout.
-
-Expected DATA_ROOT layout:
-- clip-features-32/{video_id}.npy
-- map-keyframes/{video_id}.csv with n, pts_time, fps, frame_idx
-- keyframes/{video_id}/{n:03d}.jpg or compatible numbered jpg/png
-- objects/{video_id}/{n:03d}.json
-- media-info/{video_id}.json
-- video/{video_id}.mp4 (optional for display fallback)
-"""
+"""Strict loader for the official AIC 2026 preliminary-round data layout."""
 from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
@@ -20,8 +12,21 @@ import numpy as np
 
 from ingestion.build_index import IndexConfig, KeyframeIndex, l2_normalize, tokenize
 from ingestion.build_records import searchable_text
-from ingestion.schemas import KeyframeRecord, RawKeyframe
+from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION, KeyframeRecord, RawKeyframe
 from retrieval.video_engine import VideoIndexEntry
+
+from .config import AppConfig
+from .dataset_validation import (
+    DatasetAlignmentError,
+    DatasetInspectionReport,
+    DatasetLayoutError,
+    DatasetSourceError,
+    DatasetValidationError,
+    MediaMetadata,
+    first_alignment_error,
+    inspect_aic_dataset,
+    read_media_metadata,
+)
 
 
 @dataclass(frozen=True)
@@ -48,19 +53,15 @@ class AICDataPaths:
         )
 
     def validate(self) -> None:
-        missing = [
-            p for p in (
-                self.features_dir,
-                self.keyframes_dir,
-                self.map_dir,
-                self.objects_dir,
-                self.media_info_dir,
+        if not self.root.is_dir():
+            raise DatasetLayoutError(
+                f"AIC DATA_ROOT does not exist or is not a directory: {self.root}"
             )
-            if not p.exists()
-        ]
+        required = (self.features_dir, self.keyframes_dir, self.map_dir)
+        missing = [path for path in required if not path.is_dir()]
         if missing:
-            joined = ", ".join(str(p) for p in missing)
-            raise FileNotFoundError(f"Missing AIC data directories: {joined}")
+            joined = ", ".join(str(path) for path in missing)
+            raise DatasetLayoutError(f"Missing required AIC data directories: {joined}")
 
 
 @dataclass(frozen=True)
@@ -71,78 +72,73 @@ class AICDatasetStats:
     missing_objects: int
     missing_videos: int
     feature_dim: int
+    feature_dtype: str = "unknown"
+    dataset_validated: bool = False
+    dataset_report_path: str | None = None
+    invalid_video_count: int = 0
+    record_schema_version: int = AIC_RECORD_SCHEMA_VERSION
 
 
-def _as_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_int(value, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _read_media_text(path: Path) -> str:
-    if not path.exists():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    parts: list[str] = []
-    for key in ("title", "description"):
-        val = data.get(key)
-        if isinstance(val, str) and val.strip():
-            parts.append(val.strip())
-    kws = data.get("keywords")
-    if isinstance(kws, list):
-        parts.append(" ".join(str(k) for k in kws if k))
-    elif isinstance(kws, str):
-        parts.append(kws)
-    return "\n".join(parts)
-
-
-def _read_objects(path: Path, score_threshold: float, max_objects: int) -> tuple[list[str], list[dict]]:
-    if not path.exists():
+def _read_objects(
+    path: Path, score_threshold: float, max_objects: int
+) -> tuple[list[str], list[dict]]:
+    if not path.is_file():
         return [], []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return [], []
-    names = data.get("detection_class_entities") or data.get("detection_class_names") or []
+    if not isinstance(data, dict):
+        return [], []
+    names = (
+        data.get("detection_class_entities")
+        or data.get("detection_class_names")
+        or []
+    )
     scores = data.get("detection_scores") or []
     boxes = data.get("detection_boxes") or []
+    if (
+        not isinstance(names, list)
+        or not isinstance(scores, list)
+        or not isinstance(boxes, list)
+    ):
+        return [], []
     detections: list[dict] = []
-    for i, name in enumerate(names):
+    for index, name in enumerate(names):
         if not name:
             continue
-        confidence = _as_float(scores[i], 1.0) if i < len(scores) else 1.0
-        if confidence < score_threshold:
+        confidence = 1.0
+        if index < len(scores):
+            try:
+                confidence = float(scores[index])
+            except (TypeError, ValueError):
+                continue
+        if not math.isfinite(confidence) or confidence < score_threshold:
             continue
         label = " ".join(str(name).replace("_", " ").casefold().split())
-        box = boxes[i] if i < len(boxes) else None
-        detections.append({
-            "label": label,
-            "confidence": confidence,
-            "bounding_box": list(box) if isinstance(box, (list, tuple)) else None,
-        })
+        box = boxes[index] if index < len(boxes) else None
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            box = None
+        detections.append(
+            {
+                "label": label,
+                "confidence": confidence,
+                "bounding_box": None if box is None else list(box),
+            }
+        )
     detections.sort(key=lambda item: (-item["confidence"], item["label"]))
     detections = detections[:max_objects]
     labels = list(dict.fromkeys(item["label"] for item in detections))
     return labels, detections
 
-def _find_keyframe(paths: AICDataPaths, video_id: str, n: int) -> Optional[Path]:
+
+def _find_keyframe(paths: AICDataPaths, video_id: str, ordinal: int) -> Optional[Path]:
     folder = paths.keyframes_dir / video_id
-    for stem in (f"{n:03d}", f"{n:04d}", str(n)):
-        for ext in (".jpg", ".jpeg", ".png"):
-            p = folder / f"{stem}{ext}"
-            if p.exists():
-                return p
+    for stem in (f"{ordinal:03d}", f"{ordinal:04d}", str(ordinal)):
+        for extension in (".jpg", ".jpeg", ".png"):
+            candidate = folder / f"{stem}{extension}"
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -150,8 +146,18 @@ def _internal_id(video_id: str, frame_idx: int) -> str:
     return f"{video_id}/{frame_idx}"
 
 
+def _metadata_search_text(metadata: MediaMetadata) -> str:
+    fields = (
+        ("media_title", metadata.media_title),
+        ("media_description", metadata.media_description),
+        ("media_tags", " ".join(metadata.media_tags)),
+        ("media_channel", metadata.media_channel),
+    )
+    return "\n".join(f"{source}: {value}" for source, value in fields if value)
+
+
 class AICDatasetLoader:
-    """Build a VideoIndexEntry directly from official AIC keyframes/features."""
+    """Build an index only after the selected source data passes strict inspection."""
 
     def __init__(
         self,
@@ -163,6 +169,7 @@ class AICDatasetLoader:
         include_media_text: bool = True,
         verify_keyframes: bool = True,
         index_kind: str = "flat",
+        app_config: AppConfig | None = None,
     ):
         self.paths = AICDataPaths.from_root(data_root)
         self.object_score_threshold = object_score_threshold
@@ -171,10 +178,52 @@ class AICDatasetLoader:
         self.include_media_text = include_media_text
         self.verify_keyframes = verify_keyframes
         self.index_kind = index_kind
+        self.app_config = app_config
+        self.last_report: DatasetInspectionReport | None = None
 
     def video_ids(self) -> list[str]:
         self.paths.validate()
-        return sorted(p.stem for p in self.paths.features_dir.glob("*.npy"))
+        return sorted(path.stem for path in self.paths.features_dir.glob("*.npy"))
+
+    def _inspection_config(self, video_ids: Sequence[str]) -> AppConfig:
+        base = self.app_config or AppConfig()
+        feature_dim = 0
+        if self.app_config is None:
+            for video_id in video_ids:
+                path = self.paths.features_dir / f"{video_id}.npy"
+                if not path.is_file():
+                    continue
+                try:
+                    shape = np.load(path, mmap_mode="r", allow_pickle=False).shape
+                except (OSError, ValueError, EOFError):
+                    continue
+                if len(shape) == 2:
+                    feature_dim = int(shape[1])
+                    break
+        validation = base.dataset.validation
+        if self.app_config is None:
+            validation = replace(
+                validation,
+                strict_alignment=True,
+                require_keyframe_images=True,
+                expected_feature_dim=feature_dim or None,
+            )
+        if not validation.strict_alignment or not validation.require_keyframe_images:
+            raise DatasetSourceError(
+                "Index builds require strict_alignment=true and require_keyframe_images=true; "
+                "non-strict behavior is available only through inspect-data."
+            )
+        dataset = replace(
+            base.dataset,
+            root=str(self.paths.root),
+            load_objects=self.load_objects,
+            include_media_text=self.include_media_text,
+            verify_keyframes=self.verify_keyframes,
+            index_kind=self.index_kind,
+            validation=validation,
+        )
+        encoder = replace(base.encoder, feature_dim=feature_dim or base.encoder.feature_dim)
+        return replace(base, dataset=dataset, encoder=encoder)
 
     def build_entry(
         self,
@@ -185,47 +234,92 @@ class AICDatasetLoader:
         limit_frames_per_video: Optional[int] = None,
     ) -> tuple[VideoIndexEntry, AICDatasetStats]:
         self.paths.validate()
-        vids = list(video_ids) if video_ids is not None else self.video_ids()
+        available_video_ids = self.video_ids()
+        requested_video_ids = (
+            list(video_ids) if video_ids is not None else available_video_ids
+        )
         if limit_videos is not None:
-            vids = vids[:limit_videos]
+            requested_video_ids = requested_video_ids[: max(0, int(limit_videos))]
+        if not requested_video_ids:
+            raise DatasetSourceError(f"No AIC feature files were selected from {self.paths.root}")
+
+        inspection_limit = limit_videos if video_ids is None else None
+        try:
+            report = inspect_aic_dataset(
+                self.paths.root,
+                app_config=self._inspection_config(requested_video_ids),
+                strict=True,
+                deep=False,
+                limit_videos=inspection_limit,
+            )
+        except DatasetValidationError as exc:
+            report = exc.report
+            self.last_report = report
+            alignment_error = first_alignment_error(report)
+            if alignment_error is not None:
+                raise alignment_error from exc
+            raise
+        self.last_report = report
+
+        report_video_ids = {item.video_id for item in report.videos}
+        missing_requested = [
+            video_id
+            for video_id in requested_video_ids
+            if video_id not in report_video_ids
+        ]
+        if missing_requested:
+            raise DatasetSourceError(
+                "Requested video IDs were not found during dataset inspection: "
+                + ", ".join(missing_requested[:10])
+            )
+
         raws: dict[str, RawKeyframe] = {}
         records: list[KeyframeRecord] = []
-        missing_keyframes = 0
-        missing_objects = 0
-        missing_videos = 0
         feature_dim = 0
-
-        for video_id in vids:
+        feature_dtype = "unknown"
+        for video_id in requested_video_ids:
             feature_path = self.paths.features_dir / f"{video_id}.npy"
             map_path = self.paths.map_dir / f"{video_id}.csv"
-            if not feature_path.exists() or not map_path.exists():
-                continue
-            features = np.load(feature_path, mmap_mode="r")
-            feature_dim = int(features.shape[1]) if len(features.shape) == 2 else feature_dim
-            rows = self._read_map_rows(map_path)
-            if limit_frames_per_video is not None:
-                rows = rows[:limit_frames_per_video]
-            n = min(len(rows), int(features.shape[0]))
-            media_text = _read_media_text(self.paths.media_info_dir / f"{video_id}.json") if self.include_media_text else ""
-            source_video = self.paths.video_dir / f"{video_id}.mp4"
-            if not source_video.exists():
-                missing_videos += 1
-                source_video_str = None
-            else:
-                source_video_str = str(source_video)
+            try:
+                features = np.load(feature_path, mmap_mode="r", allow_pickle=False)
+                rows = self._read_map_rows(map_path)
+            except (OSError, UnicodeError, csv.Error, ValueError, EOFError) as exc:
+                raise DatasetSourceError(f"Cannot load validated sources for {video_id}: {exc}") from exc
+            if len(rows) != int(features.shape[0]):
+                raise DatasetAlignmentError(
+                    video_id=video_id,
+                    map_rows=len(rows),
+                    feature_vectors=int(features.shape[0]),
+                    map_path=map_path,
+                    feature_path=feature_path,
+                )
+            feature_dim = int(features.shape[1])
+            feature_dtype = str(features.dtype)
+            frame_count = len(rows)
+            if (
+                limit_frames_per_video is not None
+                and frame_count > int(limit_frames_per_video)
+            ):
+                frame_count = max(0, int(limit_frames_per_video))
 
-            for i in range(n):
-                row = rows[i]
-                ordinal = _as_int(row.get("n"), i + 1)
-                frame_idx = _as_int(row.get("frame_idx"), ordinal)
-                timestamp = _as_float(row.get("pts_time"), 0.0)
-                kid = _internal_id(video_id, frame_idx)
-                if self.verify_keyframes:
-                    image_path = _find_keyframe(self.paths, video_id, ordinal)
-                    if image_path is None:
-                        missing_keyframes += 1
-                else:
-                    image_path = self.paths.keyframes_dir / video_id / f"{ordinal:03d}.jpg"
+            metadata = MediaMetadata()
+            if self.include_media_text:
+                try:
+                    metadata = read_media_metadata(
+                        self.paths.media_info_dir / f"{video_id}.json"
+                    )
+                except DatasetSourceError:
+                    metadata = MediaMetadata()
+            source_video = self.paths.video_dir / f"{video_id}.mp4"
+            source_video_str = str(source_video) if source_video.is_file() else None
+
+            for index in range(frame_count):
+                row = rows[index]
+                ordinal = int(row["n"])
+                frame_idx = int(row["frame_idx"])
+                timestamp = float(row["pts_time"])
+                keyframe_id = _internal_id(video_id, frame_idx)
+                image_path = _find_keyframe(self.paths, video_id, ordinal)
                 object_path = self.paths.objects_dir / video_id / f"{ordinal:03d}.json"
                 if self.load_objects:
                     objects, object_detections = _read_objects(
@@ -233,66 +327,80 @@ class AICDatasetLoader:
                         self.object_score_threshold,
                         self.max_objects_per_frame,
                     )
-                    if not object_path.exists():
-                        missing_objects += 1
                 else:
-                    objects = []
-                    object_detections = []
-                raw = RawKeyframe(
-                    id=kid,
+                    objects, object_detections = [], []
+                raws[keyframe_id] = RawKeyframe(
+                    id=keyframe_id,
                     video_id=video_id,
                     timestamp=timestamp,
-                    image_path=str(image_path) if image_path is not None else None,
+                    image_path=None if image_path is None else str(image_path),
                     objects=objects,
                     object_detections=object_detections,
                     source_video=source_video_str,
                     frame_idx=frame_idx,
                 )
-                raws[kid] = raw
-                records.append(KeyframeRecord(
-                    id=kid,
-                    video_id=video_id,
-                    timestamp=timestamp,
-                    clip_embedding=np.asarray(features[i], dtype=np.float32),
-                    objects=objects,
-                    llm_caption=media_text,
-                ))
+                records.append(
+                    KeyframeRecord(
+                        id=keyframe_id,
+                        video_id=video_id,
+                        timestamp=timestamp,
+                        clip_embedding=np.asarray(features[index], dtype=np.float32),
+                        objects=objects,
+                        media_title=metadata.media_title,
+                        media_description=metadata.media_description,
+                        media_tags=metadata.media_tags,
+                        media_channel=metadata.media_channel,
+                        media_duration=metadata.media_duration,
+                        media_fps=metadata.media_fps,
+                    )
+                )
 
         if not records:
-            raise RuntimeError(f"No AIC records were loaded from {self.paths.root}")
+            raise DatasetSourceError(f"No AIC records were loaded from {self.paths.root}")
         index = _build_aic_index(records, kind=self.index_kind)
+        caption_by_id: dict[str, str] = {}
+        for record in records:
+            metadata_text = _metadata_search_text(
+                MediaMetadata(
+                    media_title=record.media_title,
+                    media_description=record.media_description,
+                    media_tags=record.media_tags,
+                    media_channel=record.media_channel,
+                    media_duration=record.media_duration,
+                    media_fps=record.media_fps,
+                )
+            )
+            if metadata_text:
+                caption_by_id[record.id] = metadata_text
         entry = VideoIndexEntry(
             video_id=dataset_id,
             index=index,
             raws=raws,
             num_sampled=len(records),
             num_indexed=len(records),
-            caption_by_id={r.id: r.llm_caption for r in records if r.llm_caption},
+            caption_by_id=caption_by_id,
         )
         stats = AICDatasetStats(
-            videos=len(vids),
+            videos=len(requested_video_ids),
             frames=len(records),
-            missing_keyframes=missing_keyframes,
-            missing_objects=missing_objects,
-            missing_videos=missing_videos,
+            missing_keyframes=sum(item.missing_keyframes for item in report.videos),
+            missing_objects=sum(item.missing_object_files for item in report.videos),
+            missing_videos=len(report.missing_sources.get("video", ())),
             feature_dim=feature_dim,
+            feature_dtype=feature_dtype,
+            dataset_validated=True,
+            invalid_video_count=report.invalid_video_count,
         )
         return entry, stats
 
     @staticmethod
     def _read_map_rows(path: Path) -> list[dict[str, str]]:
-        with path.open("r", encoding="utf-8-sig", newline="") as fh:
-            return list(csv.DictReader(fh))
-
-
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return list(csv.DictReader(handle))
 
 
 def _build_aic_index(records: list[KeyframeRecord], *, kind: str = "flat") -> KeyframeIndex:
-    """Build a KeyframeIndex for AIC features.
-
-    The default is exact Faiss IndexFlatIP. It has no approximation loss and builds
-    quickly for the AIC preliminary batch; HNSW is still available for experiments.
-    """
+    """Build an exact flat index by default; retain HNSW for experiments."""
     if kind == "hnsw":
         return KeyframeIndex.build(records)
     if kind != "flat":
@@ -300,20 +408,23 @@ def _build_aic_index(records: list[KeyframeRecord], *, kind: str = "flat") -> Ke
     import faiss
     from rank_bm25 import BM25Okapi
 
-    idx = KeyframeIndex(
-        ids=[r.id for r in records],
-        video_ids=[r.video_id for r in records],
-        timestamps=[r.timestamp for r in records],
-        objects=[list(r.objects) for r in records],
+    index_data = KeyframeIndex(
+        ids=[record.id for record in records],
+        video_ids=[record.video_id for record in records],
+        timestamps=[record.timestamp for record in records],
+        objects=[list(record.objects) for record in records],
         config=IndexConfig(),
     )
-    mat = l2_normalize(np.stack([r.clip_embedding for r in records]).astype(np.float32))
-    index = faiss.IndexFlatIP(mat.shape[1])
-    index.add(mat)
-    idx._clip_index = index
-    corpus = [tokenize(searchable_text(r)) for r in records]
-    idx._bm25 = BM25Okapi([toks if toks else ["empty"] for toks in corpus])
-    return idx
+    matrix = l2_normalize(
+        np.stack([record.clip_embedding for record in records]).astype(np.float32)
+    )
+    index = faiss.IndexFlatIP(matrix.shape[1])
+    index.add(matrix)
+    index_data._clip_index = index
+    corpus = [tokenize(searchable_text(record)) for record in records]
+    index_data._bm25 = BM25Okapi([tokens if tokens else ["empty"] for tokens in corpus])
+    return index_data
+
 
 def official_frame_id(entry: VideoIndexEntry, keyframe_id: str) -> str:
     raw = entry.raws.get(keyframe_id)
@@ -322,9 +433,11 @@ def official_frame_id(entry: VideoIndexEntry, keyframe_id: str) -> str:
     return str(raw.frame_idx)
 
 
-def iter_official_rows(entry: VideoIndexEntry, keyframe_ids: Iterable[str]) -> Iterable[tuple[str, str]]:
-    for kid in keyframe_ids:
-        raw = entry.raws.get(kid)
+def iter_official_rows(
+    entry: VideoIndexEntry, keyframe_ids: Iterable[str]
+) -> Iterable[tuple[str, str]]:
+    for keyframe_id in keyframe_ids:
+        raw = entry.raws.get(keyframe_id)
         if raw is None:
             continue
-        yield raw.video_id, official_frame_id(entry, kid)
+        yield raw.video_id, official_frame_id(entry, keyframe_id)

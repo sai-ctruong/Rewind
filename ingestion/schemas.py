@@ -21,6 +21,8 @@ from typing import Optional
 
 import numpy as np
 
+AIC_RECORD_SCHEMA_VERSION = 2
+
 
 @dataclass
 class RawKeyframe:
@@ -64,10 +66,25 @@ class KeyframeRecord:
     ocr_text: Optional[str] = None
     asr_text: Optional[str] = None                  # transcript audio quanh timestamp
     llm_caption: Optional[str] = None               # caption LVLM sinh lúc index (Mục 2.4)
+    media_title: str = ""
+    media_description: str = ""
+    media_tags: tuple[str, ...] = ()
+    media_channel: str = ""
+    media_duration: Optional[float] = None
+    media_fps: Optional[float] = None
+    frame_caption: str = ""
+    record_schema_version: int = AIC_RECORD_SCHEMA_VERSION
     is_cluster_representative: bool = True           # True nếu là đại diện sau dedup
     cluster_span: Optional[tuple[float, float]] = None  # (t_start, t_end) của cụm
 
     def __post_init__(self) -> None:
+        # llm_caption remains a compatibility alias for a real frame caption only.
+        if not self.frame_caption and self.llm_caption:
+            self.frame_caption = self.llm_caption
+        elif self.frame_caption and not self.llm_caption:
+            self.llm_caption = self.frame_caption
+        if not isinstance(self.media_tags, tuple):
+            self.media_tags = tuple(self.media_tags or ())
         # Chuẩn hoá embedding về np.ndarray float32 để cosine/Faiss nhất quán.
         # Lý do float32: Faiss dùng float32 mặc định; ép sớm tránh lỗi dtype về sau.
         if self.clip_embedding is not None and not isinstance(

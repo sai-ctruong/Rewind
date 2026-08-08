@@ -47,6 +47,7 @@ class IngestionPipeline:
 
     def build_one(self, raw: RawKeyframe) -> KeyframeRecord:
         """Làm giàu 1 keyframe thô thành 1 KeyframeRecord đầy đủ field."""
+        frame_caption = self.captioner.caption(raw)
         return KeyframeRecord(
             id=raw.id,
             video_id=raw.video_id,
@@ -56,7 +57,8 @@ class IngestionPipeline:
             objects=list(raw.objects),
             ocr_text=self.ocr.extract(raw),
             asr_text=self.asr.transcribe(raw),
-            llm_caption=self.captioner.caption(raw),
+            llm_caption=frame_caption,
+            frame_caption=frame_caption,
             # is_cluster_representative / cluster_span do bước dedup (Phase 1) điền
             # sau; ở đây giữ mặc định (True / None) vì chưa gom cụm.
         )
@@ -74,11 +76,20 @@ def searchable_text(record: KeyframeRecord) -> str:
     đã thực sự vào text tìm kiếm.
     """
     parts: list[str] = []
-    if record.objects:
-        parts.append(" ".join(record.objects))
-    for txt in (record.ocr_text, record.asr_text, record.llm_caption):
-        if txt:
-            parts.append(txt)
+    frame_caption = getattr(record, "frame_caption", "") or getattr(record, "llm_caption", "")
+    media_tags = getattr(record, "media_tags", ()) or ()
+    fields = (
+        ("objects", " ".join(getattr(record, "objects", ()) or ())),
+        ("media_title", getattr(record, "media_title", "")),
+        ("media_description", getattr(record, "media_description", "")),
+        ("media_tags", " ".join(media_tags)),
+        ("frame_caption", frame_caption),
+        ("ocr", getattr(record, "ocr_text", "")),
+        ("asr", getattr(record, "asr_text", "")),
+    )
+    for source, value in fields:
+        if value:
+            parts.append(f"{source}: {value}")
     return "\n".join(parts)
 
 

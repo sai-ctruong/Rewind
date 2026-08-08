@@ -12,6 +12,7 @@ A successful build writes these files below the configured cache directory:
 cache_manifest.json
 resolved_config.json
 dataset_stats.json
+dataset_report.json  # record schema v2 and later
 entry/entry.pkl
 entry/index/meta.pkl
 entry/index/clip.hnsw
@@ -19,8 +20,9 @@ entry/index/clip.hnsw
 
 Only files actually produced by the build are listed in `manifest.files`. The final
 `cache_manifest.json` is written atomically after the entry, index, resolved config,
-and dataset statistics have been written. A rebuild removes the old usability marker
-before replacing cache contents.
+dataset statistics, and (from Phase 3) the validated dataset report have been
+written. A rebuild validates data before removing the old usability marker and
+replacing cache contents.
 
 ## Manifest Schema
 
@@ -40,6 +42,12 @@ The manifest contains:
 
 Unsupported schema versions are not migrated or loaded automatically.
 
+Phase 3 keeps manifest schema v1 but advances the single record contract constant to
+`AIC_RECORD_SCHEMA_VERSION = 2`. New record-v2 manifests reference
+`dataset_report.json`; record-v1 caches become stale through the fingerprint/version
+comparison rather than being treated as corrupt solely for lacking that newer
+artifact.
+
 ## Cache Fingerprint
 
 `cache_fingerprint` hashes only build-affecting options:
@@ -47,7 +55,8 @@ Unsupported schema versions are not migrated or loaded automatically.
 - normalized data root;
 - object/media/OCR/ASR/caption inclusion;
 - index kind and build parameters;
-- video/frame build limits and keyframe verification through `index_params`;
+- video/frame build limits, keyframe verification, and expected feature dimension
+  through `index_params`;
 - configured feature dimension and encoder feature space;
 - record schema version.
 
@@ -152,7 +161,8 @@ for `CORRUPT_CACHE_MANIFEST`.
 
 ## Benchmark Artifacts
 
-`BenchmarkLogger.write_run` can write `cache_manifest_snapshot.json`. Cache metadata
+`BenchmarkLogger.write_run` can write `cache_manifest_snapshot.json` and, when
+available, `dataset_report_snapshot.json`. Cache metadata
 is copied into `environment.json` and `summary.json`:
 
 - `cache_hit`, `cache_valid`, `cache_stale`;
@@ -171,8 +181,8 @@ default. It has not been rebuilt or accepted with the stale override.
 
 ## Remaining Limits
 
-Strict map/feature alignment, complete dataset inspection, dynamic DATA_ROOT
-propagation, local refinement integration, per-video Q&A hypotheses, TRAKE schema and
+Strict map/feature alignment and complete dataset inspection were added in Phase 3.
+Dynamic DATA_ROOT propagation, local refinement integration, per-video Q&A hypotheses, TRAKE schema and
 k-best output, independent retrieval channels, submission validation, and scoped UI
-manual editing remain pending in later phases. Phase 3 dataset validation is not part
-of this change.
+manual editing remain pending in later phases. Phase 3 also makes record schema v2 and
+dataset reports part of every newly built cache contract.

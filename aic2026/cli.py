@@ -17,6 +17,13 @@ from .cache_manifest import (
     inspect_cache,
 )
 from .config import AppConfig, ConfigError, config_hash, config_to_dict, load_app_config
+from .dataset_validation import (
+    DatasetAlignmentError,
+    DatasetError,
+    DatasetValidationError,
+    inspect_aic_dataset,
+    write_dataset_report,
+)
 from .engine import AICCompetitionEngine
 from .metrics import write_submission
 
@@ -35,6 +42,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("show-config")
     sub.add_parser("inspect-cache")
+
+    inspect_data = sub.add_parser("inspect-data")
+    inspect_data.add_argument("--strict", action=argparse.BooleanOptionalAction, default=False)
+    inspect_data.add_argument("--deep", action="store_true")
+    inspect_data.add_argument("--limit-videos", type=int)
+    inspect_data.add_argument("--output")
+    inspect_data.add_argument("--summary-only", action="store_true")
 
     build = sub.add_parser("build-index")
     build.add_argument("--limit-videos", type=int)
@@ -116,6 +130,34 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return 0
 
+    if args.cmd == "inspect-data":
+        try:
+            try:
+                report = inspect_aic_dataset(
+                    Path(app_config.dataset.root),
+                    app_config=app_config,
+                    strict=args.strict,
+                    deep=args.deep,
+                    limit_videos=args.limit_videos,
+                )
+            except DatasetValidationError as exc:
+                report = exc.report
+            report_path = None
+            if args.output:
+                report_path = str(
+                    write_dataset_report(
+                        report,
+                        args.output,
+                        summary_only=args.summary_only,
+                    )
+                )
+            payload = report.summary(report_path=report_path)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0 if report.valid_for_index_build else 5
+        except DatasetError as exc:
+            _print_cache_error(exc, "DATASET_INSPECTION_ERROR")
+            return 6
+
     if args.cmd == "inspect-cache":
         expected = cache_build_options_from_config(app_config)
         report = inspect_cache(
@@ -160,6 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         engine, load = AICCompetitionEngine.from_data_root(
             app_config=app_config, rebuild=args.rebuild
         )
+    except (DatasetAlignmentError, DatasetValidationError) as exc:
+        _print_cache_error(exc, "DATASET_INVALID")
+        return 5
+    except DatasetError as exc:
+        _print_cache_error(exc, "DATASET_ERROR")
+        return 6
     except LegacyCacheError as exc:
         _print_cache_error(exc, "LEGACY_CACHE")
         return 3
@@ -203,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         config_hash=status["config_hash"],
         cache_manifest=load.cache_manifest,
         cache_status=cache_meta,
+        dataset_report=None if load.stats is None else load.stats.dataset_report_path,
     )
     return 0
 

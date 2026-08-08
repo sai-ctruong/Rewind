@@ -30,6 +30,19 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class DatasetValidationConfig:
+    strict_alignment: bool = True
+    require_keyframe_images: bool = True
+    strict_objects: bool = False
+    verify_feature_finite: bool = True
+    verify_feature_norms: bool = True
+    verify_image_decode: bool = False
+    max_image_decode_checks_per_video: int | None = None
+    supported_feature_dtypes: tuple[str, ...] = ("float16", "float32")
+    expected_feature_dim: int | None = None
+
+
+@dataclass(frozen=True)
 class DatasetConfig:
     root: str = "data"
     cache_dir: str = "artifacts/aic2026_index"
@@ -37,6 +50,7 @@ class DatasetConfig:
     include_media_text: bool = False
     verify_keyframes: bool = False
     index_kind: str = "flat"
+    validation: DatasetValidationConfig = field(default_factory=DatasetValidationConfig)
 
 
 @dataclass(frozen=True)
@@ -137,9 +151,12 @@ def _construct(cls, raw: Mapping[str, Any] | None):
 def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     source = copy.deepcopy(dict(data))
     raw = source.get("aic2026", source)
+    dataset_raw = dict(raw.get("dataset") or {})
+    validation_raw = dataset_raw.pop("validation", None)
+    dataset_raw["validation"] = _construct(DatasetValidationConfig, validation_raw)
     cfg = AppConfig(
         runtime=_construct(RuntimeConfig, raw.get("runtime")),
-        dataset=_construct(DatasetConfig, raw.get("dataset")),
+        dataset=_construct(DatasetConfig, dataset_raw),
         cache=_construct(CacheConfig, raw.get("cache")),
         encoder=_construct(EncoderConfig, raw.get("encoder")),
         retrieval_channels=_construct(RetrievalChannelConfig, raw.get("retrieval_channels")),
@@ -201,6 +218,12 @@ def config_hash(config: AppConfig) -> str:
 
 def validate_app_config(config: AppConfig) -> None:
     _validate_runtime(config.runtime)
+    _validate_dataset(config.dataset)
+    if config.dataset.validation.expected_feature_dim is not None:
+        _require(
+            int(config.dataset.validation.expected_feature_dim) == int(config.encoder.feature_dim),
+            "dataset.validation.expected_feature_dim must equal encoder.feature_dim",
+        )
     _validate_cache(config.cache)
     _validate_encoder(config.runtime, config.encoder)
     _validate_fusion(config.fusion)
@@ -223,6 +246,38 @@ def _validate_runtime(cfg: RuntimeConfig) -> None:
         cfg.device in {"auto", "cpu", "cuda"} or bool(re.fullmatch(r"cuda:\d+", str(cfg.device))),
         'runtime.device must be "auto", "cpu", "cuda", or cuda:N',
     )
+
+
+def _validate_dataset(cfg: DatasetConfig) -> None:
+    validation = cfg.validation
+    _require(cfg.index_kind in {"flat", "hnsw"}, "dataset.index_kind must be flat or hnsw")
+    _require(
+        bool(validation.strict_alignment),
+        "dataset.validation.strict_alignment must remain true; non-strict mode is inspection-only",
+    )
+    _require(
+        bool(validation.require_keyframe_images),
+        "dataset.validation.require_keyframe_images must remain true for index builds",
+    )
+    _require(
+        bool(validation.supported_feature_dtypes),
+        "dataset.validation.supported_feature_dtypes must be non-empty",
+    )
+    supported = {str(item) for item in validation.supported_feature_dtypes}
+    _require(
+        supported <= {"float16", "float32"},
+        "dataset.validation.supported_feature_dtypes contains an unsupported dtype",
+    )
+    if validation.expected_feature_dim is not None:
+        _require(
+            int(validation.expected_feature_dim) > 0,
+            "dataset.validation.expected_feature_dim must be > 0",
+        )
+    if validation.max_image_decode_checks_per_video is not None:
+        _require(
+            int(validation.max_image_decode_checks_per_video) > 0,
+            "dataset.validation.max_image_decode_checks_per_video must be > 0",
+        )
 
 
 def _validate_cache(cfg: CacheConfig) -> None:
@@ -308,6 +363,7 @@ __all__ = [
     "CacheConfig",
     "ConfigError",
     "DatasetConfig",
+    "DatasetValidationConfig",
     "EncoderConfig",
     "EvaluationConfig",
     "FusionConfig",

@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from PIL import Image
 
 from aic2026.benchmark import BenchmarkLogger, QueryLog
 from aic2026.cache_manifest import (
@@ -59,6 +60,9 @@ def make_data(root: Path) -> Path:
         np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
     )
     for ordinal in (1, 2):
+        Image.new("RGB", (8, 8), (ordinal * 64, 0, 0)).save(
+            root / "keyframes" / "L01_V001" / f"{ordinal:03d}.jpg"
+        )
         (root / "objects" / "L01_V001" / f"{ordinal:03d}.json").write_text(
             "{}", encoding="utf-8"
         )
@@ -333,10 +337,14 @@ def test_benchmark_saves_manifest_snapshot_and_cache_metadata(tmp_path) -> None:
         [QueryLog("kis", "1", "q", 1.0, [["V", "1"]])],
         cache_manifest=load.cache_manifest,
         cache_status=status,
+        dataset_report=load.stats.dataset_report_path,
     )
     snapshot = json.loads((run / "cache_manifest_snapshot.json").read_text(encoding="utf-8"))
     summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
+    dataset_snapshot = json.loads((run / "dataset_report_snapshot.json").read_text(encoding="utf-8"))
     assert snapshot == load.cache_manifest.to_dict()
+    assert dataset_snapshot["valid_for_index_build"] is True
+    assert summary["dataset_validated"] is True
     assert summary["cache_valid"] is True
     assert summary["cache_fingerprint"] == load.cache_fingerprint
 

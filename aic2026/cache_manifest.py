@@ -14,11 +14,12 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
+
 from .config import AppConfig, config_hash
 
 CACHE_MANIFEST_SCHEMA_VERSION = 1
 CACHE_MANIFEST_FILENAME = "cache_manifest.json"
-RECORD_SCHEMA_VERSION = 1
 
 
 class CacheManifestError(RuntimeError):
@@ -226,7 +227,7 @@ def build_data_signature(
     include_objects: bool,
     include_media_text: bool,
     include_keyframes: bool = False,
-    record_schema_version: int = RECORD_SCHEMA_VERSION,
+    record_schema_version: int = AIC_RECORD_SCHEMA_VERSION,
 ) -> str:
     """Hash only deterministic file metadata; large media/file content is never read."""
 
@@ -291,21 +292,28 @@ def inspect_data_inputs(
         if not feature_path.exists() or not map_path.exists():
             continue
         try:
-            features = np.load(feature_path, mmap_mode="r")
+            features = np.load(feature_path, mmap_mode="r", allow_pickle=False)
             feature_rows = int(features.shape[0]) if features.ndim >= 1 else 0
             if features.ndim == 2:
                 dimensions.add(int(features.shape[1]))
             dtypes.add(str(features.dtype))
-        except Exception:
+        except (OSError, ValueError, EOFError):
             continue
         try:
             with map_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 map_rows = sum(1 for _ in csv.DictReader(handle))
-        except Exception:
+        except (OSError, UnicodeError, csv.Error):
             map_rows = 0
-        if limit_frames_per_video is not None:
-            map_rows = min(map_rows, max(0, int(limit_frames_per_video)))
-        frame_count += min(map_rows, feature_rows)
+        if map_rows == feature_rows:
+            rows_to_count = map_rows
+            frame_limit = (
+                None
+                if limit_frames_per_video is None
+                else max(0, int(limit_frames_per_video))
+            )
+            if frame_limit is not None and rows_to_count > frame_limit:
+                rows_to_count = frame_limit
+            frame_count += rows_to_count
     feature_dim = next(iter(dimensions)) if len(dimensions) == 1 else 0
     if not dtypes:
         feature_dtype = "unknown"
@@ -335,11 +343,13 @@ def _index_params(
     verify_keyframes: bool,
     limit_videos: int | None,
     limit_frames_per_video: int | None,
+    expected_feature_dim: int | None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "verify_keyframes": bool(verify_keyframes),
         "limit_videos": limit_videos,
         "limit_frames_per_video": limit_frames_per_video,
+        "expected_feature_dim": expected_feature_dim,
     }
     if index_kind == "hnsw":
         params.update({"hnsw_m": 32, "ef_construction": 200, "ef_search": 2048})
@@ -398,9 +408,10 @@ def cache_build_options_from_config(
             verify_keyframes=verify_keyframes,
             limit_videos=limit_videos,
             limit_frames_per_video=limit_frames_per_video,
+            expected_feature_dim=app_config.dataset.validation.expected_feature_dim,
         ),
         encoder_feature_space=encoder_feature_space(app_config),
-        record_schema_version=RECORD_SCHEMA_VERSION,
+        record_schema_version=AIC_RECORD_SCHEMA_VERSION,
     )
 
 
@@ -425,10 +436,11 @@ def cache_fingerprint(
             verify_keyframes=bool(app_config.dataset.verify_keyframes),
             limit_videos=None,
             limit_frames_per_video=None,
+            expected_feature_dim=app_config.dataset.validation.expected_feature_dim,
         ),
         "feature_dim": int(app_config.encoder.feature_dim),
         "encoder_feature_space": encoder_feature_space(app_config),
-        "record_schema_version": RECORD_SCHEMA_VERSION,
+        "record_schema_version": AIC_RECORD_SCHEMA_VERSION,
     }
     return _sha256_json(payload)
 
@@ -699,6 +711,8 @@ def inspect_cache(
     )
     hard = list(result.hard_mismatches)
     required_files = {"entry", "index", "clip_index", "config_snapshot", "dataset_stats", "manifest"}
+    if manifest.record_schema_version >= AIC_RECORD_SCHEMA_VERSION:
+        required_files.add("dataset_report")
     for file_key in sorted(required_files - set(manifest.files)):
         hard.append(
             CacheMismatch(
@@ -710,7 +724,7 @@ def inspect_cache(
             )
         )
     corrupt = any(item.field.startswith("files.") for item in hard)
-    for file_key in ("config_snapshot", "dataset_stats"):
+    for file_key in ("config_snapshot", "dataset_stats", "dataset_report"):
         relative = manifest.files.get(file_key)
         if not relative:
             continue
@@ -757,7 +771,6 @@ def mismatch_message(result: CacheValidationResult | Mapping[str, Any]) -> str:
 __all__ = [
     "CACHE_MANIFEST_FILENAME",
     "CACHE_MANIFEST_SCHEMA_VERSION",
-    "RECORD_SCHEMA_VERSION",
     "CacheBuildOptions",
     "CacheManifest",
     "CacheManifestError",

@@ -294,6 +294,16 @@ aic2026:
     include_media_text: false
     verify_keyframes: false
     index_kind: flat
+    validation:
+      strict_alignment: true
+      require_keyframe_images: true
+      strict_objects: false
+      verify_feature_finite: true
+      verify_feature_norms: true
+      verify_image_decode: false
+      max_image_decode_checks_per_video: null
+      supported_feature_dtypes: [float16, float32]
+      expected_feature_dim: 512
 
   cache:
     allow_stale_cache: false
