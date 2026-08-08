@@ -9,6 +9,14 @@ from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- configure model cache early
 
+from aic2026.cache_manifest import (
+    CacheManifestError,
+    LegacyCacheError,
+    StaleCacheError,
+    cache_build_options_from_config,
+    detect_code_version,
+    inspect_cache,
+)
 from aic2026.config import AppConfig, config_hash, load_app_config
 from aic2026.dataset import AICDataPaths, official_frame_id
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
@@ -57,6 +65,47 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             "trake_alignment_method": cfg.trake.alignment_method,
             "qa_top_video_hypotheses": cfg.qa.top_video_hypotheses,
         }
+
+    def _cache_status() -> dict:
+        load = state.get("load")
+        if load is not None:
+            return load.cache_status()
+        cfg: AppConfig = state["config"]
+        expected = cache_build_options_from_config(cfg)
+        report = inspect_cache(
+            cfg.dataset.cache_dir,
+            expected,
+            validate_data_signature=cfg.cache.validate_data_signature,
+            code_version_policy=cfg.cache.code_version_policy,
+            current_code_version=detect_code_version(),
+        )
+        manifest = report.get("manifest") or {}
+        return {
+            "exists": report["exists"],
+            "hit": False,
+            "valid": report["valid"],
+            "legacy": report["legacy"],
+            "stale": report["stale"],
+            "stale_reason": report.get("stale_reason"),
+            "manifest_path": report["manifest_path"],
+            "fingerprint": manifest.get("cache_fingerprint"),
+            "created_at": manifest.get("created_at_utc"),
+            "code_version": manifest.get("code_version"),
+            "mismatches": report["hard_mismatches"],
+            "warnings": report["warnings"],
+        }
+
+    def _cache_error_response(exc: Exception):
+        if isinstance(exc, LegacyCacheError):
+            return jsonify(error=str(exc), error_code="LEGACY_CACHE", cache=_cache_status()), 409
+        if isinstance(exc, StaleCacheError):
+            return jsonify(error=str(exc), error_code="STALE_CACHE", cache=_cache_status()), 409
+        if isinstance(exc, CacheManifestError):
+            return jsonify(
+                error=str(exc), error_code="CORRUPT_CACHE_MANIFEST", cache=_cache_status()
+            ), 422
+        return None
+
     def _engine_or_error():
         engine = state.get("engine")
         if engine is None:
@@ -122,6 +171,7 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             encoder=encoder,
             warning=None if encoder is None else encoder.get("warning"),
             config=_config_summary(),
+            cache=_cache_status(),
         )
 
     @app.get("/api/video/progress")
@@ -149,10 +199,14 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
                 load_objects=bool(data["objects"]) if "objects" in data else None,
                 production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
                 allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
+                allow_stale_cache=bool(data["allow_stale_cache"]) if "allow_stale_cache" in data else None,
                 device=data.get("device"),
                 app_config=state["config"],
             )
         except Exception as exc:
+            cache_error = _cache_error_response(exc)
+            if cache_error is not None:
+                return cache_error
             return jsonify(error=str(exc)), 400
         state["engine"] = engine
         state["load"] = load
@@ -162,6 +216,8 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             build_seconds=round(load.build_seconds, 3),
             frames=engine.entry.num_indexed,
             stats=None if load.stats is None else load.stats.__dict__,
+            cache=load.cache_status(),
+            manifest=None if load.cache_manifest is None else load.cache_manifest.to_dict(),
         )
 
     @app.post("/api/video/index_folder")
@@ -181,14 +237,25 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
                 load_objects=bool(data["objects"]) if "objects" in data else None,
                 production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
                 allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
+                allow_stale_cache=bool(data["allow_stale_cache"]) if "allow_stale_cache" in data else None,
                 device=data.get("device"),
                 app_config=state["config"],
             )
         except Exception as exc:
+            cache_error = _cache_error_response(exc)
+            if cache_error is not None:
+                return cache_error
             return jsonify(error=str(exc)), 400
         state["engine"] = engine
         state["load"] = load
-        return jsonify(video="__aic2026__", cached=load.cache_hit, frames=engine.entry.num_indexed, folder=str(folder))
+        return jsonify(
+            video="__aic2026__",
+            cached=load.cache_hit,
+            frames=engine.entry.num_indexed,
+            folder=str(folder),
+            cache=load.cache_status(),
+            manifest=None if load.cache_manifest is None else load.cache_manifest.to_dict(),
+        )
 
     @app.post("/api/video/search")
     def video_search():

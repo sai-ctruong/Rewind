@@ -40,6 +40,13 @@ class DatasetConfig:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    allow_stale_cache: bool = False
+    validate_data_signature: bool = True
+    code_version_policy: str = "warn"
+
+
+@dataclass(frozen=True)
 class EncoderConfig:
     type: str = "auto_clip"
     model_name: str = "openai/clip-vit-base-patch32"
@@ -98,6 +105,7 @@ class UIConfig:
 class AppConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
     encoder: EncoderConfig = field(default_factory=EncoderConfig)
     retrieval_channels: RetrievalChannelConfig = field(default_factory=RetrievalChannelConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
@@ -132,6 +140,7 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     cfg = AppConfig(
         runtime=_construct(RuntimeConfig, raw.get("runtime")),
         dataset=_construct(DatasetConfig, raw.get("dataset")),
+        cache=_construct(CacheConfig, raw.get("cache")),
         encoder=_construct(EncoderConfig, raw.get("encoder")),
         retrieval_channels=_construct(RetrievalChannelConfig, raw.get("retrieval_channels")),
         fusion=_construct(FusionConfig, raw.get("fusion")),
@@ -192,6 +201,7 @@ def config_hash(config: AppConfig) -> str:
 
 def validate_app_config(config: AppConfig) -> None:
     _validate_runtime(config.runtime)
+    _validate_cache(config.cache)
     _validate_encoder(config.runtime, config.encoder)
     _validate_fusion(config.fusion)
     _validate_ranking(config.ranking)
@@ -212,6 +222,13 @@ def _validate_runtime(cfg: RuntimeConfig) -> None:
     _require(
         cfg.device in {"auto", "cpu", "cuda"} or bool(re.fullmatch(r"cuda:\d+", str(cfg.device))),
         'runtime.device must be "auto", "cpu", "cuda", or cuda:N',
+    )
+
+
+def _validate_cache(cfg: CacheConfig) -> None:
+    _require(
+        cfg.code_version_policy in {"ignore", "warn", "reject"},
+        "cache.code_version_policy must be one of ignore, warn, reject",
     )
 
 
@@ -288,6 +305,7 @@ def _validate_evaluation(cfg: EvaluationConfig) -> None:
 
 __all__ = [
     "AppConfig",
+    "CacheConfig",
     "ConfigError",
     "DatasetConfig",
     "EncoderConfig",

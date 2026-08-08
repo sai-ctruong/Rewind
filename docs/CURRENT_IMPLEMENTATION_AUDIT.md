@@ -1,6 +1,6 @@
 # Current Implementation Audit
 
-Audit date: 2026-08-04
+Audit date: 2026-08-08
 
 Branch: `feat/aic2026-competition-research`
 
@@ -50,8 +50,8 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 
 | Hang muc | Hien trang code that | Rui ro | File | Viec sua |
 |---|---|---|---|---|
-| Runtime config | `settings.yaml` co nhieu tham so moi, nhung engine/CLI/UI van truyen dataclass default nhu `FusionConfig()`, `RankingConfig()`, `AlignmentConfig()` va literal args. Chua co `aic2026/config.py`. | Doi YAML khong doi hanh vi runtime; benchmark co the chay sai cau hinh. | `configs/settings.yaml`, `aic2026/engine.py`, `aic2026/fusion.py`, `aic2026/ranking.py`, `aic2026/trake.py`, `aic2026/local_refinement.py`, `aic2026/cli.py`, `ui/app.py` | Phase 1: tao validated `AppConfig`, wire CLI/UI/engine tu config chung, log config hash. |
-| Cache safety | Cache load khi thay `entry.pkl` ton tai, khong doc manifest va khong so sanh build options. | Load nham cache khi doi `load_objects`, `include_media_text`, `data_root`, feature dim hoac index kind. | `aic2026/engine.py` | Phase 2: them `cache_manifest.py`, reject stale cache mac dinh, them `--allow-stale-cache`. |
+| Runtime config | Fixed in commit `6e3ed53`: validated `AppConfig` now drives engine, CLI, UI and benchmark snapshots. | Query-time and build-time configuration share one resolved source and deterministic full config hash. | `aic2026/config.py`, `configs/settings.yaml`, `aic2026/engine.py`, `aic2026/cli.py`, `ui/app.py` | Complete in Phase 1. |
+| Cache safety | Fixed in Phase 2: every new cache has an atomic manifest, build fingerprint, data signature, file validation and explicit legacy/stale/corrupt policy. | Incompatible cache is rejected before normal pickle loading; mismatch fields are exposed in CLI/UI/benchmark status. | `aic2026/cache_manifest.py`, `aic2026/engine.py`, `aic2026/cli.py`, `ui/app.py`, `aic2026/benchmark.py` | Complete in commit `feat: add cache manifest and validation`. |
 | Dataset alignment | Loader dang dung `n = min(len(rows), features.shape[0])`. | Cat ngam row/vector mismatch, co the lam submission frame sai ma khong bao loi. | `aic2026/dataset.py` | Phase 3: raise `DatasetAlignmentError`, them inspect-data report. |
 | Dataset validation | Validate folder co ban, nhung chua validate duplicate `frame_idx`, monotonicity, NaN/Inf feature, JSON loi trong report, mismatch nguon video. | Build index tren du lieu lech hoac loi ma khong co diagnostic ro. | `aic2026/dataset.py` | Phase 3: strict/non-strict report, schema version cho record. |
 | DATA_ROOT state | `index_folder` build engine tu folder moi, nhung health/list/video file/mp4 URL van dung global `DATA_ROOT`. | UI co the search root B nhung phuc vu video/health theo root A. | `ui/app.py` | Phase 4: dua `data_root`, `cache_dir`, config vao state va dung state cho moi endpoint. |
@@ -85,8 +85,8 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`.
 6. One video currently produces at most one TRAKE alignment sequence.
 7. KIS Top-100 de-duplicates `(video_id, frame_id)`; TRAKE de-duplicates full sequence; Q&A/export still lacks a shared validator.
-8. Cache has no manifest. Existing cache is loaded by `entry.pkl` presence only.
-9. `settings.yaml` is mostly documentation today; many runtime values are not wired into engine/CLI/UI.
+8. New caches require schema-v1 manifests; legacy `entry.pkl`-only caches are rejected by default and stale/corrupt fields are reported.
+9. The `aic2026:` section in `settings.yaml` is the validated runtime source wired into engine, CLI, UI and benchmark snapshots.
 10. UI custom DATA_ROOT does not update all routes; health/list/video serving still use global `DATA_ROOT`.
 11. UI frame edit can affect multiple rows/tasks because it replaces matching frame values across `state.rows`.
 12. Objects and metadata currently rerank/fuse dense/sparse candidates; they are not independent candidate generators.
@@ -121,7 +121,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 - Runtime config: fixed in Phase 1 commit `feat: wire validated runtime configuration`.
 - `aic2026/config.py` now provides validated `AppConfig`, deterministic `config_hash`, resolved snapshots and CLI/UI/engine wiring.
 - `configs/settings.yaml` now keeps legacy top-level sections for older tests and adds `aic2026:` as the runtime source for the competition pipeline.
-- Cache manifest: pending Phase 2.
+- Cache safety: fixed in Phase 2 commit `feat: add cache manifest and validation`; see `docs/PHASE_2_CACHE_MANIFEST.md`.
 - Dataset strict validation: pending Phase 3.
 - DATA_ROOT dynamic propagation: pending Phase 4.
 - Local refinement integration: pending Phase 5.

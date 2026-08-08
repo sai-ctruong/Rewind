@@ -20,6 +20,7 @@ config_hash(config) -> str
 
 - `runtime`
 - `dataset`
+- `cache` (added in Phase 2)
 - `encoder`
 - `retrieval_channels`
 - `fusion`
@@ -108,4 +109,4 @@ python -m aic2026.cli --config configs\settings.yaml show-config: passed
 
 ## Remaining Limits
 
-Phase 1 does not implement cache manifest, strict dataset validation, dynamic DATA_ROOT propagation, local refinement integration, Q&A per-video answers, TRAKE k-best, retrieval channels, submission validation or UI manual-edit scoping. Those remain pending later phases.
+Phase 1 did not implement cache safety. Phase 2 subsequently added `CacheConfig`, cache manifests and validation. Strict dataset validation, dynamic DATA_ROOT propagation, local refinement integration, Q&A per-video answers, TRAKE k-best, retrieval channels, submission validation and UI manual-edit scoping remain pending later phases.

@@ -10,7 +10,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from importlib import metadata
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 @dataclass
@@ -80,6 +80,8 @@ class BenchmarkLogger:
         errors: Sequence[dict] = (),
         environment: dict | None = None,
         config_hash: str | None = None,
+        cache_manifest: Any | None = None,
+        cache_status: Mapping[str, Any] | None = None,
     ) -> Path:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         run_dir = self.out_dir / f"{stamp}-{name}"
@@ -94,9 +96,42 @@ class BenchmarkLogger:
         self._jsonl(run_dir / "queries.jsonl", [asdict(log) for log in logs])
         self._jsonl(run_dir / "predictions.jsonl", list(predictions))
         self._jsonl(run_dir / "errors.jsonl", list(errors))
-        env = environment or environment_snapshot(query_count=len(logs), config_hash=config_hash)
+        manifest_dict = None
+        if cache_manifest is not None:
+            manifest_dict = (
+                cache_manifest.to_dict()
+                if callable(getattr(cache_manifest, "to_dict", None))
+                else dict(cache_manifest)
+            )
+            (run_dir / "cache_manifest_snapshot.json").write_text(
+                json.dumps(manifest_dict, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        cache_meta = dict(cache_status or {})
+        if manifest_dict is not None:
+            cache_meta.setdefault("cache_fingerprint", manifest_dict.get("cache_fingerprint"))
+            cache_meta.setdefault("cache_manifest_schema", manifest_dict.get("schema_version"))
+            cache_meta.setdefault("data_signature", manifest_dict.get("data_signature"))
+            cache_meta.setdefault("code_version", manifest_dict.get("code_version"))
+        env = dict(environment or environment_snapshot(query_count=len(logs), config_hash=config_hash))
+        if cache_meta:
+            env["cache"] = cache_meta
         (run_dir / "environment.json").write_text(json.dumps(env, ensure_ascii=False, indent=2), encoding="utf-8")
-        (run_dir / "summary.json").write_text(json.dumps(summary or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary_data = dict(summary or {})
+        for key in (
+            "cache_hit",
+            "cache_valid",
+            "cache_stale",
+            "cache_fingerprint",
+            "cache_manifest_schema",
+            "data_signature",
+            "code_version",
+        ):
+            if key in cache_meta:
+                summary_data.setdefault(key, cache_meta[key])
+        (run_dir / "summary.json").write_text(
+            json.dumps(summary_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         return run_dir
 
 

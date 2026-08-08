@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from .benchmark import BenchmarkLogger, QueryLog, environment_snapshot, time_call
-from .config import AppConfig, config_hash, config_to_dict, load_app_config
+from .cache_manifest import (
+    CacheManifestError,
+    LegacyCacheError,
+    StaleCacheError,
+    cache_build_options_from_config,
+    detect_code_version,
+    inspect_cache,
+)
+from .config import AppConfig, ConfigError, config_hash, config_to_dict, load_app_config
 from .engine import AICCompetitionEngine
 from .metrics import write_submission
 
@@ -21,10 +29,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--production-mode", action=argparse.BooleanOptionalAction, default=None, help="Override production mode")
     p.add_argument("--hashing-fallback", action=argparse.BooleanOptionalAction, default=None, help="Allow hashing fallback when real CLIP is unavailable")
+    p.add_argument("--allow-stale-cache", action=argparse.BooleanOptionalAction, default=None, help="Explicitly allow stale or legacy cache outside production")
     p.add_argument("--device", default=None, help="Encoder device, for example cpu or cuda")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("show-config")
+    sub.add_parser("inspect-cache")
 
     build = sub.add_parser("build-index")
     build.add_argument("--limit-videos", type=int)
@@ -60,6 +70,7 @@ def cli_overrides(args: argparse.Namespace) -> dict[str, Any]:
     _set_nested(overrides, ("runtime", "production_mode"), args.production_mode)
     _set_nested(overrides, ("runtime", "device"), args.device)
     _set_nested(overrides, ("encoder", "allow_hashing_fallback"), args.hashing_fallback)
+    _set_nested(overrides, ("cache", "allow_stale_cache"), args.allow_stale_cache)
     if args.cmd == "build-index":
         _set_nested(overrides, ("dataset", "load_objects"), args.load_objects)
         _set_nested(overrides, ("dataset", "include_media_text"), args.include_media_text)
@@ -76,30 +87,89 @@ def _config_status(config: AppConfig, path: str | Path) -> dict[str, Any]:
     return {"config_path": str(path), "config_hash": config_hash(config), "config": config_to_dict(config)}
 
 
+def _cache_metadata(load) -> dict[str, Any]:
+    manifest = load.cache_manifest
+    return {
+        "cache_hit": load.cache_hit,
+        "cache_valid": load.cache_valid,
+        "cache_stale": load.cache_stale,
+        "cache_fingerprint": load.cache_fingerprint,
+        "cache_manifest_schema": None if manifest is None else manifest.schema_version,
+        "data_signature": None if manifest is None else manifest.data_signature,
+        "code_version": load.cache_code_version,
+    }
+
+
+def _print_cache_error(exc: Exception, code: str) -> None:
+    print(json.dumps({"error": str(exc), "error_code": code}, ensure_ascii=False, indent=2), file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    app_config = _load_cli_config(args)
+    try:
+        app_config = _load_cli_config(args)
+    except ConfigError as exc:
+        _print_cache_error(exc, "INVALID_CONFIG")
+        return 2
     status = _config_status(app_config, args.config)
     if args.cmd == "show-config":
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return 0
 
-    if args.cmd == "build-index":
-        _, load = AICCompetitionEngine.from_data_root(
-            app_config=app_config,
-            rebuild=args.rebuild,
-            limit_videos=args.limit_videos,
-            limit_frames_per_video=args.limit_frames_per_video,
+    if args.cmd == "inspect-cache":
+        expected = cache_build_options_from_config(app_config)
+        report = inspect_cache(
+            app_config.dataset.cache_dir,
+            expected,
+            validate_data_signature=app_config.cache.validate_data_signature,
+            code_version_policy=app_config.cache.code_version_policy,
+            current_code_version=detect_code_version(),
         )
-        print(json.dumps({
-            "cache_hit": load.cache_hit,
-            "build_seconds": round(load.build_seconds, 3),
-            "stats": None if load.stats is None else load.stats.__dict__,
-            "config_hash": status["config_hash"],
-        }, ensure_ascii=False, indent=2))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        if report["corrupt"]:
+            return 4
+        if report["stale"] or report["legacy"]:
+            return 3
         return 0
 
-    engine, load = AICCompetitionEngine.from_data_root(app_config=app_config, rebuild=args.rebuild)
+    try:
+        if args.cmd == "build-index":
+            _, load = AICCompetitionEngine.from_data_root(
+                app_config=app_config,
+                rebuild=args.rebuild,
+                limit_videos=args.limit_videos,
+                limit_frames_per_video=args.limit_frames_per_video,
+            )
+            print(json.dumps({
+                "cache_hit": load.cache_hit,
+                "cache_valid": load.cache_valid,
+                "cache_legacy": load.cache_legacy,
+                "cache_stale": load.cache_stale,
+                "cache_stale_reason": load.cache_stale_reason,
+                "cache_manifest_path": load.cache_manifest_path,
+                "cache_fingerprint": load.cache_fingerprint,
+                "cache_mismatches": load.cache_mismatches,
+                "cache_warnings": load.cache_warnings,
+                "build_seconds": round(load.build_seconds, 3),
+                "stats": None if load.stats is None else load.stats.__dict__,
+                "manifest": None if load.cache_manifest is None else load.cache_manifest.to_dict(),
+                "config_hash": status["config_hash"],
+            }, ensure_ascii=False, indent=2))
+            return 0
+
+        engine, load = AICCompetitionEngine.from_data_root(
+            app_config=app_config, rebuild=args.rebuild
+        )
+    except LegacyCacheError as exc:
+        _print_cache_error(exc, "LEGACY_CACHE")
+        return 3
+    except StaleCacheError as exc:
+        _print_cache_error(exc, "STALE_CACHE")
+        return 3
+    except CacheManifestError as exc:
+        _print_cache_error(exc, "CORRUPT_CACHE_MANIFEST")
+        return 4
+
     top_k = args.top_k
     if args.task == "kis":
         preds, latency = time_call(engine.search_kis, args.query, top_k=top_k)
@@ -115,11 +185,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.out:
         write_submission(rows, args.out, max_rows=app_config.submission.max_predictions)
     logger = BenchmarkLogger(app_config.evaluation.output_dir)
+    cache_meta = _cache_metadata(load)
     logger.write_run(
         "cli",
         status["config"],
-        [QueryLog(args.task, "cli", args.query, latency, rows, {"n": len(rows), "config_hash": status["config_hash"]})],
-        {"config_hash": status["config_hash"]},
+        [QueryLog(args.task, "cli", args.query, latency, rows, {
+            "n": len(rows), "config_hash": status["config_hash"], **cache_meta
+        })],
+        {"config_hash": status["config_hash"], **cache_meta},
         predictions=[{"query_id": "cli", "task": args.task, "rows": rows}],
         environment=environment_snapshot(
             encoder=encoder_status,
@@ -128,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
             config_hash=status["config_hash"],
         ),
         config_hash=status["config_hash"],
+        cache_manifest=load.cache_manifest,
+        cache_status=cache_meta,
     )
     return 0
 

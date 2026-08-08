@@ -295,6 +295,11 @@ aic2026:
     verify_keyframes: false
     index_kind: flat
 
+  cache:
+    allow_stale_cache: false
+    validate_data_signature: true
+    code_version_policy: warn
+
   encoder:
     type: auto_clip
     model_name: openai/clip-vit-base-patch32
