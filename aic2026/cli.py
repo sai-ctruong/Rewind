@@ -17,6 +17,7 @@ from .cache_manifest import (
     inspect_cache,
 )
 from .config import AppConfig, ConfigError, config_hash, config_to_dict, load_app_config
+from .dataset_scope import DatasetScopeError
 from .dataset_validation import (
     DatasetAlignmentError,
     DatasetError,
@@ -33,6 +34,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default="configs/settings.yaml", help="Runtime config YAML")
     p.add_argument("--data-root", default=None, help="Override AIC DATA_ROOT")
     p.add_argument("--cache-dir", default=None, help="Override cache directory")
+    p.add_argument(
+        "--video-include",
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Override dataset.scope.include_patterns with a video-ID glob, for example "
+            '"L21_*". Repeat the option to include several patterns.'
+        ),
+    )
+    p.add_argument(
+        "--video-exclude",
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help="Override dataset.scope.exclude_patterns; applied after the include patterns.",
+    )
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--production-mode", action=argparse.BooleanOptionalAction, default=None, help="Override production mode")
     p.add_argument("--hashing-fallback", action=argparse.BooleanOptionalAction, default=None, help="Allow hashing fallback when real CLIP is unavailable")
@@ -81,6 +99,10 @@ def cli_overrides(args: argparse.Namespace) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     _set_nested(overrides, ("dataset", "root"), args.data_root)
     _set_nested(overrides, ("dataset", "cache_dir"), args.cache_dir)
+    # Scope precedence: explicit CLI override > YAML > default. Passing neither option
+    # leaves the YAML scope untouched; settings.yaml is never rewritten.
+    _set_nested(overrides, ("dataset", "scope", "include_patterns"), args.video_include)
+    _set_nested(overrides, ("dataset", "scope", "exclude_patterns"), args.video_exclude)
     _set_nested(overrides, ("runtime", "production_mode"), args.production_mode)
     _set_nested(overrides, ("runtime", "device"), args.device)
     _set_nested(overrides, ("encoder", "allow_hashing_fallback"), args.hashing_fallback)
@@ -125,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         _print_cache_error(exc, "INVALID_CONFIG")
         return 2
+    except DatasetScopeError as exc:
+        _print_cache_error(exc, "INVALID_DATASET_SCOPE")
+        return 2
     status = _config_status(app_config, args.config)
     if args.cmd == "show-config":
         print(json.dumps(status, ensure_ascii=False, indent=2))
@@ -154,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
             payload = report.summary(report_path=report_path)
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0 if report.valid_for_index_build else 5
+        except DatasetScopeError as exc:
+            _print_cache_error(exc, "EMPTY_DATASET_SCOPE")
+            return 5
         except DatasetError as exc:
             _print_cache_error(exc, "DATASET_INSPECTION_ERROR")
             return 6
@@ -204,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (DatasetAlignmentError, DatasetValidationError) as exc:
         _print_cache_error(exc, "DATASET_INVALID")
+        return 5
+    except DatasetScopeError as exc:
+        _print_cache_error(exc, "EMPTY_DATASET_SCOPE")
         return 5
     except DatasetError as exc:
         _print_cache_error(exc, "DATASET_ERROR")

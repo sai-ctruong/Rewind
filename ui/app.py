@@ -8,6 +8,7 @@ from threading import Thread
 from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- configure model cache early
+from ingestion.schemas import frame_jpeg_bytes
 
 from aic2026.cache_manifest import (
     CacheManifestError,
@@ -19,6 +20,7 @@ from aic2026.cache_manifest import (
 )
 from aic2026.config import AppConfig, config_hash, load_app_config
 from aic2026.dataset import AICDataPaths, official_frame_id
+from aic2026.dataset_scope import scope_payload
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
 from aic2026.metrics import write_submission
 from evaluation.official_eval import evaluate_labels, load_jsonl
@@ -59,6 +61,7 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             "device": cfg.runtime.device,
             "encoder_type": cfg.encoder.type,
             "feature_dim": cfg.encoder.feature_dim,
+            "dataset_scope": scope_payload(cfg.dataset.scope),
             "fusion_method": cfg.fusion.method,
             "final_top_k": cfg.ranking.final_top_k,
             "refinement_enabled": cfg.refinement.enabled,

@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -16,7 +16,13 @@ import numpy as np
 
 from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
 
-from .config import AppConfig, config_hash
+from .config import AppConfig, DatasetScopeConfig, config_hash
+from .dataset_scope import (
+    hash_selected_video_ids,
+    normalize_scope,
+    scope_payload,
+    select_video_ids,
+)
 
 CACHE_MANIFEST_SCHEMA_VERSION = 1
 CACHE_MANIFEST_FILENAME = "cache_manifest.json"
@@ -108,11 +114,21 @@ class CacheBuildOptions:
     index_params: dict[str, Any]
     encoder_feature_space: str
     record_schema_version: int
+    dataset_scope: dict[str, list[str]] = field(
+        default_factory=lambda: dict(scope_payload(None))
+    )
+    selected_video_count: int = 0
+    selected_video_ids_hash: str = ""
 
     def fingerprint_payload(self) -> dict[str, Any]:
-        # Dataset identity is validated separately through signatures and counts.
+        # Dataset identity is validated separately through signatures and counts, but the
+        # SCOPE is part of the fingerprint: an L21-only cache must never be mistaken for
+        # an L22, L21+L22, or full-collection cache.
         return {
             "data_root": self.data_root,
+            "dataset_scope": self.dataset_scope,
+            "selected_video_count": self.selected_video_count,
+            "selected_video_ids_hash": self.selected_video_ids_hash,
             "load_objects": self.load_objects,
             "include_media_text": self.include_media_text,
             "include_ocr": self.include_ocr,
@@ -150,6 +166,11 @@ class CacheManifest:
     encoder_feature_space: str
     record_schema_version: int
     files: dict[str, str]
+    dataset_scope: dict[str, list[str]] = field(
+        default_factory=lambda: dict(scope_payload(None))
+    )
+    selected_video_count: int = 0
+    selected_video_ids_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -169,6 +190,9 @@ class CacheManifest:
             index_params = data["index_params"]
             if not isinstance(index_params, Mapping):
                 raise TypeError("index_params must be an object")
+            dataset_scope = data["dataset_scope"]
+            if not isinstance(dataset_scope, Mapping):
+                raise TypeError("dataset_scope must be an object")
             return cls(
                 schema_version=int(data["schema_version"]),
                 created_at_utc=str(data["created_at_utc"]),
@@ -192,6 +216,12 @@ class CacheManifest:
                 encoder_feature_space=str(data["encoder_feature_space"]),
                 record_schema_version=int(data["record_schema_version"]),
                 files={str(key): str(value) for key, value in files.items()},
+                dataset_scope={
+                    "include_patterns": [str(item) for item in dataset_scope.get("include_patterns", ())],
+                    "exclude_patterns": [str(item) for item in dataset_scope.get("exclude_patterns", ())],
+                },
+                selected_video_count=int(data["selected_video_count"]),
+                selected_video_ids_hash=str(data["selected_video_ids_hash"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise CacheManifestError(f"Invalid cache manifest field: {exc}") from exc
@@ -273,14 +303,21 @@ def build_data_signature(
 def inspect_data_inputs(
     data_root: str | Path,
     *,
+    scope: DatasetScopeConfig | None = None,
     limit_videos: int | None = None,
     limit_frames_per_video: int | None = None,
 ) -> dict[str, Any]:
-    """Collect inexpensive cache facts using CSV rows and memory-mapped NPY headers."""
+    """Collect inexpensive cache facts using CSV rows and memory-mapped NPY headers.
+
+    The scope is applied before any counting so that cache facts describe the selected
+    dataset, not the whole collection. `allow_empty` is set because a data root that
+    does not exist yet must still yield inspectable (empty) cache facts.
+    """
 
     root = Path(data_root)
     feature_dir = root / "clip-features-32"
-    video_ids = sorted(path.stem for path in feature_dir.glob("*.npy")) if feature_dir.exists() else []
+    discovered = sorted(path.stem for path in feature_dir.glob("*.npy")) if feature_dir.exists() else []
+    video_ids = list(select_video_ids(discovered, scope, allow_empty=True))
     if limit_videos is not None:
         video_ids = video_ids[: max(0, int(limit_videos))]
     frame_count = 0
@@ -324,6 +361,7 @@ def inspect_data_inputs(
     return {
         "video_ids": video_ids,
         "video_count": len(video_ids),
+        "discovered_video_count": len(discovered),
         "frame_count": frame_count,
         "feature_dim": feature_dim,
         "feature_dtype": feature_dtype,
@@ -366,8 +404,10 @@ def cache_build_options_from_config(
     index_kind: str | None = None,
     limit_videos: int | None = None,
     limit_frames_per_video: int | None = None,
+    scope: DatasetScopeConfig | None = None,
 ) -> CacheBuildOptions:
     root = data_root if data_root is not None else app_config.dataset.root
+    scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
     load_objects = app_config.dataset.load_objects if load_objects is None else bool(load_objects)
     include_media_text = (
         app_config.dataset.include_media_text if include_media_text is None else bool(include_media_text)
@@ -378,6 +418,7 @@ def cache_build_options_from_config(
     index_kind = str(index_kind or app_config.dataset.index_kind)
     inspected = inspect_data_inputs(
         root,
+        scope=scope,
         limit_videos=limit_videos,
         limit_frames_per_video=limit_frames_per_video,
     )
@@ -412,6 +453,9 @@ def cache_build_options_from_config(
         ),
         encoder_feature_space=encoder_feature_space(app_config),
         record_schema_version=AIC_RECORD_SCHEMA_VERSION,
+        dataset_scope=scope_payload(scope),
+        selected_video_count=int(inspected["video_count"]),
+        selected_video_ids_hash=hash_selected_video_ids(video_ids),
     )
 
 
@@ -420,29 +464,15 @@ def cache_fingerprint(
     *,
     data_root: str | Path | None = None,
 ) -> str:
+    """Hash of the build-affecting inputs, including the dataset scope.
+
+    The `AppConfig` overload resolves build options first so both overloads always
+    agree; a scoped selection can only be described by looking at the data root.
+    """
     if isinstance(app_config, CacheBuildOptions):
         return _sha256_json(app_config.fingerprint_payload())
-    root = data_root if data_root is not None else app_config.dataset.root
-    payload = {
-        "data_root": canonical_data_root(root),
-        "load_objects": bool(app_config.dataset.load_objects),
-        "include_media_text": bool(app_config.dataset.include_media_text),
-        "include_ocr": False,
-        "include_asr": False,
-        "include_captions": False,
-        "index_kind": str(app_config.dataset.index_kind),
-        "index_params": _index_params(
-            index_kind=str(app_config.dataset.index_kind),
-            verify_keyframes=bool(app_config.dataset.verify_keyframes),
-            limit_videos=None,
-            limit_frames_per_video=None,
-            expected_feature_dim=app_config.dataset.validation.expected_feature_dim,
-        ),
-        "feature_dim": int(app_config.encoder.feature_dim),
-        "encoder_feature_space": encoder_feature_space(app_config),
-        "record_schema_version": AIC_RECORD_SCHEMA_VERSION,
-    }
-    return _sha256_json(payload)
+    options = cache_build_options_from_config(app_config, data_root=data_root)
+    return _sha256_json(options.fingerprint_payload())
 
 
 def detect_code_version(repo_root: str | Path | None = None) -> str | None:
@@ -473,7 +503,9 @@ def build_cache_manifest(
     code_version: str | None = None,
     load_objects: bool | None = None,
     include_media_text: bool | None = None,
+    scope: DatasetScopeConfig | None = None,
 ) -> CacheManifest:
+    scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
     load_objects = app_config.dataset.load_objects if load_objects is None else bool(load_objects)
     include_media_text = (
         app_config.dataset.include_media_text if include_media_text is None else bool(include_media_text)
@@ -504,6 +536,9 @@ def build_cache_manifest(
         index_params=dict(index_params),
         encoder_feature_space=encoder_feature_space(app_config),
         record_schema_version=int(record_schema_version),
+        dataset_scope=scope_payload(scope),
+        selected_video_count=len({str(item) for item in video_ids}),
+        selected_video_ids_hash=hash_selected_video_ids(video_ids),
     )
     return CacheManifest(
         schema_version=CACHE_MANIFEST_SCHEMA_VERSION,
@@ -528,6 +563,9 @@ def build_cache_manifest(
         encoder_feature_space=options.encoder_feature_space,
         record_schema_version=options.record_schema_version,
         files={str(key): str(value).replace("\\", "/") for key, value in files.items()},
+        dataset_scope=options.dataset_scope,
+        selected_video_count=options.selected_video_count,
+        selected_video_ids_hash=options.selected_video_ids_hash,
     )
 
 
@@ -611,6 +649,12 @@ def validate_cache_manifest(
         "index_params": (expected.index_params, manifest.index_params),
         "encoder_feature_space": (expected.encoder_feature_space, manifest.encoder_feature_space),
         "record_schema_version": (expected.record_schema_version, manifest.record_schema_version),
+        "dataset_scope": (expected.dataset_scope, manifest.dataset_scope),
+        "selected_video_count": (expected.selected_video_count, manifest.selected_video_count),
+        "selected_video_ids_hash": (
+            expected.selected_video_ids_hash,
+            manifest.selected_video_ids_hash,
+        ),
         "cache_fingerprint": (cache_fingerprint(expected), manifest.cache_fingerprint),
     }
     if current_data_signature is not None:

@@ -16,9 +16,17 @@ import numpy as np
 
 from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
 
-from .config import AppConfig
+from .config import AppConfig, DatasetScopeConfig
+from .dataset_scope import (
+    DatasetScopeError,
+    excluded_video_ids,
+    hash_selected_video_ids,
+    normalize_scope,
+    scope_payload,
+    select_video_ids,
+)
 
-DATASET_INSPECTION_SCHEMA_VERSION = 1
+DATASET_INSPECTION_SCHEMA_VERSION = 2
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 MAP_REQUIRED_COLUMNS = ("n", "pts_time", "fps", "frame_idx")
 _INTEGER_RE = re.compile(r"^[+-]?\d+$")
@@ -105,7 +113,10 @@ class VideoDatasetReport:
     last_frame_idx: int | None = None
     duplicate_frame_indices: list[int] = field(default_factory=list)
     non_monotonic_frame_indices: list[int] = field(default_factory=list)
+    decreasing_frame_indices: list[int] = field(default_factory=list)
+    duplicate_keyframe_ordinals: list[int] = field(default_factory=list)
     missing_keyframes: int = 0
+    missing_keyframe_ordinals: list[int] = field(default_factory=list)
     missing_object_files: int = 0
     corrupt_object_files: int = 0
     feature_non_finite_count: int = 0
@@ -129,7 +140,15 @@ class DatasetInspectionReport:
     data_root: str
     strict: bool
     deep: bool
+    # `video_count` counts the SELECTED videos, i.e. exactly the videos this report
+    # validated. Use `discovered_video_count` for everything present under DATA_ROOT.
     video_count: int
+    scope: dict[str, list[str]]
+    discovered_video_count: int
+    selected_video_count: int
+    excluded_video_count: int
+    selected_video_ids_hash: str
+    excluded_video_ids_sample: list[str]
     valid_video_count: int
     invalid_video_count: int
     map_file_count: int
@@ -149,21 +168,37 @@ class DatasetInspectionReport:
     videos: list[VideoDatasetReport]
     issues: list[DatasetIssue]
     valid_for_index_build: bool
+    duplicate_official_frame_idx_count: int = 0
+    duplicate_internal_keyframe_id_count: int = 0
+    invalid_selected_video_ids: list[str] = field(default_factory=list)
     inspection_seconds: float = 0.0
 
     def summary(self, *, report_path: str | None = None) -> dict[str, Any]:
         return {
             "data_root": self.data_root,
             "valid_for_index_build": self.valid_for_index_build,
+            "scope": self.scope,
+            "discovered_video_count": self.discovered_video_count,
+            "selected_video_count": self.selected_video_count,
+            "excluded_video_count": self.excluded_video_count,
+            "selected_video_ids_hash": self.selected_video_ids_hash,
+            "excluded_video_ids_sample": self.excluded_video_ids_sample,
             "video_count": self.video_count,
             "valid_video_count": self.valid_video_count,
             "invalid_video_count": self.invalid_video_count,
+            "invalid_selected_video_ids": self.invalid_selected_video_ids[:20],
             "total_map_rows": self.total_map_rows,
             "total_feature_vectors": self.total_feature_vectors,
             "total_keyframe_images": self.total_keyframe_images,
             "feature_dimensions": self.feature_dimensions,
             "feature_dtypes": self.feature_dtypes,
+            "duplicate_official_frame_idx_count": self.duplicate_official_frame_idx_count,
+            "duplicate_internal_keyframe_id_count": self.duplicate_internal_keyframe_id_count,
             "issue_counts": self.issue_counts,
+            "missing_required_sources": {
+                key: len(self.missing_sources.get(key, ()))
+                for key in ("map", "features", "keyframes")
+            },
             "missing_sources": {key: len(value) for key, value in self.missing_sources.items()},
             "orphan_sources": {key: len(value) for key, value in self.orphan_sources.items()},
             "inspection_seconds": self.inspection_seconds,
@@ -289,16 +324,22 @@ def _validate_map_rows(
     timestamps: list[float] = []
     seen: set[int] = set()
     duplicates: set[int] = set()
+    seen_ordinals: set[int] = set()
+    duplicate_ordinals: set[int] = set()
     non_monotonic: list[int] = []
+    decreasing: list[int] = []
     for row_number, row in enumerate(rows, start=1):
         ordinal = _parse_integer(row.get("n"))
         if ordinal is None or ordinal <= 0:
             _issue(
-                report, "error", "FRAME_IDX_INVALID", source="map", path=path,
+                report, "error", "KEYFRAME_ORDINAL_INVALID", source="map", path=path,
                 message=f"Row {row_number} has invalid keyframe ordinal n={row.get('n')!r}.",
                 expected="positive integer", actual=row.get("n"),
             )
             ordinal = row_number
+        elif ordinal in seen_ordinals:
+            duplicate_ordinals.add(ordinal)
+        seen_ordinals.add(ordinal)
         ordinals.append(ordinal)
 
         frame_idx = _parse_integer(row.get("frame_idx"))
@@ -317,7 +358,9 @@ def _validate_map_rows(
                 )
             if frame_idx in seen:
                 duplicates.add(frame_idx)
-            if frame_indices and frame_idx <= frame_indices[-1]:
+            if frame_indices and frame_idx < frame_indices[-1]:
+                decreasing.append(frame_idx)
+            elif frame_indices and frame_idx == frame_indices[-1]:
                 non_monotonic.append(frame_idx)
             seen.add(frame_idx)
             frame_indices.append(frame_idx)
@@ -359,17 +402,44 @@ def _validate_map_rows(
 
     report.duplicate_frame_indices = sorted(duplicates)
     report.non_monotonic_frame_indices = non_monotonic
+    report.decreasing_frame_indices = decreasing
+    report.duplicate_keyframe_ordinals = sorted(duplicate_ordinals)
+    # Evidence (artifacts/map_schema_report.json, all 873 official map files): frame_idx
+    # is int(pts_time * fps) in 177,321 of 177,321 rows, so two keyframes one source
+    # frame apart near t=0 legitimately truncate to the same official frame_idx. Repeats
+    # are therefore official data, not corruption, and are reported as information only.
+    # A strictly DECREASING frame_idx never occurs anywhere in the collection and stays a
+    # hard error. Internal identity is protected separately by the keyframe ordinal.
     if duplicates:
         _issue(
-            report, "error", "FRAME_IDX_DUPLICATE", source="map", path=path,
-            message=f"Map contains duplicate frame_idx values: {sorted(duplicates)[:10]}.",
-            expected="unique frame_idx", actual=sorted(duplicates),
+            report, "info", "FRAME_IDX_DUPLICATE", source="map", path=path,
+            message=(
+                f"Map repeats {len(duplicates)} official frame_idx value(s): "
+                f"{sorted(duplicates)[:10]}. This is valid BTC mapping; internal keyframe "
+                "IDs use the keyframe ordinal and stay unique."
+            ),
+            expected="non-decreasing frame_idx", actual=sorted(duplicates),
         )
     if non_monotonic:
         _issue(
-            report, "error", "FRAME_IDX_NON_MONOTONIC", source="map", path=path,
-            message="frame_idx values are not strictly increasing in keyframe order.",
-            expected="strictly increasing", actual=non_monotonic[:10],
+            report, "info", "FRAME_IDX_NON_MONOTONIC", source="map", path=path,
+            message="frame_idx repeats the previous row's value; non-decreasing order is valid.",
+            expected="non-decreasing", actual=non_monotonic[:10],
+        )
+    if decreasing:
+        _issue(
+            report, "error", "FRAME_IDX_DECREASING", source="map", path=path,
+            message="frame_idx decreases in keyframe order; keyframe ordering is unusable.",
+            expected="non-decreasing", actual=decreasing[:10],
+        )
+    if duplicate_ordinals:
+        _issue(
+            report, "error", "KEYFRAME_ORDINAL_DUPLICATE", source="map", path=path,
+            message=(
+                f"Map repeats keyframe ordinal n={sorted(duplicate_ordinals)[:10]}; internal "
+                "keyframe IDs and keyframe image lookup would collide."
+            ),
+            expected="unique keyframe ordinal", actual=sorted(duplicate_ordinals),
         )
     if frame_indices:
         report.first_frame_idx = frame_indices[0]
@@ -506,6 +576,7 @@ def _validate_keyframes(
             actual=None,
         )
         report.missing_keyframes = len(ordinals)
+        report.missing_keyframe_ordinals = list(ordinals[:50])
         return
     image_paths = sorted(
         (path for path in folder.iterdir() if path.is_file() and path.suffix.casefold() in SUPPORTED_IMAGE_EXTENSIONS),
@@ -521,6 +592,7 @@ def _validate_keyframes(
         else:
             expected_paths.add(image_path.resolve(strict=False))
     report.missing_keyframes = len(missing)
+    report.missing_keyframe_ordinals = missing[:50]
     severity = "error" if require_images else "warning"
     if missing:
         _issue(
@@ -819,6 +891,7 @@ def inspect_aic_dataset(
     strict: bool = False,
     deep: bool = False,
     limit_videos: int | None = None,
+    scope: DatasetScopeConfig | None = None,
 ) -> DatasetInspectionReport:
     import time
 
@@ -836,11 +909,17 @@ def inspect_aic_dataset(
     media_files = _source_files(root / "media-info", ".json")
     video_files = _source_files(root / "video", ".mp4")
     required_ids = set(map_files) | set(feature_files) | set(keyframe_folders)
-    all_ids = sorted(required_ids | set(object_folders) | set(media_files) | set(video_files))
+    # DISCOVERED = everything under DATA_ROOT. SELECTED = what the scope keeps, and the
+    # only domain that is validated: sources outside the scope can be absent without
+    # making the selected dataset invalid.
+    discovered_ids = sorted(required_ids | set(object_folders) | set(media_files) | set(video_files))
+    effective_scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
+    all_ids = list(select_video_ids(discovered_ids, effective_scope))
     if limit_videos is not None:
         all_ids = all_ids[: max(0, int(limit_videos))]
     selected = set(all_ids)
     selected_required_ids = selected & required_ids
+    excluded_ids = excluded_video_ids(discovered_ids, all_ids)
     validation = app_config.dataset.validation
     expected_dim = validation.expected_feature_dim or app_config.encoder.feature_dim
     supported_dtypes = set(str(item) for item in validation.supported_feature_dtypes)
@@ -975,6 +1054,9 @@ def inspect_aic_dataset(
     for issue in issues:
         issue_counts[issue.code] = issue_counts.get(issue.code, 0) + 1
     valid_count = sum(1 for report in video_reports if report.valid)
+    # Internal keyframe IDs are `{video_id}/kf_{ordinal:06d}`, so they can only collide
+    # when a map repeats a keyframe ordinal. Official frame_idx repeats do not.
+    duplicate_internal_ids = sum(len(item.duplicate_keyframe_ordinals) for item in video_reports)
     report = DatasetInspectionReport(
         schema_version=DATASET_INSPECTION_SCHEMA_VERSION,
         created_at_utc=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -982,6 +1064,12 @@ def inspect_aic_dataset(
         strict=bool(strict),
         deep=bool(deep),
         video_count=len(video_reports),
+        scope=scope_payload(effective_scope),
+        discovered_video_count=len(discovered_ids),
+        selected_video_count=len(all_ids),
+        excluded_video_count=len(excluded_ids),
+        selected_video_ids_hash=hash_selected_video_ids(all_ids),
+        excluded_video_ids_sample=list(excluded_ids[:10]),
         valid_video_count=valid_count,
         invalid_video_count=len(video_reports) - valid_count,
         map_file_count=len(selected & set(map_files)),
@@ -1001,6 +1089,11 @@ def inspect_aic_dataset(
         videos=video_reports,
         issues=issues,
         valid_for_index_build=bool(selected_required_ids) and valid_count == len(video_reports),
+        duplicate_official_frame_idx_count=sum(
+            len(item.duplicate_frame_indices) for item in video_reports
+        ),
+        duplicate_internal_keyframe_id_count=duplicate_internal_ids,
+        invalid_selected_video_ids=[item.video_id for item in video_reports if not item.valid],
         inspection_seconds=time.perf_counter() - started,
     )
     if strict and not report.valid_for_index_build:
@@ -1075,6 +1168,7 @@ __all__ = [
     "DatasetInspectionReport",
     "DatasetIssue",
     "DatasetLayoutError",
+    "DatasetScopeError",
     "DatasetSourceError",
     "DatasetValidationError",
     "MediaMetadata",

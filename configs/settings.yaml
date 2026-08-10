@@ -294,6 +294,15 @@ aic2026:
     include_media_text: false
     verify_keyframes: false
     index_kind: flat
+    # Which canonical video IDs form the active dataset. Defaults to the full L21-L30
+    # collection. To develop on one collection, override on the command line instead of
+    # editing this file, for example:
+    #   --video-include "L21_*" --cache-dir artifacts/aic2026_index_L21
+    # Sources outside the selected scope are reported as excluded, never as missing.
+    scope:
+      include_patterns:
+        - "*"
+      exclude_patterns: []
     validation:
       strict_alignment: true
       require_keyframe_images: true

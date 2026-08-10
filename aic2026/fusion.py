@@ -27,6 +27,7 @@ class CandidateEvidence:
 @dataclass
 class RankedCandidate:
     video_id: str
+    # frame_id is the OFFICIAL submission frame index; it is not unique within a video.
     frame_id: str
     timestamp: float
     keyframe_path: str | None
@@ -36,6 +37,9 @@ class RankedCandidate:
     bm25_score: float = 0.0
     fused_score: float = 0.0
     evidence: CandidateEvidence = field(default_factory=CandidateEvidence)
+    # keyframe_id is the unique internal identity, carried through fusion so callers
+    # never have to rebuild it from (video_id, frame_id) — which would collide.
+    keyframe_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +152,11 @@ def fuse_candidates(query: str, candidates: Sequence[RankedCandidate], config: F
         totals = [sum(weights[name] * signals[name][i] for name in signals) for i in range(len(items))]
     for item, score in zip(items, totals):
         item.fused_score = float(score)
-    items.sort(key=lambda c: (-c.fused_score, -c.dense_score, c.video_id, c.frame_id))
+    # keyframe_id breaks the remaining ties: official frame_id repeats within a video,
+    # so without it exact ties fell back to non-deterministic input order.
+    items.sort(
+        key=lambda c: (-c.fused_score, -c.dense_score, c.video_id, c.frame_id, c.keyframe_id or "")
+    )
     return FusionResult(config.method, tuple(items), weights)
 
 

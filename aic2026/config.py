@@ -30,6 +30,20 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class DatasetScopeConfig:
+    """Which canonical video IDs belong to the active dataset.
+
+    A development subset (for example only collection ``L21``) is expressed here so
+    that inspection, index build, and cache identity all agree on one selection. The
+    default selects the whole collection, so the full L21-L30 dataset needs no code
+    change: only configuration.
+    """
+
+    include_patterns: tuple[str, ...] = ("*",)
+    exclude_patterns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DatasetValidationConfig:
     strict_alignment: bool = True
     require_keyframe_images: bool = True
@@ -50,6 +64,7 @@ class DatasetConfig:
     include_media_text: bool = False
     verify_keyframes: bool = False
     index_kind: str = "flat"
+    scope: DatasetScopeConfig = field(default_factory=DatasetScopeConfig)
     validation: DatasetValidationConfig = field(default_factory=DatasetValidationConfig)
 
 
@@ -148,12 +163,33 @@ def _construct(cls, raw: Mapping[str, Any] | None):
     return cls(**{k: v for k, v in raw.items() if k in names})
 
 
+def _pattern_tuple(value: Any, name: str) -> tuple[str, ...]:
+    """Accept a single pattern or a list of patterns; keep YAML order, reject junk."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError(f"{name} must be a string or a list of strings")
+    patterns: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(f"{name} entries must be non-empty strings, got {item!r}")
+        patterns.append(item.strip())
+    return tuple(patterns)
+
+
 def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     source = copy.deepcopy(dict(data))
     raw = source.get("aic2026", source)
     dataset_raw = dict(raw.get("dataset") or {})
     validation_raw = dataset_raw.pop("validation", None)
     dataset_raw["validation"] = _construct(DatasetValidationConfig, validation_raw)
+    scope_raw = dict(dataset_raw.pop("scope", None) or {})
+    for key in ("include_patterns", "exclude_patterns"):
+        if key in scope_raw:
+            scope_raw[key] = _pattern_tuple(scope_raw[key], f"dataset.scope.{key}")
+    dataset_raw["scope"] = _construct(DatasetScopeConfig, scope_raw)
     cfg = AppConfig(
         runtime=_construct(RuntimeConfig, raw.get("runtime")),
         dataset=_construct(DatasetConfig, dataset_raw),
@@ -248,8 +284,29 @@ def _validate_runtime(cfg: RuntimeConfig) -> None:
     )
 
 
+def _validate_scope(cfg: DatasetScopeConfig) -> None:
+    _require(
+        bool(cfg.include_patterns),
+        "dataset.scope.include_patterns must be non-empty; use [\"*\"] for the full dataset",
+    )
+    for name, patterns in (
+        ("include_patterns", cfg.include_patterns),
+        ("exclude_patterns", cfg.exclude_patterns),
+    ):
+        for pattern in patterns:
+            _require(
+                isinstance(pattern, str) and bool(pattern.strip()),
+                f"dataset.scope.{name} entries must be non-empty strings",
+            )
+            _require(
+                "/" not in pattern and "\\" not in pattern,
+                f"dataset.scope.{name} entries match a video ID, not a path: {pattern!r}",
+            )
+
+
 def _validate_dataset(cfg: DatasetConfig) -> None:
     validation = cfg.validation
+    _validate_scope(cfg.scope)
     _require(cfg.index_kind in {"flat", "hnsw"}, "dataset.index_kind must be flat or hnsw")
     _require(
         bool(validation.strict_alignment),
@@ -363,6 +420,7 @@ __all__ = [
     "CacheConfig",
     "ConfigError",
     "DatasetConfig",
+    "DatasetScopeConfig",
     "DatasetValidationConfig",
     "EncoderConfig",
     "EvaluationConfig",

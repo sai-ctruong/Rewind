@@ -15,7 +15,13 @@ from ingestion.build_records import searchable_text
 from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION, KeyframeRecord, RawKeyframe
 from retrieval.video_engine import VideoIndexEntry
 
-from .config import AppConfig
+from .config import AppConfig, DatasetScopeConfig
+from .dataset_scope import (
+    excluded_video_ids,
+    hash_selected_video_ids,
+    normalize_scope,
+    select_video_ids,
+)
 from .dataset_validation import (
     DatasetAlignmentError,
     DatasetInspectionReport,
@@ -77,6 +83,11 @@ class AICDatasetStats:
     dataset_report_path: str | None = None
     invalid_video_count: int = 0
     record_schema_version: int = AIC_RECORD_SCHEMA_VERSION
+    scope_include_patterns: tuple[str, ...] = ("*",)
+    scope_exclude_patterns: tuple[str, ...] = ()
+    discovered_videos: int = 0
+    excluded_videos: int = 0
+    selected_video_ids_hash: str = ""
 
 
 def _read_objects(
@@ -133,6 +144,11 @@ def _read_objects(
 
 
 def _find_keyframe(paths: AICDataPaths, video_id: str, ordinal: int) -> Optional[Path]:
+    """Locate a keyframe image by KEYFRAME ORDINAL, never by official frame_idx.
+
+    Official packages name images after the 1-based map row (`001.jpg`, `002.jpg`, ...),
+    which is the same position as the CLIP feature row.
+    """
     folder = paths.keyframes_dir / video_id
     for stem in (f"{ordinal:03d}", f"{ordinal:04d}", str(ordinal)):
         for extension in (".jpg", ".jpeg", ".png"):
@@ -142,8 +158,15 @@ def _find_keyframe(paths: AICDataPaths, video_id: str, ordinal: int) -> Optional
     return None
 
 
-def _internal_id(video_id: str, frame_idx: int) -> str:
-    return f"{video_id}/{frame_idx}"
+def _internal_id(video_id: str, keyframe_ordinal: int) -> str:
+    """Internal, globally unique keyframe identity.
+
+    Built from the keyframe ordinal, NOT from the official `frame_idx`: 192 official
+    videos repeat a `frame_idx`, so an ID derived from it would collide and silently
+    drop keyframes. The official submission value is carried separately on
+    `RawKeyframe.frame_idx` and must never be parsed back out of this string.
+    """
+    return f"{video_id}/kf_{int(keyframe_ordinal):06d}"
 
 
 def _metadata_search_text(metadata: MediaMetadata) -> str:
@@ -170,8 +193,14 @@ class AICDatasetLoader:
         verify_keyframes: bool = True,
         index_kind: str = "flat",
         app_config: AppConfig | None = None,
+        scope: DatasetScopeConfig | None = None,
     ):
         self.paths = AICDataPaths.from_root(data_root)
+        self.scope = normalize_scope(
+            scope
+            if scope is not None
+            else (app_config.dataset.scope if app_config is not None else None)
+        )
         self.object_score_threshold = object_score_threshold
         self.max_objects_per_frame = max_objects_per_frame
         self.load_objects = load_objects
@@ -182,6 +211,11 @@ class AICDatasetLoader:
         self.last_report: DatasetInspectionReport | None = None
 
     def video_ids(self) -> list[str]:
+        """Video IDs the configured scope selects (the dataset this loader builds)."""
+        return list(select_video_ids(self.discovered_video_ids(), self.scope))
+
+    def discovered_video_ids(self) -> list[str]:
+        """Every video ID with a CLIP feature file under DATA_ROOT, scope ignored."""
         self.paths.validate()
         return sorted(path.stem for path in self.paths.features_dir.glob("*.npy"))
 
@@ -234,9 +268,11 @@ class AICDatasetLoader:
         limit_frames_per_video: Optional[int] = None,
     ) -> tuple[VideoIndexEntry, AICDatasetStats]:
         self.paths.validate()
-        available_video_ids = self.video_ids()
+        discovered_video_ids = self.discovered_video_ids()
+        # Scope first, so inspection and record creation share one selection.
+        selected_video_ids = list(select_video_ids(discovered_video_ids, self.scope))
         requested_video_ids = (
-            list(video_ids) if video_ids is not None else available_video_ids
+            list(video_ids) if video_ids is not None else selected_video_ids
         )
         if limit_videos is not None:
             requested_video_ids = requested_video_ids[: max(0, int(limit_videos))]
@@ -244,6 +280,11 @@ class AICDatasetLoader:
             raise DatasetSourceError(f"No AIC feature files were selected from {self.paths.root}")
 
         inspection_limit = limit_videos if video_ids is None else None
+        inspection_scope = (
+            self.scope
+            if video_ids is None
+            else DatasetScopeConfig(include_patterns=tuple(requested_video_ids))
+        )
         try:
             report = inspect_aic_dataset(
                 self.paths.root,
@@ -251,6 +292,7 @@ class AICDatasetLoader:
                 strict=True,
                 deep=False,
                 limit_videos=inspection_limit,
+                scope=inspection_scope,
             )
         except DatasetValidationError as exc:
             report = exc.report
@@ -313,12 +355,16 @@ class AICDatasetLoader:
             source_video = self.paths.video_dir / f"{video_id}.mp4"
             source_video_str = str(source_video) if source_video.is_file() else None
 
+            # INVARIANT: feature row i <-> map row i <-> keyframe ordinal of row i <->
+            # keyframe image of that ordinal. The CLIP feature array is ordered by
+            # keyframe, while AIC submissions use the official source frame_idx read
+            # out of the same row. The two must never be substituted for each other.
             for index in range(frame_count):
                 row = rows[index]
                 ordinal = int(row["n"])
                 frame_idx = int(row["frame_idx"])
                 timestamp = float(row["pts_time"])
-                keyframe_id = _internal_id(video_id, frame_idx)
+                keyframe_id = _internal_id(video_id, ordinal)
                 image_path = _find_keyframe(self.paths, video_id, ordinal)
                 object_path = self.paths.objects_dir / video_id / f"{ordinal:03d}.json"
                 if self.load_objects:
@@ -329,6 +375,11 @@ class AICDatasetLoader:
                     )
                 else:
                     objects, object_detections = [], []
+                if keyframe_id in raws:
+                    raise DatasetSourceError(
+                        f"Internal keyframe ID collision for {keyframe_id!r}: map keyframe "
+                        f"ordinal n={ordinal} is repeated in {map_path}."
+                    )
                 raws[keyframe_id] = RawKeyframe(
                     id=keyframe_id,
                     video_id=video_id,
@@ -338,6 +389,7 @@ class AICDatasetLoader:
                     object_detections=object_detections,
                     source_video=source_video_str,
                     frame_idx=frame_idx,
+                    keyframe_ordinal=ordinal,
                 )
                 records.append(
                     KeyframeRecord(
@@ -390,6 +442,11 @@ class AICDatasetLoader:
             feature_dtype=feature_dtype,
             dataset_validated=True,
             invalid_video_count=report.invalid_video_count,
+            scope_include_patterns=tuple(report.scope["include_patterns"]),
+            scope_exclude_patterns=tuple(report.scope["exclude_patterns"]),
+            discovered_videos=len(discovered_video_ids),
+            excluded_videos=len(excluded_video_ids(discovered_video_ids, requested_video_ids)),
+            selected_video_ids_hash=hash_selected_video_ids(requested_video_ids),
         )
         return entry, stats
 
@@ -427,9 +484,19 @@ def _build_aic_index(records: list[KeyframeRecord], *, kind: str = "flat") -> Ke
 
 
 def official_frame_id(entry: VideoIndexEntry, keyframe_id: str) -> str:
+    """Official AIC submission frame ID for an internal keyframe ID.
+
+    Always read from the stored `frame_idx`. The internal ID encodes the keyframe
+    ordinal, so parsing it would emit the ordinal as the submission frame and be wrong
+    for every keyframe.
+    """
     raw = entry.raws.get(keyframe_id)
-    if raw is None or raw.frame_idx is None:
-        return keyframe_id.rsplit("/", 1)[-1]
+    if raw is None:
+        raise KeyError(f"Unknown internal keyframe ID: {keyframe_id!r}")
+    if raw.frame_idx is None:
+        raise ValueError(
+            f"Keyframe {keyframe_id!r} has no official frame_idx; it cannot be submitted."
+        )
     return str(raw.frame_idx)
 
 

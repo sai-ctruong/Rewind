@@ -65,7 +65,10 @@ def test_loader_uses_official_frame_idx(tmp_path) -> None:
     root = make_aic_root(tmp_path / "data")
     entry, stats = AICDatasetLoader(root).build_entry()
     assert stats.frames == 3 and stats.feature_dim == 2
-    first = entry.raws["L01_V001/100"]
+    # Internal identity comes from the keyframe ordinal; the official submission frame
+    # index is carried alongside it and is never encoded into the ID.
+    first = entry.raws["L01_V001/kf_000001"]
+    assert first.keyframe_ordinal == 1
     assert first.frame_idx == 100
     assert official_frame_id(entry, first.id) == "100"
     assert first.image_path and first.objects == ["red object"]

@@ -21,7 +21,10 @@ from typing import Optional
 
 import numpy as np
 
-AIC_RECORD_SCHEMA_VERSION = 2
+# v3 (Phase 3.1): internal keyframe IDs are `{video_id}/kf_{keyframe_ordinal:06d}`.
+# v2 used `{video_id}/{frame_idx}`, which collided on the 192 official videos whose map
+# repeats an official frame_idx, so v2 caches are stale by design and are not migrated.
+AIC_RECORD_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -46,7 +49,13 @@ class RawKeyframe:
     objects: list[str] = field(default_factory=list)  # Open Images 600 categories (BTC cấp)
     object_detections: list[dict] = field(default_factory=list)  # label, confidence, bounding_box
     source_video: Optional[str] = None    # đường dẫn VIDEO GỐC -> decode lại frame khi cần
-    frame_idx: Optional[int] = None       # số thứ tự frame trong video (seek chính xác)
+    # frame_idx: OFFICIAL source-video frame index (BTC `frame_idx`). Dùng để seek chính
+    # xác VÀ là giá trị nộp bài AIC. KHÔNG duy nhất: 192 video của BTC lặp frame_idx.
+    frame_idx: Optional[int] = None
+    # keyframe_ordinal: vị trí 1-based của keyframe trong map CSV (`n`). Đây là thứ tự
+    # của hàng map, của vector CLIP, và của file ảnh keyframe (001.jpg...). Duy nhất
+    # trong một video, nên internal id dựng từ nó thì KHÔNG BAO GIỜ đụng độ.
+    keyframe_ordinal: Optional[int] = None
 
 
 @dataclass

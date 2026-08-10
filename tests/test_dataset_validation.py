@@ -227,7 +227,8 @@ def test_equal_map_and_feature_counts_pass(tmp_path) -> None:
         ([100, 100], "FRAME_IDX_DUPLICATE"),
         ([-1, 130], "FRAME_IDX_NEGATIVE"),
         (["abc", 130], "FRAME_IDX_INVALID"),
-        ([130, 100], "FRAME_IDX_NON_MONOTONIC"),
+        ([100, 100], "FRAME_IDX_NON_MONOTONIC"),
+        ([130, 100], "FRAME_IDX_DECREASING"),
     ],
 )
 def test_frame_idx_validation(tmp_path, frame_values, code) -> None:
@@ -400,8 +401,9 @@ def test_orphan_sources_are_reported(tmp_path, source, code) -> None:
 def test_record_uses_official_frame_idx_not_ordinal(tmp_path) -> None:
     root = make_dataset(tmp_path / "data")
     entry, _ = AICDatasetLoader(root, app_config=make_config(root)).build_entry()
-    assert entry.index.ids == [f"{VIDEO_ID}/100", f"{VIDEO_ID}/130"]
-    assert entry.raws[f"{VIDEO_ID}/100"].frame_idx == 100
+    assert entry.index.ids == [f"{VIDEO_ID}/kf_000001", f"{VIDEO_ID}/kf_000002"]
+    assert entry.raws[f"{VIDEO_ID}/kf_000001"].frame_idx == 100
+    assert entry.raws[f"{VIDEO_ID}/kf_000002"].frame_idx == 130
 
 
 def test_media_metadata_is_separate_from_frame_caption(tmp_path, monkeypatch) -> None:
@@ -535,7 +537,7 @@ def test_build_index_gate_writes_no_partial_cache(tmp_path) -> None:
     assert not (cache / "cache_manifest.json").exists()
 
 
-def test_cache_manifest_uses_record_schema_v2_and_dataset_report(tmp_path) -> None:
+def test_cache_manifest_uses_current_record_schema_and_dataset_report(tmp_path) -> None:
     root = make_dataset(tmp_path / "data")
     cache = tmp_path / "cache"
     config = make_config(root, cache_dir=cache)
@@ -545,7 +547,7 @@ def test_cache_manifest_uses_record_schema_v2_and_dataset_report(tmp_path) -> No
         rebuild=True,
     )
     manifest = read_cache_manifest(cache / "cache_manifest.json")
-    assert manifest.record_schema_version == AIC_RECORD_SCHEMA_VERSION == 2
+    assert manifest.record_schema_version == AIC_RECORD_SCHEMA_VERSION == 3
     assert manifest.files["dataset_report"] == "dataset_report.json"
     assert load.stats is not None and load.stats.dataset_validated
 

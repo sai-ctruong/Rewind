@@ -29,6 +29,7 @@ from aic2026.cache_manifest import (
 from aic2026.cli import main as cli_main
 from aic2026.config import (
     CacheConfig,
+    DatasetScopeConfig,
     app_config_from_dict,
     config_to_dict,
 )
@@ -162,6 +163,9 @@ def test_manifest_signature_and_video_hash_are_deterministic(tmp_path) -> None:
         ("include_media_text", True),
         ("index_kind", "hnsw"),
         ("encoder_feature_space", "different-space"),
+        ("dataset_scope", {"include_patterns": ["L21_*"], "exclude_patterns": []}),
+        ("selected_video_count", 7),
+        ("selected_video_ids_hash", "0" * 64),
     ],
 )
 def test_required_manifest_field_mismatch_is_hard(tmp_path, field, changed) -> None:
@@ -192,7 +196,7 @@ def test_query_time_evaluation_change_does_not_change_fingerprint(tmp_path) -> N
     assert cache_fingerprint(cfg) == cache_fingerprint(changed)
 
 
-@pytest.mark.parametrize("change", ["objects", "dimension", "root"])
+@pytest.mark.parametrize("change", ["objects", "dimension", "root", "scope"])
 def test_build_affecting_change_changes_fingerprint(tmp_path, change) -> None:
     root = make_data(tmp_path / "data")
     cfg = make_config(root, tmp_path / "cache")
@@ -200,6 +204,13 @@ def test_build_affecting_change_changes_fingerprint(tmp_path, change) -> None:
         changed = replace(cfg, dataset=replace(cfg.dataset, load_objects=True))
     elif change == "dimension":
         changed = replace(cfg, encoder=replace(cfg.encoder, feature_dim=3))
+    elif change == "scope":
+        changed = replace(
+            cfg,
+            dataset=replace(
+                cfg.dataset, scope=DatasetScopeConfig(include_patterns=("L01_*",))
+            ),
+        )
     else:
         changed = replace(cfg, dataset=replace(cfg.dataset, root=str(tmp_path / "other")))
     assert cache_fingerprint(cfg) != cache_fingerprint(changed)

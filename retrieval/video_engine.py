@@ -127,7 +127,9 @@ class VideoIndexEntry:
             rid: RawKeyframe(
                 id=r.id, video_id=r.video_id, timestamp=r.timestamp,
                 image_path=r.image_path, source_video=r.source_video,
-                frame_idx=r.frame_idx, objects=list(r.objects),
+                frame_idx=r.frame_idx,
+                keyframe_ordinal=getattr(r, "keyframe_ordinal", None),
+                objects=list(r.objects),
                 object_detections=list(getattr(r, "object_detections", [])),
             )
             for rid, r in self.raws.items()

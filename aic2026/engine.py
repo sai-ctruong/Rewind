@@ -232,6 +232,11 @@ class AICCompetitionEngine:
                         dataset_report_path=raw.get("dataset_report_path"),
                         invalid_video_count=int(raw.get("invalid_video_count", 0)),
                         record_schema_version=int(raw.get("record_schema_version", 1)),
+                        scope_include_patterns=tuple(raw.get("scope_include_patterns", ("*",))),
+                        scope_exclude_patterns=tuple(raw.get("scope_exclude_patterns", ())),
+                        discovered_videos=int(raw.get("discovered_video_count", 0)),
+                        excluded_videos=int(raw.get("excluded_video_count", 0)),
+                        selected_video_ids_hash=str(raw.get("selected_video_ids_hash", "")),
                     )
                 except Exception:
                     continue
@@ -401,6 +406,12 @@ class AICCompetitionEngine:
             "dataset_report_path": stats.dataset_report_path,
             "invalid_video_count": stats.invalid_video_count,
             "record_schema_version": stats.record_schema_version,
+            "scope_include_patterns": list(stats.scope_include_patterns),
+            "scope_exclude_patterns": list(stats.scope_exclude_patterns),
+            "discovered_video_count": stats.discovered_videos,
+            "selected_video_count": stats.videos,
+            "excluded_video_count": stats.excluded_videos,
+            "selected_video_ids_hash": stats.selected_video_ids_hash,
             "build_seconds": elapsed,
         }
         stats_path.write_text(json.dumps(stats_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -433,6 +444,7 @@ class AICCompetitionEngine:
             files=files,
             load_objects=load_objects,
             include_media_text=include_media_text,
+            scope=app_config.dataset.scope,
         )
         write_cache_manifest_atomic(manifest, manifest_path)
         result = AICLoadResult(
@@ -512,6 +524,7 @@ class AICCompetitionEngine:
             ranked.append(RankedCandidate(
                 video_id=raw.video_id,
                 frame_id=official_frame_id(self.entry, keyframe_id),
+                keyframe_id=keyframe_id,
                 timestamp=raw.timestamp,
                 keyframe_path=raw.image_path,
                 dense_score=float(dense.get(row, 0.0)),
@@ -528,8 +541,11 @@ class AICCompetitionEngine:
         row_by_id = {self.entry.index.ids[row]: row for row in union}
         out: list[Candidate] = []
         for item in fused.candidates[:top_k]:
-            keyframe_id = f"{item.video_id}/{item.frame_id}"
-            row = row_by_id.get(keyframe_id)
+            # Use the identity fusion carried through. Rebuilding it from
+            # (video_id, frame_id) would alias the 192 official videos that repeat a
+            # frame_idx and silently drop or mis-attribute their candidates.
+            keyframe_id = item.keyframe_id
+            row = None if keyframe_id is None else row_by_id.get(keyframe_id)
             if row is None:
                 continue
             candidate = Candidate(

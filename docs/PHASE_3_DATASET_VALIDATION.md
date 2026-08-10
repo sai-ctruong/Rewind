@@ -5,6 +5,12 @@ prerequisite for every new AIC index. It does not implement dynamic UI `DATA_ROO
 retrieval changes, local refinement, Q&A hypotheses, TRAKE output, or submission
 editing.
 
+> **Superseded in part by Phase 3.1.** Validation now runs over the videos a configured
+> dataset scope selects, not over every discovered ID, and the frame-ID policy below was
+> corrected against the real map CSVs. Read
+> `docs/PHASE_3_1_DATASET_SCOPE_AND_MAPPING.md` alongside this document; the
+> differences are marked inline.
+
 ## Alignment Policy
 
 The old loader used `min(len(rows), features.shape[0])`, which could silently discard
@@ -19,6 +25,10 @@ index. `strict=True` still completes the report, then raises
 no configuration or stale-cache override permits a partial mismatch index.
 
 ## Source Policy
+
+Since Phase 3.1 these requirements apply to the videos the configured
+`dataset.scope` selects. Sources outside the scope are counted as excluded and never
+reported as missing required data.
 
 Required for the current keyframe index:
 
@@ -40,8 +50,14 @@ errors and do not invalidate an otherwise complete required inventory.
 ## Validation Coverage
 
 Map CSV checks include required columns (`n`, `pts_time`, `fps`, `frame_idx`), integer
-and non-negative frame IDs, uniqueness, strict monotonicity, timestamps, and
-FPS/timestamp consistency diagnostics.
+and non-negative frame IDs, timestamps, and FPS/timestamp consistency diagnostics.
+
+Phase 3 originally required `frame_idx` to be unique and strictly increasing. Phase 3.1
+inspected all 873 official map files and disproved that: `frame_idx` is
+`int(pts_time * fps)` in every row, so repeats are valid BTC data. Duplicate and
+equal-consecutive `frame_idx` are now informational, strictly decreasing `frame_idx` is
+the hard error (`FRAME_IDX_DECREASING`), and a repeated keyframe ordinal is a new hard
+error (`KEYFRAME_ORDINAL_DUPLICATE`).
 
 Feature checks use `np.load(..., mmap_mode="r", allow_pickle=False)`. Arrays must be
 2-D, aligned with map rows, dimensionally consistent, use an allowed dtype, contain
@@ -59,7 +75,9 @@ Principal issue codes are:
 ```text
 REQUIRED_SOURCE_MISSING
 MAP_MISSING MAP_READ_ERROR MAP_REQUIRED_COLUMN_MISSING MAP_FEATURE_COUNT_MISMATCH
-FRAME_IDX_INVALID FRAME_IDX_NEGATIVE FRAME_IDX_DUPLICATE FRAME_IDX_NON_MONOTONIC
+FRAME_IDX_INVALID FRAME_IDX_NEGATIVE FRAME_IDX_DECREASING
+KEYFRAME_ORDINAL_INVALID KEYFRAME_ORDINAL_DUPLICATE
+FRAME_IDX_DUPLICATE FRAME_IDX_NON_MONOTONIC  # informational since Phase 3.1
 TIMESTAMP_INVALID TIMESTAMP_NON_MONOTONIC MAP_FPS_INVALID
 TIMESTAMP_FRAME_FPS_INCONSISTENT
 FEATURE_MISSING FEATURE_LOAD_ERROR FEATURE_INVALID_NDIM FEATURE_COUNT_MISMATCH
@@ -100,7 +118,8 @@ file detail but still writes the requested output file.
 
 ## Record And Cache Contract
 
-`AIC_RECORD_SCHEMA_VERSION = 2` is defined once in `ingestion/schemas.py` and used by
+`AIC_RECORD_SCHEMA_VERSION` (2 in Phase 3, advanced to 3 in Phase 3.1 when internal
+keyframe IDs moved to the keyframe ordinal) is defined once in `ingestion/schemas.py` and used by
 records, data signatures, cache fingerprints, and manifests. Video metadata now uses
 `media_title`, `media_description`, `media_tags`, `media_channel`, and
 `media_duration`, and `media_fps`. `frame_caption` is separate; legacy
@@ -140,10 +159,16 @@ KEYFRAME_IMAGE_MISSING: 1
 KEYFRAME_COUNT_MISMATCH: 1
 ```
 
-`L21_V027` has 292 mapped rows but only 180 images (112 missing). A representative
-frame-ID problem is `L21_V006`, whose first two rows both map to official
-`frame_idx=0`. The full report is generated at `artifacts/dataset_report.json` and is
-ignored by Git.
+`L21_V027` has 292 mapped rows but only 180 images (112 missing). The full report is
+generated at `artifacts/dataset_report.json` and is ignored by Git.
+
+Phase 3.1 re-examined this table. The 848 keyframe folders were not corrupt data: they
+belong to `L22`-`L30` packages the user has intentionally not downloaded, and they are
+now excluded by scope rather than reported as missing. The 192 duplicate/non-monotonic
+`frame_idx` videos are valid official data — `L21_V006`, whose first two rows both map
+to `frame_idx=0`, is the correct behaviour of `int(pts_time * fps)`, not a defect. See
+`docs/PHASE_3_1_DATASET_SCOPE_AND_MAPPING.md` for the evidence and the current L21
+numbers.
 
 Because the required data is invalid, the real cache was not rebuilt. `inspect-cache`
 still reports the pre-existing cache as `legacy=true`, `stale=true`, `valid=false`,

@@ -114,6 +114,13 @@ class BenchmarkLogger:
             cache_meta.setdefault("cache_manifest_schema", manifest_dict.get("schema_version"))
             cache_meta.setdefault("data_signature", manifest_dict.get("data_signature"))
             cache_meta.setdefault("code_version", manifest_dict.get("code_version"))
+            # Scope belongs in every run record: without it a later comparison cannot
+            # tell an L21 development run apart from a full-collection run.
+            cache_meta.setdefault("dataset_scope", manifest_dict.get("dataset_scope"))
+            cache_meta.setdefault("selected_video_count", manifest_dict.get("selected_video_count"))
+            cache_meta.setdefault(
+                "selected_video_ids_hash", manifest_dict.get("selected_video_ids_hash")
+            )
         dataset_report_dict = None
         if dataset_report is not None:
             if isinstance(dataset_report, (str, Path)):
@@ -137,6 +144,9 @@ class BenchmarkLogger:
                 "valid_for_index_build": dataset_report_dict.get("valid_for_index_build"),
                 "invalid_video_count": dataset_report_dict.get("invalid_video_count"),
                 "schema_version": dataset_report_dict.get("schema_version"),
+                "dataset_scope": dataset_report_dict.get("scope"),
+                "selected_video_count": dataset_report_dict.get("selected_video_count"),
+                "selected_video_ids_hash": dataset_report_dict.get("selected_video_ids_hash"),
             }
         (run_dir / "environment.json").write_text(json.dumps(env, ensure_ascii=False, indent=2), encoding="utf-8")
         summary_data = dict(summary or {})
@@ -148,12 +158,16 @@ class BenchmarkLogger:
             "cache_manifest_schema",
             "data_signature",
             "code_version",
+            "dataset_scope",
+            "selected_video_count",
+            "selected_video_ids_hash",
         ):
             if key in cache_meta:
                 summary_data.setdefault(key, cache_meta[key])
         if dataset_report_dict is not None:
             summary_data.setdefault("dataset_validated", dataset_report_dict.get("valid_for_index_build"))
             summary_data.setdefault("invalid_video_count", dataset_report_dict.get("invalid_video_count"))
+            summary_data.setdefault("dataset_scope", dataset_report_dict.get("scope"))
         (run_dir / "summary.json").write_text(
             json.dumps(summary_data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
