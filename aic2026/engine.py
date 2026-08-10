@@ -479,6 +479,20 @@ class AICCompetitionEngine:
         )
         return make_engine(entry), result
 
+    def dataset_identity(self) -> dict:
+        """Immutable dataset identity, so a caller can verify what this engine indexes.
+
+        Exposed so the runtime state can assert that the engine, the frame provider,
+        and the routes all describe the same dataset instead of trusting they do.
+        """
+        return {
+            "data_root": str(self.app_config.dataset.root),
+            "cache_dir": str(self.app_config.dataset.cache_dir),
+            "config_hash": self.config_hash,
+            "video_ids": sorted({raw.video_id for raw in self.entry.raws.values()}),
+            "frame_count": int(self.entry.num_indexed),
+        }
+
     def encode_query(self, query: str) -> np.ndarray:
         variants = encode_many(
             self.text_encoder,

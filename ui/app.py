@@ -1,6 +1,13 @@
-"""Flask backend for the AIC 2026 competition-oriented Rewind UI."""
+"""Flask backend for the AIC 2026 competition-oriented Rewind UI.
+
+Every dataset-dependent route resolves its facts from one `RuntimeDatasetState`
+snapshot taken at the start of the request. There is no module-level `DATA_ROOT` or
+cache path that can disagree with the active engine: the constants below are only
+defaults consulted while *constructing* the initial state, never while serving.
+"""
 from __future__ import annotations
 
+from dataclasses import replace as dataclass_replace
 from io import BytesIO
 from pathlib import Path
 from threading import Thread
@@ -13,55 +20,107 @@ from aic2026.cache_manifest import (
     CacheManifestError,
     LegacyCacheError,
     StaleCacheError,
-    cache_build_options_from_config,
-    detect_code_version,
-    inspect_cache,
 )
-from aic2026.config import AppConfig, config_hash, load_app_config
+from aic2026.config import AppConfig, DatasetScopeConfig, load_app_config, validate_app_config
 from aic2026.dataset import AICDataPaths, official_frame_id
-from aic2026.dataset_scope import scope_payload
-from aic2026.frame_provider import FrameProvider
+from aic2026.dataset_scope import DatasetScopeError, scope_payload
+from aic2026.dataset_validation import DatasetError, DatasetLayoutError, inspect_aic_dataset
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
 from aic2026.metrics import write_submission
+from aic2026.runtime_state import (
+    ACTIVE_STATE_NOT_CHANGED,
+    DATA_ROOT_INVALID,
+    RUNTIME_STATE_UNINITIALIZED,
+    STATE_BUILD_FAILED,
+    RuntimeDatasetState,
+    RuntimeStateError,
+    RuntimeStateManager,
+    build_runtime_state,
+    check_generation,
+    resolve_cache_dir,
+    safe_video_path,
+)
 from evaluation.official_eval import evaluate_labels, load_jsonl
 
 _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
+
+# Construction-time defaults only. Nothing below reads these while serving a request;
+# the active RuntimeDatasetState is the sole authority once the app is running.
 DATA_ROOT = _ROOT / "data"
 AIC_CACHE_DIR = _ROOT / "artifacts" / "aic2026_index"
 SUBMISSION_DIR = _ROOT / "artifacts" / "submissions"
 
+STATE_EXTENSION_KEY = "aic_runtime_state"
 
-def create_app(config_path: str | Path | None = None, app_config: AppConfig | None = None) -> Flask:
+
+def create_app(
+    config_path: str | Path | None = None,
+    app_config: AppConfig | None = None,
+    initial_data_root: str | Path | None = None,
+    initial_cache_dir: str | Path | None = None,
+) -> Flask:
+    """Build the app and publish an initial runtime state.
+
+    Precedence: an explicitly supplied `app_config` wins; otherwise `config_path` is
+    loaded; `initial_data_root` / `initial_cache_dir` then override the dataset roots.
+    Startup never rebuilds an index — it reports cache status and waits for an
+    explicit activate call.
+    """
     if app_config is None:
         if config_path is None:
             config_path = _ROOT / "configs" / "settings.yaml"
-            app_config = load_app_config(config_path, {"dataset": {"root": str(DATA_ROOT), "cache_dir": str(AIC_CACHE_DIR)}})
+            app_config = load_app_config(
+                config_path,
+                {"dataset": {"root": str(DATA_ROOT), "cache_dir": str(AIC_CACHE_DIR)}},
+            )
         else:
             app_config = load_app_config(config_path)
     config_path_text = str(config_path or "<in-memory>")
-    app = Flask(__name__)
 
-    state: dict = {
-        "engine": None,
-        "load": None,
-        "config": app_config,
-        "config_path": config_path_text,
-        "config_hash": config_hash(app_config),
+    data_root = str(initial_data_root or app_config.dataset.root)
+    cache_dir = resolve_cache_dir(app_config, data_root, explicit=initial_cache_dir)
+
+    app = Flask(__name__)
+    manager = RuntimeStateManager(
+        build_runtime_state(
+            app_config=app_config,
+            config_path=config_path_text,
+            generation=1,
+            data_root=data_root,
+            cache_dir=cache_dir,
+        )
+    )
+    app.extensions[STATE_EXTENSION_KEY] = manager
+    # App-level (non-dataset) settings, captured once so requests never read globals.
+    submission_dir = Path(SUBMISSION_DIR)
+    ui_state: dict = {
         "progress": {"active": False, "count": 0, "fps": 0.0, "elapsed": 0.0, "label": ""},
         "evaluation": {"active": False, "summary": None, "run_dir": None, "error": None},
     }
 
-    def _config_summary() -> dict:
-        cfg: AppConfig = state["config"]
+    # ------------------------------------------------------------------ helpers
+
+    def snapshot() -> RuntimeDatasetState:
+        """One state for the whole request. Never call this twice in one handler."""
+        return manager.get_state()
+
+    def _error(message: str, code: str, status: int, **extra):
+        return jsonify(error=message, error_code=code, **extra), status
+
+    def _state_error_response(exc: RuntimeStateError, *, status: int = 409):
+        return _error(str(exc), exc.error_code, status)
+
+    def _config_summary(state: RuntimeDatasetState) -> dict:
+        cfg = state.app_config
         return {
-            "path": state["config_path"],
-            "hash": state["config_hash"],
+            "path": state.config_path,
+            "hash": state.config_hash,
             "production_mode": cfg.runtime.production_mode,
             "device": cfg.runtime.device,
             "encoder_type": cfg.encoder.type,
             "feature_dim": cfg.encoder.feature_dim,
-            "dataset_scope": scope_payload(cfg.dataset.scope),
+            "dataset_scope": state.dataset_scope,
             "fusion_method": cfg.fusion.method,
             "final_top_k": cfg.ranking.final_top_k,
             "refinement_enabled": cfg.refinement.enabled,
@@ -69,97 +128,201 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             "qa_top_video_hypotheses": cfg.qa.top_video_hypotheses,
         }
 
-    def _cache_status() -> dict:
-        load = state.get("load")
-        if load is not None:
-            return load.cache_status()
-        cfg: AppConfig = state["config"]
-        expected = cache_build_options_from_config(cfg)
-        report = inspect_cache(
-            cfg.dataset.cache_dir,
-            expected,
-            validate_data_signature=cfg.cache.validate_data_signature,
-            code_version_policy=cfg.cache.code_version_policy,
-            current_code_version=detect_code_version(),
-        )
-        manifest = report.get("manifest") or {}
-        return {
-            "exists": report["exists"],
-            "hit": False,
-            "valid": report["valid"],
-            "legacy": report["legacy"],
-            "stale": report["stale"],
-            "stale_reason": report.get("stale_reason"),
-            "manifest_path": report["manifest_path"],
-            "fingerprint": manifest.get("cache_fingerprint"),
-            "created_at": manifest.get("created_at_utc"),
-            "code_version": manifest.get("code_version"),
-            "mismatches": report["hard_mismatches"],
-            "warnings": report["warnings"],
-        }
-
-    def _cache_error_response(exc: Exception):
+    def _cache_error_response(exc: Exception, state: RuntimeDatasetState):
+        """Cache problems are request/data states, never 500s. State is unchanged."""
+        common = {"cache": state.cache_status, "active_state": state.runtime_summary()}
         if isinstance(exc, LegacyCacheError):
-            return jsonify(error=str(exc), error_code="LEGACY_CACHE", cache=_cache_status()), 409
+            return jsonify(error=str(exc), error_code="LEGACY_CACHE", **common), 409
         if isinstance(exc, StaleCacheError):
-            return jsonify(error=str(exc), error_code="STALE_CACHE", cache=_cache_status()), 409
+            return jsonify(error=str(exc), error_code="STALE_CACHE", **common), 409
         if isinstance(exc, CacheManifestError):
-            return jsonify(
-                error=str(exc), error_code="CORRUPT_CACHE_MANIFEST", cache=_cache_status()
-            ), 422
+            return jsonify(error=str(exc), error_code="CORRUPT_CACHE_MANIFEST", **common), 422
         return None
 
-    def _frame_provider() -> FrameProvider:
-        cfg: AppConfig = state["config"]
-        key = (str(cfg.dataset.root), str(cfg.dataset.frame_cache_dir))
-        if state.get("frame_provider") is None or state.get("frame_provider_key") != key:
-            state["frame_provider"] = FrameProvider(
-                cfg.dataset.root, cache_dir=cfg.dataset.frame_cache_dir
+    def _engine_or_error(state: RuntimeDatasetState):
+        if state.engine is None:
+            return None, _error(
+                "AIC index is not loaded. Activate a dataset first.",
+                RUNTIME_STATE_UNINITIALIZED,
+                400,
             )
-            state["frame_provider_key"] = key
-        return state["frame_provider"]
+        return state.engine, None
 
-    def _engine_or_error():
-        engine = state.get("engine")
-        if engine is None:
-            return None, (jsonify(error="AIC index is not loaded. Click Dataset first."), 400)
-        return engine, None
+    def _scope_override(base: AppConfig, data: dict) -> AppConfig:
+        """Apply optional per-request scope overrides, validated like any config."""
+        scope = base.dataset.scope
+        changed = False
+        if data.get("scope_mode"):
+            scope = dataclass_replace(scope, mode=str(data["scope_mode"]))
+            changed = True
+        if data.get("include_patterns"):
+            scope = dataclass_replace(
+                scope, include_patterns=tuple(str(p) for p in data["include_patterns"])
+            )
+            changed = True
+        if data.get("exclude_patterns") is not None:
+            scope = dataclass_replace(
+                scope, exclude_patterns=tuple(str(p) for p in data["exclude_patterns"])
+            )
+            changed = True
+        if not changed:
+            return base
+        candidate = dataclass_replace(base, dataset=dataclass_replace(base.dataset, scope=scope))
+        validate_app_config(candidate)
+        return candidate
 
-    def _visual_json(engine: AICCompetitionEngine | None, keyframe_id: str | None) -> dict:
-        """Cheap availability facts only. Never decodes; Top-100 must stay fast."""
-        raw = None if engine is None or not keyframe_id else engine.entry.raws.get(keyframe_id)
-        if raw is None:
-            return {"image_available": False, "image_source": "none", "video_available": False}
-        return _frame_provider().describe(raw)
+    def _activate(state: RuntimeDatasetState, data: dict, *, data_root: str, cache_dir: str | None):
+        """Build a whole new state, then publish it. Failure leaves `state` active.
 
-    def _prediction_json(pred, engine: AICCompetitionEngine | None = None):
-        visual = _visual_json(engine, pred.keyframe_id)
+        Nothing on the live state is mutated before the very last step, so a partial
+        switch — engine from root B, routes still on root A — cannot happen.
+        """
+        root_path = Path(data_root)
+        if not root_path.is_dir():
+            return _error(
+                f"Invalid AIC data root: {data_root}",
+                DATA_ROOT_INVALID,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        try:
+            base_config = _scope_override(state.app_config, data)
+            effective_cache_dir = resolve_cache_dir(
+                base_config,
+                data_root,
+                explicit=cache_dir,
+                scope=base_config.dataset.scope,
+            )
+            effective_config = dataclass_replace(
+                base_config,
+                dataset=dataclass_replace(
+                    base_config.dataset, root=str(data_root), cache_dir=str(effective_cache_dir)
+                ),
+            )
+            engine, load = AICCompetitionEngine.from_data_root(
+                data_root,
+                cache_dir=effective_cache_dir,
+                rebuild=bool(data.get("rebuild", False)),
+                limit_videos=data.get("limit_videos"),
+                limit_frames_per_video=data.get("limit_frames_per_video"),
+                load_objects=bool(data["objects"]) if "objects" in data else None,
+                production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
+                allow_hashing_fallback=(
+                    bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None
+                ),
+                allow_stale_cache=(
+                    bool(data["allow_stale_cache"]) if "allow_stale_cache" in data else None
+                ),
+                device=data.get("device"),
+                app_config=effective_config,
+            )
+            new_state = build_runtime_state(
+                app_config=effective_config,
+                config_path=state.config_path,
+                generation=manager.next_generation(),
+                data_root=data_root,
+                cache_dir=effective_cache_dir,
+                engine=engine,
+                load=load,
+            )
+        except (LegacyCacheError, StaleCacheError, CacheManifestError) as exc:
+            cache_error = _cache_error_response(exc, state)
+            if cache_error is not None:
+                return cache_error
+            raise
+        except DatasetLayoutError as exc:
+            # The path exists but is not an AIC data root: a bad request, not bad data.
+            return _error(
+                str(exc),
+                DATA_ROOT_INVALID,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        except (DatasetError, DatasetScopeError) as exc:
+            return _error(
+                str(exc),
+                "DATASET_INVALID",
+                422,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        except RuntimeStateError as exc:
+            return _error(
+                str(exc), exc.error_code, 500, active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced as a 400 with the reason
+            return _error(
+                str(exc),
+                STATE_BUILD_FAILED,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+
+        published = manager.replace_state(new_state)
+        return jsonify(
+            video="__aic2026__",
+            cached=load.cache_hit,
+            build_seconds=round(load.build_seconds, 3),
+            frames=engine.entry.num_indexed,
+            folder=published.data_root,
+            stats=None if load.stats is None else load.stats.__dict__,
+            cache=published.cache_status,
+            manifest=None if load.cache_manifest is None else load.cache_manifest.to_dict(),
+            runtime=published.runtime_summary(),
+            active_state_changed=True,
+        )
+
+    def _prediction_json(state: RuntimeDatasetState, pred, available_videos: set[str]):
+        raw = state.engine.entry.raws.get(pred.keyframe_id) if pred.keyframe_id else None
+        visual = (
+            state.frame_provider.describe(raw)
+            if raw is not None
+            else {"image_available": False, "image_source": "none", "video_available": False}
+        )
+        # Logical API URLs only; a filesystem path is never handed to the frontend. The
+        # generation makes a result from a superseded dataset detectable.
+        image = (
+            f"/api/video/frame/{pred.keyframe_id}?generation={state.generation}"
+            if pred.keyframe_id
+            else None
+        )
+        video_url = (
+            f"/api/video/file/{pred.video_id}?generation={state.generation}"
+            if pred.video_id in available_videos
+            else None
+        )
         return {
             "video_id": pred.video_id,
             "frame_id": pred.frame_id,
             "id": pred.keyframe_id,
+            "generation": state.generation,
             "score": round(float(pred.score), 6),
             "answer": pred.answer,
             "event_frame_ids": pred.event_frame_ids,
             "timestamp": round(float(pred.timestamp), 3),
             "score_breakdown": pred.score_breakdown,
             "evidence": pred.evidence,
-            "image": f"/api/video/frame/{pred.keyframe_id}" if pred.keyframe_id else None,
+            "image": image,
             "image_available": visual["image_available"],
             "image_source": visual["image_source"],
             "video_available": visual["video_available"],
-            "video_url": f"/api/video/file/{pred.video_id}" if (Path(state["config"].dataset.root) / "video" / f"{pred.video_id}.mp4").exists() else None,
+            "video_url": video_url,
         }
 
-    def _frame_json(engine: AICCompetitionEngine, keyframe_id: str, extra: dict | None = None):
-        raw = engine.entry.raws[keyframe_id]
-        visual = _frame_provider().describe(raw)
+    def _frame_json(state: RuntimeDatasetState, keyframe_id: str, extra: dict | None = None):
+        raw = state.engine.entry.raws[keyframe_id]
+        visual = state.frame_provider.describe(raw)
         out = {
             "video_id": raw.video_id,
-            "frame_id": official_frame_id(engine.entry, keyframe_id),
+            "frame_id": official_frame_id(state.engine.entry, keyframe_id),
             "id": keyframe_id,
+            "generation": state.generation,
             "timestamp": round(float(raw.timestamp), 3),
-            "image": f"/api/video/frame/{keyframe_id}",
+            "image": f"/api/video/frame/{keyframe_id}?generation={state.generation}",
             "image_available": visual["image_available"],
             "image_source": visual["image_source"],
             "video_available": visual["video_available"],
@@ -167,6 +330,14 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
         if extra:
             out.update(extra)
         return out
+
+    def _available_videos(state: RuntimeDatasetState) -> set[str]:
+        video_dir = Path(state.app_config.dataset.root) / "video"
+        if not video_dir.is_dir():
+            return set()
+        return {path.stem for path in video_dir.glob("*.mp4")}
+
+    # ------------------------------------------------------------------- routes
 
     @app.get("/")
     def home():
@@ -180,152 +351,173 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
 
     @app.get("/api/health")
     def health():
-        engine = state.get("engine")
-        paths = AICDataPaths.from_root(state["config"].dataset.root)
-        feature_count = len(list(paths.features_dir.glob("*.npy"))) if paths.features_dir.exists() else 0
-        loaded = engine is not None
+        state = snapshot()
+        paths = AICDataPaths.from_root(state.app_config.dataset.root)
+        feature_count = (
+            len(list(paths.features_dir.glob("*.npy"))) if paths.features_dir.is_dir() else 0
+        )
+        engine = state.engine
         encoder = None if engine is None else engine.encoder_status()
-        mp4_count = len(list(paths.video_dir.glob("*.mp4"))) if paths.video_dir.exists() else 0
         return jsonify(
             ok=True,
             mode="aic2026",
-            loaded=loaded,
+            loaded=state.engine_loaded,
+            runtime=state.runtime_summary(),
             videos=0 if engine is None else len({r.video_id for r in engine.entry.raws.values()}),
             dataset_size=0 if engine is None else engine.entry.num_indexed,
-            data_root=str(state["config"].dataset.root),
+            # Kept for the existing frontend; identical to runtime.data_root.
+            data_root=str(state.app_config.dataset.root),
+            cache_dir=state.cache_dir,
             feature_videos=feature_count,
-            cache_dir=str(state["config"].dataset.cache_dir),
-            mp4_available=mp4_count,
+            mp4_available=state.video_inventory_summary.get("available_count", 0),
+            video=dict(state.video_inventory_summary),
+            dataset=state.dataset_status,
             encoder=encoder,
             warning=None if encoder is None else encoder.get("warning"),
-            config=_config_summary(),
-            cache=_cache_status(),
+            config=_config_summary(state),
+            cache=state.cache_status,
         )
 
     @app.get("/api/video/progress")
     def video_progress():
-        return jsonify(state["progress"])
+        return jsonify(ui_state["progress"])
 
     @app.get("/api/video/list")
     def video_list():
-        paths = AICDataPaths.from_root(state["config"].dataset.root)
-        videos = sorted(p.stem for p in paths.features_dir.glob("*.npy")) if paths.features_dir.exists() else []
-        indexed = ["__aic2026__"] if state.get("engine") is not None else []
-        return jsonify(videos=videos, indexed=indexed, folder=str(state["config"].dataset.root))
+        state = snapshot()
+        return jsonify(
+            videos=list(state.resolved_video_ids),
+            indexed=["__aic2026__"] if state.engine_loaded else [],
+            folder=str(state.app_config.dataset.root),
+            generation=state.generation,
+            scope=state.dataset_scope,
+        )
 
     @app.post("/api/video/index")
     def video_index():
+        """Activate the dataset the active state already points at."""
+        state = snapshot()
         data = request.json or {}
-        rebuild = bool(data.get("rebuild", False))
-        try:
-            engine, load = AICCompetitionEngine.from_data_root(
-                state["config"].dataset.root,
-                cache_dir=state["config"].dataset.cache_dir,
-                rebuild=rebuild,
-                limit_videos=data.get("limit_videos"),
-                limit_frames_per_video=data.get("limit_frames_per_video"),
-                load_objects=bool(data["objects"]) if "objects" in data else None,
-                production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
-                allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
-                allow_stale_cache=bool(data["allow_stale_cache"]) if "allow_stale_cache" in data else None,
-                device=data.get("device"),
-                app_config=state["config"],
-            )
-        except Exception as exc:
-            cache_error = _cache_error_response(exc)
-            if cache_error is not None:
-                return cache_error
-            return jsonify(error=str(exc)), 400
-        state["engine"] = engine
-        state["load"] = load
-        return jsonify(
-            video="__aic2026__",
-            cached=load.cache_hit,
-            build_seconds=round(load.build_seconds, 3),
-            frames=engine.entry.num_indexed,
-            stats=None if load.stats is None else load.stats.__dict__,
-            cache=load.cache_status(),
-            manifest=None if load.cache_manifest is None else load.cache_manifest.to_dict(),
-        )
+        return _activate(state, data, data_root=str(state.app_config.dataset.root), cache_dir=state.cache_dir)
 
     @app.post("/api/video/index_folder")
     def video_index_folder():
+        """Switch the active dataset root, atomically."""
+        state = snapshot()
         data = request.json or {}
         raw_path = (data.get("path") or "").strip().strip('"')
         if not raw_path:
-            return jsonify(error="AIC DATA_ROOT path is required."), 400
-        folder = Path(raw_path)
-        if not folder.is_dir():
-            return jsonify(error=f"Invalid AIC DATA_ROOT: {raw_path}"), 400
-        try:
-            engine, load = AICCompetitionEngine.from_data_root(
-                folder,
-                cache_dir=state["config"].dataset.cache_dir,
-                rebuild=bool(data.get("rebuild", False)),
-                load_objects=bool(data["objects"]) if "objects" in data else None,
-                production_mode=bool(data["production_mode"]) if "production_mode" in data else None,
-                allow_hashing_fallback=bool(data["allow_hashing_fallback"]) if "allow_hashing_fallback" in data else None,
-                allow_stale_cache=bool(data["allow_stale_cache"]) if "allow_stale_cache" in data else None,
-                device=data.get("device"),
-                app_config=state["config"],
+            return _error(
+                "AIC data root path is required.",
+                DATA_ROOT_INVALID,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
             )
-        except Exception as exc:
-            cache_error = _cache_error_response(exc)
-            if cache_error is not None:
-                return cache_error
-            return jsonify(error=str(exc)), 400
-        state["engine"] = engine
-        state["load"] = load
+        cache_dir = (data.get("cache_dir") or "").strip() or None
+        return _activate(state, data, data_root=raw_path, cache_dir=cache_dir)
+
+    @app.post("/api/dataset/inspect")
+    def dataset_inspect():
+        """Read-only inspection. Never activates and never mutates the active state."""
+        state = snapshot()
+        data = request.json or {}
+        raw_path = (data.get("path") or "").strip().strip('"') or str(
+            state.app_config.dataset.root
+        )
+        if not Path(raw_path).is_dir():
+            return _error(
+                f"Invalid AIC data root: {raw_path}",
+                DATA_ROOT_INVALID,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        try:
+            config = _scope_override(state.app_config, data)
+            config = dataclass_replace(
+                config, dataset=dataclass_replace(config.dataset, root=str(raw_path))
+            )
+            report = inspect_aic_dataset(
+                Path(raw_path),
+                app_config=config,
+                strict=False,
+                deep=bool(data.get("deep", False)),
+                limit_videos=data.get("limit_videos"),
+            )
+        except DatasetLayoutError as exc:
+            return _error(
+                str(exc),
+                DATA_ROOT_INVALID,
+                400,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
+        except (DatasetError, DatasetScopeError) as exc:
+            return _error(
+                str(exc),
+                "DATASET_INVALID",
+                422,
+                active_state=state.runtime_summary(),
+                active_state_changed=False,
+            )
         return jsonify(
-            video="__aic2026__",
-            cached=load.cache_hit,
-            frames=engine.entry.num_indexed,
-            folder=str(folder),
-            cache=load.cache_status(),
-            manifest=None if load.cache_manifest is None else load.cache_manifest.to_dict(),
+            inspected_root=str(Path(raw_path).resolve(strict=False).as_posix()),
+            summary=report.summary(),
+            active_state=state.runtime_summary(),
+            active_state_changed=False,
         )
 
     @app.post("/api/video/search")
     def video_search():
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
         data = request.json or {}
         query = (data.get("query") or "").strip()
         if not query:
-            return jsonify(error="Query is required."), 400
+            return _error("Query is required.", "QUERY_REQUIRED", 400)
         topk = max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20))))
         preds = engine.search_kis(query, top_k=topk)
+        available = _available_videos(state)
         return jsonify(
             task="kis",
             video="__aic2026__",
             query=query,
+            generation=state.generation,
             count=len(preds),
-            results=[_prediction_json(p, engine) for p in preds],
+            results=[_prediction_json(state, p, available) for p in preds],
             predictions=[p.row() for p in preds],
             encoder=engine.encoder_status(),
         )
 
     @app.post("/api/video/vqa")
     def video_vqa():
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
         data = request.json or {}
         question = (data.get("question") or "").strip()
         event_text = (data.get("event") or data.get("query") or "").strip()
         if not question and not event_text:
-            return jsonify(error="Question or event text is required."), 400
+            return _error("Question or event text is required.", "QUERY_REQUIRED", 400)
         preds, info = engine.answer_qa(
             event_text,
             question,
             top_k=max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20)))),
             window_s=float(data.get("window", 8.0)),
         )
-        frames = [_frame_json(engine, fid) for fid in info.get("frame_ids", []) if fid in engine.entry.raws]
+        frames = [
+            _frame_json(state, fid)
+            for fid in info.get("frame_ids", [])
+            if fid in engine.entry.raws
+        ]
         return jsonify(
             task="qa",
             video="__aic2026__",
+            generation=state.generation,
             question=question,
             event=event_text,
             answer=info.get("answer"),
@@ -346,13 +538,14 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
 
     @app.post("/api/video/temporal")
     def video_temporal():
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
         data = request.json or {}
         events = [e.strip() for e in (data.get("events") or []) if e and e.strip()]
         if len(events) < 2:
-            return jsonify(error="At least two ordered events are required."), 400
+            return _error("At least two ordered events are required.", "QUERY_REQUIRED", 400)
         try:
             preds, matches = engine.search_trake(
                 events,
@@ -361,31 +554,47 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
                 refine_window_s=float(data.get("refine_window", 6.0)),
             )
         except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+            return _error(str(exc), "QUERY_REQUIRED", 400)
         out = []
         for match in matches:
-            steps = []
-            for i, step in enumerate(match.steps):
-                steps.append(_frame_json(engine, step.keyframe_id, {"event": events[i]}))
-            out.append({"video_id": match.video_id, "total_score": round(float(match.total_score), 6), "steps": steps})
-        return jsonify(task="trake", video="__aic2026__", events=events, count=len(out), matches=out, predictions=[p.row() for p in preds])
+            steps = [
+                _frame_json(state, step.keyframe_id, {"event": events[index]})
+                for index, step in enumerate(match.steps)
+            ]
+            out.append(
+                {
+                    "video_id": match.video_id,
+                    "total_score": round(float(match.total_score), 6),
+                    "steps": steps,
+                }
+            )
+        return jsonify(
+            task="trake",
+            video="__aic2026__",
+            generation=state.generation,
+            events=events,
+            count=len(out),
+            matches=out,
+            predictions=[p.row() for p in preds],
+        )
 
     @app.get("/api/evaluation/status")
     def evaluation_status():
-        return jsonify(state["evaluation"])
+        return jsonify(ui_state["evaluation"])
 
     @app.post("/api/evaluation/run")
     def evaluation_run():
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
         data = request.json or {}
         labels_path = Path((data.get("labels") or "").strip())
         if not labels_path.is_file():
-            return jsonify(error="AIC JSONL ground-truth file is required."), 400
-        if state["evaluation"]["active"]:
-            return jsonify(error="An evaluation run is already active."), 409
-        state["evaluation"] = {"active": True, "summary": None, "run_dir": None, "error": None}
+            return _error("AIC JSONL ground-truth file is required.", "LABELS_REQUIRED", 400)
+        if ui_state["evaluation"]["active"]:
+            return _error("An evaluation run is already active.", "EVALUATION_ACTIVE", 409)
+        ui_state["evaluation"] = {"active": True, "summary": None, "run_dir": None, "error": None}
 
         def worker():
             try:
@@ -401,75 +610,105 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
                         )
                         return [p.row() for p in predictions]
                     events = label.get("events") or []
-                    event_text = [item.get("event", "") if isinstance(item, dict) else str(item) for item in events]
+                    event_text = [
+                        item.get("event", "") if isinstance(item, dict) else str(item)
+                        for item in events
+                    ]
                     predictions, _ = engine.search_trake(event_text, max_results=100)
                     return [p.row() for p in predictions]
 
                 summary, run_dir = evaluate_labels(labels, predictor, run_name="ui")
-                state["evaluation"] = {
+                ui_state["evaluation"] = {
                     "active": False, "summary": summary, "run_dir": str(run_dir), "error": None
                 }
             except Exception as exc:
-                state["evaluation"] = {
+                ui_state["evaluation"] = {
                     "active": False, "summary": None, "run_dir": None, "error": str(exc)
                 }
 
         Thread(target=worker, daemon=True).start()
         return jsonify(started=True), 202
+
     @app.post("/api/video/save")
     def video_save():
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
-        engine.entry.save(AIC_CACHE_DIR / "entry")
-        return jsonify(saved=["__aic2026__"], dir=str(AIC_CACHE_DIR))
+        entry_dir = Path(state.cache_dir) / "entry"
+        engine.entry.save(entry_dir)
+        return jsonify(
+            saved=["__aic2026__"], dir=str(entry_dir), generation=state.generation
+        )
 
     @app.post("/api/submission/save")
     def submission_save():
         data = request.json or {}
         rows = data.get("rows") or []
-        task = data.get("task") or "submission"
+        task = str(data.get("task") or "submission")
         if not rows:
-            return jsonify(error="No rows to save."), 400
-        path = write_submission(rows, SUBMISSION_DIR / f"{task}.csv")
+            return _error("No rows to save.", "NO_ROWS", 400)
+        if not task.replace("_", "").replace("-", "").isalnum():
+            return _error(f"Invalid submission name {task!r}.", "INVALID_SUBMISSION_NAME", 400)
+        path = write_submission(rows, submission_dir / f"{task}.csv")
         return jsonify(path=str(path), rows=min(len(rows), MAX_PREDICTIONS))
 
     @app.get("/api/video/neighbors/<path:frame_id>")
     def video_neighbors(frame_id: str):
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
+        try:
+            check_generation(state, request.args.get("generation"))
+        except RuntimeStateError as exc:
+            return _state_error_response(exc)
         if frame_id not in engine.entry.raws:
-            return jsonify(error="Frame not found."), 404
+            return _error("Frame not found.", "FRAME_NOT_FOUND", 404)
         raws = sorted(
             (r for r in engine.entry.raws.values() if r.video_id == engine.entry.raws[frame_id].video_id),
             key=lambda r: r.timestamp,
         )
-        idx = next(i for i, r in enumerate(raws) if r.id == frame_id)
-        chosen = raws[max(0, idx - 4): idx + 5]
-        return jsonify(frames=[_frame_json(engine, r.id, {"is_ref": r.id == frame_id}) for r in chosen])
+        index = next(i for i, r in enumerate(raws) if r.id == frame_id)
+        chosen = raws[max(0, index - 4): index + 5]
+        return jsonify(
+            generation=state.generation,
+            frames=[_frame_json(state, r.id, {"is_ref": r.id == frame_id}) for r in chosen],
+        )
 
     @app.get("/api/video/file/<video_id>")
     def video_file(video_id: str):
-        path = Path(state["config"].dataset.root) / "video" / f"{video_id}.mp4"
+        state = snapshot()
+        try:
+            check_generation(state, request.args.get("generation"))
+            path = safe_video_path(state, video_id)
+        except RuntimeStateError as exc:
+            return _state_error_response(exc, status=404 if "not part of" in str(exc) else 409)
         if not path.is_file():
-            return jsonify(error="Original MP4 is unavailable."), 404
+            return _error("Original MP4 is unavailable.", "VIDEO_FILE_MISSING", 404)
         return send_file(path, mimetype="video/mp4", conditional=True)
+
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):
-        engine, err = _engine_or_error()
+        state = snapshot()
+        engine, err = _engine_or_error(state)
         if err:
             return err
+        try:
+            check_generation(state, request.args.get("generation"))
+        except RuntimeStateError as exc:
+            return _state_error_response(exc)
         raw = engine.entry.raws.get(frame_id)
         if raw is None:
-            return jsonify(error="Frame not found.", error_code="FRAME_NOT_FOUND"), 404
+            return _error("Frame not found.", "FRAME_NOT_FOUND", 404)
         # BTC keyframe JPEG first, then a decode of the exact mapped frame from the
-        # original MP4. Decoding happens only here, when a frame is actually requested.
-        result = _frame_provider().get_frame(raw)
+        # original MP4 of the ACTIVE data root. Decoding happens only here.
+        result = state.frame_provider.get_frame(raw)
         if result.available:
             response = send_file(BytesIO(result.image_bytes), mimetype="image/jpeg")
             response.headers["X-Frame-Source"] = result.source
             response.headers["X-Frame-Id"] = "" if result.frame_idx is None else str(result.frame_idx)
+            response.headers["X-Runtime-Generation"] = str(state.generation)
             if result.warning:
                 response.headers["X-Frame-Warning"] = result.warning
             return response
@@ -478,6 +717,7 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             jsonify(
                 error="No visual source is available for this keyframe.",
                 error_code="FRAME_UNAVAILABLE",
+                generation=state.generation,
                 frame=result.to_dict(),
             ),
             422,

@@ -59,7 +59,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | Visual fallback | Fixed in Phase 3.2: `aic2026/frame_provider.py` serves a BTC keyframe JPEG, else decodes the mapped frame from the original MP4, else reports unavailable. Derived frames go only to `dataset.frame_cache_dir`. | Official `frame_idx` is never rewritten by decoder behaviour; official data is never modified; decoding is on demand, never for all Top-100. | `aic2026/frame_provider.py`, `aic2026/engine.py`, `ui/app.py` | Complete in Phase 3.2; Phase 5 refinement will reuse it. |
 | Video-backed scope | Fixed in Phase 3.2: scope mode `existing_videos` intersects MP4s on disk with map + CLIP, resolved from `DATA_ROOT` at run time. | The current development subset is reproducible without hard-coded IDs, and the cache fingerprint depends on the resolved IDs, not the mode name. | `aic2026/video_inventory.py`, `aic2026/dataset_scope.py`, `aic2026/cache_manifest.py`, `aic2026/cli.py` | Complete in Phase 3.2. |
 | Keyframe identity | Fixed in Phase 3.1: internal ID is `{video_id}/kf_{keyframe_ordinal:06d}`; `frame_idx` is carried separately and is the only submission value. Record schema advanced to v3. | v2's `{video_id}/{frame_idx}` collided on the 192 official videos that repeat a `frame_idx`, silently overwriting `entry.raws` entries. Engine no longer rebuilds the ID from `(video_id, frame_id)` after fusion. | `aic2026/dataset.py`, `aic2026/engine.py`, `aic2026/fusion.py`, `ingestion/schemas.py`, `retrieval/video_engine.py` | Complete in Phase 3.1. |
-| DATA_ROOT state | `index_folder` build engine tu folder moi, nhung health/list/video file/mp4 URL van dung global `DATA_ROOT`. | UI co the search root B nhung phuc vu video/health theo root A. | `ui/app.py` | Phase 4: dua `data_root`, `cache_dir`, config vao state va dung state cho moi endpoint. |
+| DATA_ROOT state | Fixed in Phase 4: one frozen `RuntimeDatasetState` plus a `RuntimeStateManager` own every dataset fact; each request takes one snapshot; activation builds a whole new state and replaces it atomically. | Engine, frame provider, health, video/frame routes, cache status and result URLs can no longer disagree about the active root; a failed switch leaves the previous state serving. | `aic2026/runtime_state.py`, `ui/app.py`, `aic2026/engine.py` | Complete in Phase 4. |
 | LocalFrameRefiner usage | `LocalFrameRefiner` ton tai va co test rieng, nhung `AICCompetitionEngine` khong khoi tao hoac goi refiner trong KIS/Q&A/TRAKE. | Documentation noi refinement co the lam nguoi doc hieu nham pipeline that da refine. | `aic2026/local_refinement.py`, `aic2026/engine.py` | Phase 5: interface result day du, goi refiner end-to-end theo config. |
 | `refine_window_s` | `search_trake(..., refine_window_s=6.0)` nhan tham so nhung khong dung. | UI/CLI co tham so vo tac dung; benchmark refinement bi gia. | `aic2026/engine.py`, `ui/app.py` | Phase 5: wire window vao refiner hoac bo option cho den khi hoat dong. |
 | MP4 missing fallback | Local refiner co keyframe-only fallback khi goi truc tiep, nhung engine khong goi refiner nen missing MP4 khong tham gia KIS/Q&A/TRAKE. | Khong co warning pipeline-level ve gioi han sampling khi thieu MP4. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py` | Phase 5: propagate refinement warning vao prediction/evidence/UI. |
@@ -149,7 +149,21 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 - Real MP4 fallback verified on `L21_V027/kf_000003` (JPEG genuinely absent): exact frame 300 decoded at 1280x720, official `frame_idx` preserved, derived frame written only under `artifacts/`.
 - Development cache `artifacts/aic2026_index_existing_videos` built and reported `valid=true, legacy=false, stale=false`. The legacy `artifacts/aic2026_index` was left untouched.
 - Advanced local refinement: still pending Phase 5, not implemented.
-- DATA_ROOT dynamic propagation: pending Phase 4, not started.
+
+## Phase 4 Status Update
+
+- Dynamic DATA_ROOT state: **fixed in Phase 4** commit `fix: unify runtime dataset state`; see `docs/PHASE_4_DYNAMIC_DATA_ROOT.md`.
+- `aic2026/runtime_state.py` adds a frozen `RuntimeDatasetState` and a locked `RuntimeStateManager`; `app.extensions["aic_runtime_state"]` holds the single authority.
+- Module-level `DATA_ROOT` / `AIC_CACHE_DIR` / `SUBMISSION_DIR` remain only as construction-time defaults and are never read while serving a request.
+- Activation is atomic: engine, frame provider and state are built first, and a failure leaves the previous state active with `active_state_changed: false`.
+- Every published state carries a `generation`; result URLs embed it and a superseded request gets `409 STALE_RESULT_GENERATION`.
+- `AICCompetitionEngine.dataset_identity()` plus `verify_engine_identity()` assert that engine, frame provider and routes describe the same root.
+- `POST /api/dataset/inspect` is read-only; only `index`/`index_folder` may replace state.
+- Video/frame routes reject traversal and out-of-scope IDs, and results contain only logical `/api/...` URLs.
+- Cache directories follow the dataset: explicit wins, the configured cache serves the configured root, and any other root derives a distinct directory.
+- Real smoke on the 29-video `existing_videos` development set reused the existing cache (`cached: true`) and verified JPEG serving, MP4 fallback, a KIS query, and stale-generation rejection.
+- Answers 10 and 11 in the verification list above are superseded: UI custom DATA_ROOT now updates all routes.
+- Local refinement, Q&A per-video hypotheses, TRAKE k-best, retrieval channels, submission validation and manual editing all remain pending.
 - Local refinement integration: pending Phase 5.
 - Q&A per-video hypothesis: pending Phase 6.
 - TRAKE complete/k-best output: pending Phase 7-8.

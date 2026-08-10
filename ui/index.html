@@ -117,7 +117,7 @@ a:hover { text-decoration: underline; }
         </label>
         <button id="gv-load" class="primary" title="Load selected index">Index</button>
         <button id="gv-dataset" title="Load full dataset cache">Dataset</button>
-        <button id="gv-folder-btn" title="Load a custom AIC data root">AIC Root</button>
+        <button id="gv-folder-btn" title="Activate a different AIC dataset root (DATA_ROOT). This replaces the whole runtime dataset state: engine, frames, videos and cache.">Dataset Root</button>
         <button id="gv-save" title="Save current index cache">Save</button>
         <div class="checks" aria-label="Index signals">
           <label><input id="gv-ocr" type="checkbox"> Objects</label>
@@ -277,8 +277,15 @@ function renderChains(chains) {
 }
 function renderHealth(health) {
   const enc = health.encoder || {};
+  // Active runtime dataset state: one generation, one dataset root, one cache.
+  const rt = health.runtime || {};
+  const scope = (rt.scope && rt.scope.mode) || "patterns";
+  const rootName = String(rt.data_root || "").split("/").filter(Boolean).pop() || "no root";
   const items = [
     badge(health.mode || "aic2026", "ok"),
+    badge(`gen ${rt.generation ?? "?"}`, rt.engine_loaded ? "ok" : "warn"),
+    badge(`root ${rootName}`, ""),
+    badge(`scope ${scope}`, ""),
     badge(`${health.videos || 0} videos`, ""),
     badge(`${health.dataset_size || 0} frames`, ""),
     badge(`${health.mp4_available || 0} mp4`, "blue"),
