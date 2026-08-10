@@ -29,6 +29,9 @@ class RuntimeConfig:
     time_budget_seconds: float = 20.0
 
 
+DATASET_SCOPE_MODES = ("patterns", "existing_videos")
+
+
 @dataclass(frozen=True)
 class DatasetScopeConfig:
     """Which canonical video IDs belong to the active dataset.
@@ -37,16 +40,31 @@ class DatasetScopeConfig:
     that inspection, index build, and cache identity all agree on one selection. The
     default selects the whole collection, so the full L21-L30 dataset needs no code
     change: only configuration.
+
+    ``mode`` adds a source constraint underneath the patterns:
+
+    ``patterns``
+        select by video-ID glob alone.
+    ``existing_videos``
+        additionally require that the original MP4 exists on disk *and* that the video
+        has map + CLIP support. Resolved against ``DATA_ROOT`` at run time, so the
+        resolved ID set — not the mode string — is what identifies the cache.
     """
 
     include_patterns: tuple[str, ...] = ("*",)
     exclude_patterns: tuple[str, ...] = ()
+    mode: str = "patterns"
 
 
 @dataclass(frozen=True)
 class DatasetValidationConfig:
     strict_alignment: bool = True
-    require_keyframe_images: bool = True
+    # Phase 3.2: BTC keyframe JPEGs are SUPPORTING data, so their absence no longer
+    # blocks the official-CLIP global index. `require_visual_source` asks the weaker,
+    # architecturally correct question: does each selected video have *some* visual
+    # source, a keyframe JPEG or the original MP4? Off by default, because a
+    # retrieval-only development subset is legitimate.
+    require_visual_source: bool = False
     strict_objects: bool = False
     verify_feature_finite: bool = True
     verify_feature_norms: bool = True
@@ -60,6 +78,9 @@ class DatasetValidationConfig:
 class DatasetConfig:
     root: str = "data"
     cache_dir: str = "artifacts/aic2026_index"
+    # Derived frames decoded from the original MP4s. A disposable visual artifact
+    # cache: never part of the retrieval cache manifest, and never inside DATA_ROOT.
+    frame_cache_dir: str = "artifacts/video_frame_cache"
     load_objects: bool = False
     include_media_text: bool = False
     verify_keyframes: bool = False
@@ -183,7 +204,16 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     source = copy.deepcopy(dict(data))
     raw = source.get("aic2026", source)
     dataset_raw = dict(raw.get("dataset") or {})
-    validation_raw = dataset_raw.pop("validation", None)
+    validation_raw = dict(dataset_raw.pop("validation", None) or {})
+    if "require_keyframe_images" in validation_raw:
+        # Removed in Phase 3.2 rather than silently ignored: its meaning changed, and a
+        # dropped key would quietly re-enable an index build this config meant to block.
+        raise ConfigError(
+            "dataset.validation.require_keyframe_images was removed in Phase 3.2 because "
+            "BTC keyframe JPEGs are supporting data, not a retrieval requirement. Use "
+            "dataset.validation.require_visual_source to demand a keyframe JPEG or an "
+            "original MP4 for every selected video."
+        )
     dataset_raw["validation"] = _construct(DatasetValidationConfig, validation_raw)
     scope_raw = dict(dataset_raw.pop("scope", None) or {})
     for key in ("include_patterns", "exclude_patterns"):
@@ -286,6 +316,10 @@ def _validate_runtime(cfg: RuntimeConfig) -> None:
 
 def _validate_scope(cfg: DatasetScopeConfig) -> None:
     _require(
+        cfg.mode in DATASET_SCOPE_MODES,
+        f"dataset.scope.mode must be one of {', '.join(DATASET_SCOPE_MODES)}",
+    )
+    _require(
         bool(cfg.include_patterns),
         "dataset.scope.include_patterns must be non-empty; use [\"*\"] for the full dataset",
     )
@@ -307,14 +341,22 @@ def _validate_scope(cfg: DatasetScopeConfig) -> None:
 def _validate_dataset(cfg: DatasetConfig) -> None:
     validation = cfg.validation
     _validate_scope(cfg.scope)
+    _require(
+        bool(str(cfg.frame_cache_dir).strip()),
+        "dataset.frame_cache_dir must be non-empty",
+    )
+    _require(
+        Path(cfg.frame_cache_dir).resolve(strict=False)
+        != Path(cfg.root).resolve(strict=False)
+        and Path(cfg.root).resolve(strict=False)
+        not in Path(cfg.frame_cache_dir).resolve(strict=False).parents,
+        "dataset.frame_cache_dir must not live inside DATA_ROOT; derived frames must "
+        "never be mistaken for BTC-provided data",
+    )
     _require(cfg.index_kind in {"flat", "hnsw"}, "dataset.index_kind must be flat or hnsw")
     _require(
         bool(validation.strict_alignment),
         "dataset.validation.strict_alignment must remain true; non-strict mode is inspection-only",
-    )
-    _require(
-        bool(validation.require_keyframe_images),
-        "dataset.validation.require_keyframe_images must remain true for index builds",
     )
     _require(
         bool(validation.supported_feature_dtypes),

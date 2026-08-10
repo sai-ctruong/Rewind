@@ -94,11 +94,12 @@ def make_config(
     load_objects: bool = False,
     include_media_text: bool = True,
     strict_objects: bool = False,
+    require_visual_source: bool = False,
     supported_dtypes: tuple[str, ...] = ("float16", "float32"),
 ) -> AppConfig:
     validation: dict = {
         "strict_alignment": True,
-        "require_keyframe_images": True,
+        "require_visual_source": require_visual_source,
         "strict_objects": strict_objects,
         "supported_feature_dtypes": list(supported_dtypes),
     }
@@ -145,7 +146,7 @@ def write_cli_config(path: Path, config: AppConfig) -> Path:
                 "include_media_text": config.dataset.include_media_text,
                 "validation": {
                     "strict_alignment": True,
-                    "require_keyframe_images": True,
+                    "require_visual_source": config.dataset.validation.require_visual_source,
                     "strict_objects": config.dataset.validation.strict_objects,
                     "expected_feature_dim": config.encoder.feature_dim,
                 },
@@ -251,10 +252,22 @@ def test_missing_required_feature_is_reported(tmp_path) -> None:
     assert {"FEATURE_MISSING", "REQUIRED_SOURCE_MISSING"} <= issue_codes(report)
 
 
-def test_missing_keyframe_image_is_error(tmp_path) -> None:
+def test_missing_keyframe_image_is_reported_without_blocking_retrieval(tmp_path) -> None:
+    """Phase 3.2: keyframe JPEGs are supporting data, not a retrieval requirement."""
     root = make_dataset(tmp_path / "data")
     (root / "keyframes" / VIDEO_ID / "002.jpg").unlink()
-    assert "KEYFRAME_IMAGE_MISSING" in issue_codes(inspect(root, make_config(root)))
+    report = inspect(root, make_config(root))
+    assert {"KEYFRAME_IMAGE_MISSING", "KEYFRAME_JPEG_UNAVAILABLE"} <= issue_codes(report)
+    assert report.valid_for_index_build
+    assert report.videos[0].retrieval_valid
+
+
+def test_missing_keyframe_image_errors_only_when_visual_source_is_required(tmp_path) -> None:
+    root = make_dataset(tmp_path / "data")
+    shutil.rmtree(root / "keyframes" / VIDEO_ID)
+    report = inspect(root, make_config(root, require_visual_source=True))
+    assert "VISUAL_SOURCE_UNAVAILABLE" in issue_codes(report)
+    assert not report.valid_for_index_build
 
 
 def test_orphan_keyframe_image_is_reported(tmp_path) -> None:
@@ -264,11 +277,14 @@ def test_orphan_keyframe_image_is_reported(tmp_path) -> None:
     assert {"KEYFRAME_IMAGE_ORPHAN", "KEYFRAME_COUNT_MISMATCH"} <= issue_codes(report)
 
 
-def test_missing_keyframe_folder_is_reported(tmp_path) -> None:
+def test_missing_keyframe_folder_is_reported_but_retrieval_stays_valid(tmp_path) -> None:
     root = make_dataset(tmp_path / "data")
     shutil.rmtree(root / "keyframes" / VIDEO_ID)
     report = inspect(root, make_config(root))
-    assert {"KEYFRAME_FOLDER_MISSING", "REQUIRED_SOURCE_MISSING"} <= issue_codes(report)
+    assert {"KEYFRAME_FOLDER_MISSING", "KEYFRAME_JPEG_UNAVAILABLE"} <= issue_codes(report)
+    assert "REQUIRED_SOURCE_MISSING" not in issue_codes(report)
+    assert report.valid_for_index_build
+    assert report.videos[0].visual_source == "none"
 
 
 def test_feature_ndim_must_be_two(tmp_path) -> None:

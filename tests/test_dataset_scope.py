@@ -182,12 +182,24 @@ def test_missing_keyframes_outside_scope_do_not_invalidate_the_selection(tmp_pat
     assert "REQUIRED_SOURCE_MISSING" not in report.issue_counts
 
 
-def test_missing_keyframe_inside_scope_still_invalidates_the_selection(tmp_path) -> None:
-    root = make_collection(tmp_path / "data", without_images=("L21_V002",))
+def test_missing_required_source_inside_scope_still_invalidates_the_selection(tmp_path) -> None:
+    """Phase 3.2 narrowed 'required' to map + CLIP; those are still strict."""
+    root = make_collection(tmp_path / "data")
+    (root / "clip-features-32" / "L21_V002.npy").unlink()
     report = inspect_aic_dataset(root, app_config=make_config(root, include=["L21_*"]))
     assert not report.valid_for_index_build
     assert report.invalid_selected_video_ids == ["L21_V002"]
+    assert {"FEATURE_MISSING", "REQUIRED_SOURCE_MISSING"} <= set(report.issue_counts)
+
+
+def test_missing_keyframes_inside_scope_no_longer_invalidate_retrieval(tmp_path) -> None:
+    """Keyframe JPEGs are supporting data even inside the selected scope."""
+    root = make_collection(tmp_path / "data", without_images=("L21_V002",))
+    report = inspect_aic_dataset(root, app_config=make_config(root, include=["L21_*"]))
+    assert report.valid_for_index_build
+    assert report.retrieval_valid_video_count == 2
     assert report.videos[1].missing_keyframe_ordinals == [1, 2]
+    assert report.videos[1].visual_source == "none"
 
 
 def test_report_counts_discovered_selected_and_excluded_separately(tmp_path) -> None:
@@ -197,7 +209,11 @@ def test_report_counts_discovered_selected_and_excluded_separately(tmp_path) -> 
     assert report.selected_video_count == report.video_count == 2
     assert report.excluded_video_count == 2
     assert report.excluded_video_ids_sample == ["L22_V001", "L30_V999"]
-    assert report.scope == {"include_patterns": ["L21_*"], "exclude_patterns": []}
+    assert report.scope == {
+        "mode": "patterns",
+        "include_patterns": ["L21_*"],
+        "exclude_patterns": [],
+    }
     assert report.selected_video_ids_hash == hash_selected_video_ids(["L21_V001", "L21_V002"])
 
 
@@ -247,6 +263,7 @@ def test_cli_repeated_include_and_exclude_options(tmp_path, capsys) -> None:
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["scope"] == {
+        "mode": "patterns",
         "include_patterns": ["L21_*", "L22_*"],
         "exclude_patterns": ["L21_V002"],
     }
@@ -315,8 +332,13 @@ def test_built_manifest_records_scope_and_selected_ids_hash(tmp_path) -> None:
         app_config=config, text_encoder=TinyTextEncoder(), rebuild=True
     )
     manifest = read_cache_manifest(cache / CACHE_MANIFEST_FILENAME)
-    assert manifest.dataset_scope == {"include_patterns": ["L21_*"], "exclude_patterns": []}
+    assert manifest.dataset_scope == {
+        "mode": "patterns",
+        "include_patterns": ["L21_*"],
+        "exclude_patterns": [],
+    }
     assert manifest.selected_video_count == 2
+    assert manifest.selected_video_ids == ["L21_V001", "L21_V002"]
     assert manifest.selected_video_ids_hash == hash_selected_video_ids(["L21_V001", "L21_V002"])
     assert manifest.record_schema_version == AIC_RECORD_SCHEMA_VERSION
     assert load.stats.discovered_videos == 4
@@ -359,7 +381,11 @@ def test_benchmark_run_records_the_dataset_scope(tmp_path) -> None:
     )
     summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
     environment = json.loads((run / "environment.json").read_text(encoding="utf-8"))
-    assert summary["dataset_scope"] == {"include_patterns": ["L21_*"], "exclude_patterns": []}
+    assert summary["dataset_scope"] == {
+        "mode": "patterns",
+        "include_patterns": ["L21_*"],
+        "exclude_patterns": [],
+    }
     assert summary["selected_video_count"] == 2
     assert summary["selected_video_ids_hash"] == load.cache_manifest.selected_video_ids_hash
     assert environment["dataset_validation"]["dataset_scope"] == scope_payload(config.dataset.scope)

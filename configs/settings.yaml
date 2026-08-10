@@ -290,22 +290,32 @@ aic2026:
   dataset:
     root: data
     cache_dir: artifacts/aic2026_index
+    # Frames decoded from the original MP4s when a BTC keyframe JPEG is absent. These
+    # are DERIVED artifacts: disposable, outside DATA_ROOT, and never part of the
+    # retrieval cache manifest.
+    frame_cache_dir: artifacts/video_frame_cache
     load_objects: false
     include_media_text: false
     verify_keyframes: false
     index_kind: flat
     # Which canonical video IDs form the active dataset. Defaults to the full L21-L30
-    # collection. To develop on one collection, override on the command line instead of
+    # collection. To develop on a subset, override on the command line instead of
     # editing this file, for example:
-    #   --video-include "L21_*" --cache-dir artifacts/aic2026_index_L21
+    #   --video-include "L21_*"        --cache-dir artifacts/aic2026_index_L21
+    #   --scope-existing-videos        --cache-dir artifacts/aic2026_index_existing_videos
     # Sources outside the selected scope are reported as excluded, never as missing.
+    # mode: patterns | existing_videos (MP4 on disk AND map + CLIP present).
     scope:
+      mode: patterns
       include_patterns:
         - "*"
       exclude_patterns: []
     validation:
       strict_alignment: true
-      require_keyframe_images: true
+      # BTC keyframe JPEGs are SUPPORTING data: their absence never blocks the
+      # official-CLIP global index. Set true only to demand that every selected video
+      # has at least one visual source (keyframe JPEG or original MP4).
+      require_visual_source: false
       strict_objects: false
       verify_feature_finite: true
       verify_feature_norms: true

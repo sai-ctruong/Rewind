@@ -89,11 +89,15 @@ exactly `selected_video_count`; `DATASET_INSPECTION_SCHEMA_VERSION` is `2`.
 
 ## 5. Required Versus Optional Sources Within A Scope
 
+> **Updated by Phase 3.2.** Keyframe images are supporting data and were removed from
+> the required set; see `docs/PHASE_3_2_VIDEO_BACKED_DEVELOPMENT.md`.
+
 Required for every **selected** video:
 
 - `map-keyframes/{video_id}.csv`
 - `clip-features-32/{video_id}.npy`
-- `keyframes/{video_id}` with one image per keyframe ordinal
+- ~~`keyframes/{video_id}` with one image per keyframe ordinal~~ (Phase 3.2: optional;
+  a missing JPEG is covered by the original MP4 and never blocks retrieval)
 
 Optional, exactly as in Phase 3: `objects/` (policy from `load_objects` /
 `strict_objects`), `media-info/`, and `video/{video_id}.mp4`. Missing MP4s stay a
@@ -295,8 +299,14 @@ completely downloaded L21 videos passes cleanly:
 
 ## 14. Cache Rebuild Status
 
-**No cache was rebuilt.** The `L21_*` scope is not `valid_for_index_build`, so per
-policy no new index was produced. The pre-existing `artifacts/aic2026_index` was not
+> **Resolved in Phase 3.2.** All five blocking videos have their original MP4 on disk,
+> so once keyframe JPEGs became supporting data the video-backed scope reached
+> `valid_for_index_build: true` and `artifacts/aic2026_index_existing_videos` was built
+> from the same 29 IDs — with no additional download. See
+> `docs/PHASE_3_2_VIDEO_BACKED_DEVELOPMENT.md`.
+
+**No cache was rebuilt in Phase 3.1.** The `L21_*` scope was not
+`valid_for_index_build`, so per policy no new index was produced. The pre-existing `artifacts/aic2026_index` was not
 touched and still reports `legacy=true`, `stale=true`, `valid=false`, `corrupt=false`
 because it has an entry and no manifest. No full-collection cache was rebuilt either.
 

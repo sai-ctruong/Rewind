@@ -19,9 +19,11 @@ from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
 from .config import AppConfig, DatasetScopeConfig
 from .dataset_scope import (
     DatasetScopeError,
+    ResolvedDatasetScope,
     excluded_video_ids,
     hash_selected_video_ids,
     normalize_scope,
+    resolve_dataset_scope,
     scope_payload,
     select_video_ids,
 )
@@ -121,15 +123,63 @@ class VideoDatasetReport:
     corrupt_object_files: int = 0
     feature_non_finite_count: int = 0
     feature_zero_vector_count: int = 0
+    map_available: bool = False
+    features_available: bool = False
+    keyframe_jpeg_available: bool = False
+    video_available: bool = False
     issues: list[DatasetIssue] = field(default_factory=list)
 
     @property
     def valid(self) -> bool:
         return not any(issue.severity == "error" for issue in self.issues)
 
+    @property
+    def retrieval_valid(self) -> bool:
+        """Can this video enter the official-CLIP global index?
+
+        Needs map + CLIP features and no hard error. Keyframe JPEGs and the original
+        MP4 are irrelevant here: coarse retrieval scores official feature vectors.
+        """
+        return self.map_available and self.features_available and self.valid
+
+    @property
+    def visual_accessible(self) -> bool:
+        """Is at least one visual source available for this video?"""
+        return self.keyframe_jpeg_available or self.video_available
+
+    @property
+    def refinement_ready(self) -> bool:
+        """Phase 5 local refinement needs the original MP4, nothing less."""
+        return self.video_available
+
+    @property
+    def qa_visual_ready(self) -> bool:
+        """Visual Q&A needs real pixels; text-only evidence does not count."""
+        return self.visual_accessible
+
+    @property
+    def visual_source(self) -> str:
+        """The source that makes every mapped keyframe of this video viewable.
+
+        `keyframe_jpeg` only when the BTC images cover all mapped ordinals; a partially
+        downloaded folder still needs the MP4, so it reports `video_decode`.
+        """
+        if self.keyframe_jpeg_available and not self.missing_keyframes:
+            return "keyframe_jpeg"
+        if self.video_available:
+            return "video_decode"
+        if self.keyframe_jpeg_available:
+            return "keyframe_jpeg"
+        return "none"
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["valid"] = self.valid
+        data["retrieval_valid"] = self.retrieval_valid
+        data["visual_accessible"] = self.visual_accessible
+        data["refinement_ready"] = self.refinement_ready
+        data["qa_visual_ready"] = self.qa_visual_ready
+        data["visual_source"] = self.visual_source
         return data
 
 
@@ -171,6 +221,15 @@ class DatasetInspectionReport:
     duplicate_official_frame_idx_count: int = 0
     duplicate_internal_keyframe_id_count: int = 0
     invalid_selected_video_ids: list[str] = field(default_factory=list)
+    # Phase 3.2 capability counts over the SELECTED videos.
+    retrieval_valid_video_count: int = 0
+    visual_accessible_video_count: int = 0
+    refinement_ready_video_count: int = 0
+    qa_visual_ready_video_count: int = 0
+    keyframe_jpeg_backed_video_count: int = 0
+    video_fallback_video_count: int = 0
+    no_visual_source_video_count: int = 0
+    selected_video_ids: list[str] = field(default_factory=list)
     inspection_seconds: float = 0.0
 
     def summary(self, *, report_path: str | None = None) -> dict[str, Any]:
@@ -192,6 +251,13 @@ class DatasetInspectionReport:
             "total_keyframe_images": self.total_keyframe_images,
             "feature_dimensions": self.feature_dimensions,
             "feature_dtypes": self.feature_dtypes,
+            "retrieval_valid_video_count": self.retrieval_valid_video_count,
+            "visual_accessible_video_count": self.visual_accessible_video_count,
+            "refinement_ready_video_count": self.refinement_ready_video_count,
+            "qa_visual_ready_video_count": self.qa_visual_ready_video_count,
+            "keyframe_jpeg_backed_video_count": self.keyframe_jpeg_backed_video_count,
+            "video_fallback_video_count": self.video_fallback_video_count,
+            "no_visual_source_video_count": self.no_visual_source_video_count,
             "duplicate_official_frame_idx_count": self.duplicate_official_frame_idx_count,
             "duplicate_internal_keyframe_id_count": self.duplicate_internal_keyframe_id_count,
             "issue_counts": self.issue_counts,
@@ -560,20 +626,45 @@ def _validate_keyframes(
     ordinals: Sequence[int],
     report: VideoDatasetReport,
     *,
-    require_images: bool,
     deep: bool,
     max_decode_checks: int | None,
 ) -> None:
+    """Inventory the BTC keyframe JPEGs.
+
+    Phase 3.2: these are *supporting* data. A missing image is reported, but it never
+    makes a video retrieval-invalid — the global index is built from the official CLIP
+    feature arrays, and the original MP4 supplies pixels on demand. The severity here
+    reflects only whether some visual source remains: `info` when the MP4 can cover the
+    gap, `warning` when nothing can.
+    """
+    fallback = "video_decode" if report.video_available else "none"
+    severity = "info" if report.video_available else "warning"
     if not folder.is_dir():
         _issue(
             report,
-            "error",
+            severity,
             "KEYFRAME_FOLDER_MISSING",
             source="keyframes",
             path=folder,
-            message="Required keyframe folder is missing.",
+            message=(
+                "Supporting keyframe folder is absent; visual fallback="
+                f"{fallback}. Global retrieval is unaffected."
+            ),
             expected="directory",
             actual=None,
+        )
+        _issue(
+            report,
+            severity,
+            "KEYFRAME_JPEG_UNAVAILABLE",
+            source="keyframes",
+            path=folder,
+            message=(
+                f"No BTC keyframe JPEG for any of {len(ordinals)} mapped keyframe(s); "
+                f"visual fallback={fallback}."
+            ),
+            expected="keyframe JPEG or original MP4",
+            actual=fallback,
         )
         report.missing_keyframes = len(ordinals)
         report.missing_keyframe_ordinals = list(ordinals[:50])
@@ -593,7 +684,7 @@ def _validate_keyframes(
             expected_paths.add(image_path.resolve(strict=False))
     report.missing_keyframes = len(missing)
     report.missing_keyframe_ordinals = missing[:50]
-    severity = "error" if require_images else "warning"
+    report.keyframe_jpeg_available = bool(image_paths)
     if missing:
         _issue(
             report,
@@ -601,9 +692,24 @@ def _validate_keyframes(
             "KEYFRAME_IMAGE_MISSING",
             source="keyframes",
             path=folder,
-            message=f"Missing {len(missing)} mapped keyframe image(s); first ordinals={missing[:10]}.",
+            message=(
+                f"Missing {len(missing)} mapped keyframe image(s); first ordinals={missing[:10]}; "
+                f"visual fallback={fallback}."
+            ),
             expected=len(ordinals),
             actual=len(ordinals) - len(missing),
+        )
+        _issue(
+            report,
+            severity,
+            "KEYFRAME_JPEG_UNAVAILABLE",
+            source="keyframes",
+            path=folder,
+            message=(
+                f"{len(missing)} mapped keyframe(s) have no BTC JPEG; visual fallback={fallback}."
+            ),
+            expected="keyframe JPEG or original MP4",
+            actual=fallback,
         )
     orphan = [path.name for path in image_paths if path.resolve(strict=False) not in expected_paths]
     if orphan:
@@ -620,7 +726,7 @@ def _validate_keyframes(
     if len(image_paths) != len(ordinals):
         _issue(
             report,
-            severity,
+            "info" if report.video_available else "warning",
             "KEYFRAME_COUNT_MISMATCH",
             source="keyframes",
             path=folder,
@@ -891,7 +997,7 @@ def inspect_aic_dataset(
     strict: bool = False,
     deep: bool = False,
     limit_videos: int | None = None,
-    scope: DatasetScopeConfig | None = None,
+    scope: DatasetScopeConfig | ResolvedDatasetScope | None = None,
 ) -> DatasetInspectionReport:
     import time
 
@@ -913,7 +1019,9 @@ def inspect_aic_dataset(
     # only domain that is validated: sources outside the scope can be absent without
     # making the selected dataset invalid.
     discovered_ids = sorted(required_ids | set(object_folders) | set(media_files) | set(video_files))
-    effective_scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
+    effective_scope = resolve_dataset_scope(
+        scope if scope is not None else app_config.dataset.scope, root
+    )
     all_ids = list(select_video_ids(discovered_ids, effective_scope))
     if limit_videos is not None:
         all_ids = all_ids[: max(0, int(limit_videos))]
@@ -933,6 +1041,12 @@ def inspect_aic_dataset(
         feature_path = feature_files.get(video_id)
         keyframe_folder = keyframe_folders.get(video_id)
         is_required_id = video_id in required_ids
+        # Source availability is recorded up front: keyframe severity depends on whether
+        # the original MP4 can still supply pixels.
+        report.map_available = map_path is not None
+        report.features_available = feature_path is not None
+        report.video_available = video_id in video_files
+        report.video_exists = report.video_available
         if map_path is None and is_required_id:
             missing_sources["map"].append(video_id)
             missing_path = root / "map-keyframes" / f"{video_id}.csv"
@@ -944,9 +1058,10 @@ def inspect_aic_dataset(
             _issue(report, "error", "FEATURE_MISSING", source="features", path=missing_path, message="Required CLIP feature file is missing.", expected="existing NPY", actual=None)
             _issue(report, "error", "REQUIRED_SOURCE_MISSING", source="features", path=missing_path, message="A required feature source is missing.", expected="features", actual=None)
         if keyframe_folder is None and is_required_id:
+            # Recorded as a missing *supporting* source. `_validate_keyframes` raises the
+            # KEYFRAME_JPEG_UNAVAILABLE diagnostic with the right severity for whether
+            # the original MP4 can still supply pixels.
             missing_sources["keyframes"].append(video_id)
-            missing_path = root / "keyframes" / video_id
-            _issue(report, "error", "REQUIRED_SOURCE_MISSING", source="keyframes", path=missing_path, message="A required keyframe source is missing.", expected="keyframe folder", actual=None)
         if video_id not in object_folders and is_required_id:
             missing_sources["objects"].append(video_id)
         if video_id not in media_files and is_required_id:
@@ -1019,10 +1134,23 @@ def inspect_aic_dataset(
                 keyframe_folder or root / "keyframes" / video_id,
                 ordinals,
                 report,
-                require_images=validation.require_keyframe_images,
                 deep=deep or validation.verify_image_decode,
                 max_decode_checks=validation.max_image_decode_checks_per_video,
             )
+            if validation.require_visual_source and not report.visual_accessible:
+                _issue(
+                    report,
+                    "error",
+                    "VISUAL_SOURCE_UNAVAILABLE",
+                    source="keyframes",
+                    path=root / "keyframes" / video_id,
+                    message=(
+                        "require_visual_source=true but this video has neither a BTC "
+                        "keyframe JPEG nor an original MP4."
+                    ),
+                    expected="keyframe JPEG or original MP4",
+                    actual="none",
+                )
         _validate_objects(
             object_folders.get(video_id, root / "objects" / video_id),
             ordinals,
@@ -1031,7 +1159,24 @@ def inspect_aic_dataset(
             strict_objects=validation.strict_objects,
         )
         _validate_media(media_files.get(video_id, root / "media-info" / f"{video_id}.json"), report)
-        report.video_exists = video_id in video_files
+        # An MP4 with no map/CLIP cannot join the official-feature index. Reported, never
+        # silently mapped, and never a hard error: a stray video must not invalidate an
+        # otherwise complete collection. Scope mode `existing_videos` excludes these.
+        if report.video_available and not (report.map_available and report.features_available):
+            _issue(
+                report,
+                "warning",
+                "VIDEO_PRESENT_BUT_RETRIEVAL_SUPPORT_MISSING",
+                source="video",
+                path=video_files.get(video_id),
+                message=(
+                    "Original MP4 is present but map-keyframes and/or CLIP features are not; "
+                    "this video cannot join the official-feature global index. Ingesting it "
+                    "would need a separate video pipeline."
+                ),
+                expected="map-keyframes and clip-features-32",
+                actual={"map": report.map_available, "clip": report.features_available},
+            )
         video_reports.append(report)
 
     dimensions = sorted({report.feature_dim for report in video_reports if report.feature_dim})
@@ -1094,6 +1239,20 @@ def inspect_aic_dataset(
         ),
         duplicate_internal_keyframe_id_count=duplicate_internal_ids,
         invalid_selected_video_ids=[item.video_id for item in video_reports if not item.valid],
+        retrieval_valid_video_count=sum(1 for item in video_reports if item.retrieval_valid),
+        visual_accessible_video_count=sum(1 for item in video_reports if item.visual_accessible),
+        refinement_ready_video_count=sum(1 for item in video_reports if item.refinement_ready),
+        qa_visual_ready_video_count=sum(1 for item in video_reports if item.qa_visual_ready),
+        keyframe_jpeg_backed_video_count=sum(
+            1 for item in video_reports if item.visual_source == "keyframe_jpeg"
+        ),
+        video_fallback_video_count=sum(
+            1 for item in video_reports if item.visual_source == "video_decode"
+        ),
+        no_visual_source_video_count=sum(
+            1 for item in video_reports if item.visual_source == "none"
+        ),
+        selected_video_ids=list(all_ids),
         inspection_seconds=time.perf_counter() - started,
     )
     if strict and not report.valid_for_index_build:

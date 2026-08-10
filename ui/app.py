@@ -8,7 +8,6 @@ from threading import Thread
 from flask import Flask, jsonify, request, send_file
 
 from ingestion import model_cache  # noqa: F401 -- configure model cache early
-from ingestion.schemas import frame_jpeg_bytes
 
 from aic2026.cache_manifest import (
     CacheManifestError,
@@ -21,6 +20,7 @@ from aic2026.cache_manifest import (
 from aic2026.config import AppConfig, config_hash, load_app_config
 from aic2026.dataset import AICDataPaths, official_frame_id
 from aic2026.dataset_scope import scope_payload
+from aic2026.frame_provider import FrameProvider
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
 from aic2026.metrics import write_submission
 from evaluation.official_eval import evaluate_labels, load_jsonl
@@ -109,13 +109,31 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             ), 422
         return None
 
+    def _frame_provider() -> FrameProvider:
+        cfg: AppConfig = state["config"]
+        key = (str(cfg.dataset.root), str(cfg.dataset.frame_cache_dir))
+        if state.get("frame_provider") is None or state.get("frame_provider_key") != key:
+            state["frame_provider"] = FrameProvider(
+                cfg.dataset.root, cache_dir=cfg.dataset.frame_cache_dir
+            )
+            state["frame_provider_key"] = key
+        return state["frame_provider"]
+
     def _engine_or_error():
         engine = state.get("engine")
         if engine is None:
             return None, (jsonify(error="AIC index is not loaded. Click Dataset first."), 400)
         return engine, None
 
-    def _prediction_json(pred):
+    def _visual_json(engine: AICCompetitionEngine | None, keyframe_id: str | None) -> dict:
+        """Cheap availability facts only. Never decodes; Top-100 must stay fast."""
+        raw = None if engine is None or not keyframe_id else engine.entry.raws.get(keyframe_id)
+        if raw is None:
+            return {"image_available": False, "image_source": "none", "video_available": False}
+        return _frame_provider().describe(raw)
+
+    def _prediction_json(pred, engine: AICCompetitionEngine | None = None):
+        visual = _visual_json(engine, pred.keyframe_id)
         return {
             "video_id": pred.video_id,
             "frame_id": pred.frame_id,
@@ -127,17 +145,24 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             "score_breakdown": pred.score_breakdown,
             "evidence": pred.evidence,
             "image": f"/api/video/frame/{pred.keyframe_id}" if pred.keyframe_id else None,
+            "image_available": visual["image_available"],
+            "image_source": visual["image_source"],
+            "video_available": visual["video_available"],
             "video_url": f"/api/video/file/{pred.video_id}" if (Path(state["config"].dataset.root) / "video" / f"{pred.video_id}.mp4").exists() else None,
         }
 
     def _frame_json(engine: AICCompetitionEngine, keyframe_id: str, extra: dict | None = None):
         raw = engine.entry.raws[keyframe_id]
+        visual = _frame_provider().describe(raw)
         out = {
             "video_id": raw.video_id,
             "frame_id": official_frame_id(engine.entry, keyframe_id),
             "id": keyframe_id,
             "timestamp": round(float(raw.timestamp), 3),
             "image": f"/api/video/frame/{keyframe_id}",
+            "image_available": visual["image_available"],
+            "image_source": visual["image_source"],
+            "video_available": visual["video_available"],
         }
         if extra:
             out.update(extra)
@@ -276,7 +301,7 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             video="__aic2026__",
             query=query,
             count=len(preds),
-            results=[_prediction_json(p) for p in preds],
+            results=[_prediction_json(p, engine) for p in preds],
             predictions=[p.row() for p in preds],
             encoder=engine.encoder_status(),
         )
@@ -437,11 +462,26 @@ def create_app(config_path: str | Path | None = None, app_config: AppConfig | No
             return err
         raw = engine.entry.raws.get(frame_id)
         if raw is None:
-            return jsonify(error="Frame not found."), 404
-        data = frame_jpeg_bytes(raw)
-        if data:
-            return send_file(BytesIO(data), mimetype="image/jpeg")
-        return jsonify(error="Frame image unavailable."), 404
+            return jsonify(error="Frame not found.", error_code="FRAME_NOT_FOUND"), 404
+        # BTC keyframe JPEG first, then a decode of the exact mapped frame from the
+        # original MP4. Decoding happens only here, when a frame is actually requested.
+        result = _frame_provider().get_frame(raw)
+        if result.available:
+            response = send_file(BytesIO(result.image_bytes), mimetype="image/jpeg")
+            response.headers["X-Frame-Source"] = result.source
+            response.headers["X-Frame-Id"] = "" if result.frame_idx is None else str(result.frame_idx)
+            if result.warning:
+                response.headers["X-Frame-Warning"] = result.warning
+            return response
+        # No visual source is a data state, not a server fault.
+        return (
+            jsonify(
+                error="No visual source is available for this keyframe.",
+                error_code="FRAME_UNAVAILABLE",
+                frame=result.to_dict(),
+            ),
+            422,
+        )
 
     return app
 

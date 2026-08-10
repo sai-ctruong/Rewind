@@ -18,8 +18,9 @@ from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
 
 from .config import AppConfig, DatasetScopeConfig, config_hash
 from .dataset_scope import (
+    ResolvedDatasetScope,
     hash_selected_video_ids,
-    normalize_scope,
+    resolve_dataset_scope,
     scope_payload,
     select_video_ids,
 )
@@ -114,11 +115,10 @@ class CacheBuildOptions:
     index_params: dict[str, Any]
     encoder_feature_space: str
     record_schema_version: int
-    dataset_scope: dict[str, list[str]] = field(
-        default_factory=lambda: dict(scope_payload(None))
-    )
+    dataset_scope: dict[str, Any] = field(default_factory=lambda: dict(scope_payload(None)))
     selected_video_count: int = 0
     selected_video_ids_hash: str = ""
+    selected_video_ids: tuple[str, ...] = ()
 
     def fingerprint_payload(self) -> dict[str, Any]:
         # Dataset identity is validated separately through signatures and counts, but the
@@ -166,11 +166,13 @@ class CacheManifest:
     encoder_feature_space: str
     record_schema_version: int
     files: dict[str, str]
-    dataset_scope: dict[str, list[str]] = field(
-        default_factory=lambda: dict(scope_payload(None))
-    )
+    dataset_scope: dict[str, Any] = field(default_factory=lambda: dict(scope_payload(None)))
     selected_video_count: int = 0
     selected_video_ids_hash: str = ""
+    # The resolved IDs are recorded for human inspection; `selected_video_ids_hash` is
+    # what validation compares, so a scope mode like `existing_videos` is identified by
+    # what it actually resolved to and not by its name.
+    selected_video_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -217,11 +219,13 @@ class CacheManifest:
                 record_schema_version=int(data["record_schema_version"]),
                 files={str(key): str(value) for key, value in files.items()},
                 dataset_scope={
+                    "mode": str(dataset_scope.get("mode", "patterns")),
                     "include_patterns": [str(item) for item in dataset_scope.get("include_patterns", ())],
                     "exclude_patterns": [str(item) for item in dataset_scope.get("exclude_patterns", ())],
                 },
                 selected_video_count=int(data["selected_video_count"]),
                 selected_video_ids_hash=str(data["selected_video_ids_hash"]),
+                selected_video_ids=[str(item) for item in data.get("selected_video_ids", ())],
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise CacheManifestError(f"Invalid cache manifest field: {exc}") from exc
@@ -303,7 +307,7 @@ def build_data_signature(
 def inspect_data_inputs(
     data_root: str | Path,
     *,
-    scope: DatasetScopeConfig | None = None,
+    scope: DatasetScopeConfig | ResolvedDatasetScope | None = None,
     limit_videos: int | None = None,
     limit_frames_per_video: int | None = None,
 ) -> dict[str, Any]:
@@ -317,7 +321,9 @@ def inspect_data_inputs(
     root = Path(data_root)
     feature_dir = root / "clip-features-32"
     discovered = sorted(path.stem for path in feature_dir.glob("*.npy")) if feature_dir.exists() else []
-    video_ids = list(select_video_ids(discovered, scope, allow_empty=True))
+    video_ids = list(
+        select_video_ids(discovered, resolve_dataset_scope(scope, root), allow_empty=True)
+    )
     if limit_videos is not None:
         video_ids = video_ids[: max(0, int(limit_videos))]
     frame_count = 0
@@ -404,10 +410,10 @@ def cache_build_options_from_config(
     index_kind: str | None = None,
     limit_videos: int | None = None,
     limit_frames_per_video: int | None = None,
-    scope: DatasetScopeConfig | None = None,
+    scope: DatasetScopeConfig | ResolvedDatasetScope | None = None,
 ) -> CacheBuildOptions:
     root = data_root if data_root is not None else app_config.dataset.root
-    scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
+    scope = resolve_dataset_scope(scope if scope is not None else app_config.dataset.scope, root)
     load_objects = app_config.dataset.load_objects if load_objects is None else bool(load_objects)
     include_media_text = (
         app_config.dataset.include_media_text if include_media_text is None else bool(include_media_text)
@@ -456,6 +462,7 @@ def cache_build_options_from_config(
         dataset_scope=scope_payload(scope),
         selected_video_count=int(inspected["video_count"]),
         selected_video_ids_hash=hash_selected_video_ids(video_ids),
+        selected_video_ids=tuple(sorted({str(item) for item in video_ids})),
     )
 
 
@@ -505,7 +512,9 @@ def build_cache_manifest(
     include_media_text: bool | None = None,
     scope: DatasetScopeConfig | None = None,
 ) -> CacheManifest:
-    scope = normalize_scope(scope if scope is not None else app_config.dataset.scope)
+    scope = resolve_dataset_scope(
+        scope if scope is not None else app_config.dataset.scope, data_root
+    )
     load_objects = app_config.dataset.load_objects if load_objects is None else bool(load_objects)
     include_media_text = (
         app_config.dataset.include_media_text if include_media_text is None else bool(include_media_text)
@@ -539,6 +548,7 @@ def build_cache_manifest(
         dataset_scope=scope_payload(scope),
         selected_video_count=len({str(item) for item in video_ids}),
         selected_video_ids_hash=hash_selected_video_ids(video_ids),
+        selected_video_ids=tuple(sorted({str(item) for item in video_ids})),
     )
     return CacheManifest(
         schema_version=CACHE_MANIFEST_SCHEMA_VERSION,
@@ -566,6 +576,7 @@ def build_cache_manifest(
         dataset_scope=options.dataset_scope,
         selected_video_count=options.selected_video_count,
         selected_video_ids_hash=options.selected_video_ids_hash,
+        selected_video_ids=list(options.selected_video_ids),
     )
 
 

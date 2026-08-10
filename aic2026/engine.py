@@ -33,6 +33,7 @@ from .cache_manifest import (
 from .config import AppConfig, config_hash, config_to_dict
 from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
 from .dataset_validation import write_dataset_report
+from .frame_provider import FrameProvider
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
 from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
 from .ranking import RankingConfig, video_aware_top100
@@ -129,6 +130,7 @@ class AICCompetitionEngine:
         encoder_batch_size: Optional[int] = None,
         fusion_config: Optional[FusionConfig] = None,
         app_config: Optional[AppConfig] = None,
+        frame_provider: Optional[FrameProvider] = None,
     ):
         self.entry = entry
         self.app_config = app_config or AppConfig()
@@ -161,6 +163,10 @@ class AICCompetitionEngine:
         self.trake_config = self.app_config.trake
         self.qa_config = self.app_config.qa
         self.config_hash = config_hash(self.app_config)
+        # Visual access is on demand only: constructing this touches no video file.
+        self.frame_provider = frame_provider or FrameProvider(
+            self.app_config.dataset.root, cache_dir=self.app_config.dataset.frame_cache_dir
+        )
 
     @classmethod
     def from_data_root(
@@ -232,11 +238,17 @@ class AICCompetitionEngine:
                         dataset_report_path=raw.get("dataset_report_path"),
                         invalid_video_count=int(raw.get("invalid_video_count", 0)),
                         record_schema_version=int(raw.get("record_schema_version", 1)),
+                        scope_mode=str(raw.get("scope_mode", "patterns")),
                         scope_include_patterns=tuple(raw.get("scope_include_patterns", ("*",))),
                         scope_exclude_patterns=tuple(raw.get("scope_exclude_patterns", ())),
                         discovered_videos=int(raw.get("discovered_video_count", 0)),
                         excluded_videos=int(raw.get("excluded_video_count", 0)),
                         selected_video_ids_hash=str(raw.get("selected_video_ids_hash", "")),
+                        retrieval_valid_videos=int(raw.get("retrieval_valid_videos", 0)),
+                        visual_accessible_videos=int(raw.get("visual_accessible_videos", 0)),
+                        refinement_ready_videos=int(raw.get("refinement_ready_videos", 0)),
+                        keyframe_jpeg_backed_videos=int(raw.get("keyframe_jpeg_backed_videos", 0)),
+                        video_fallback_videos=int(raw.get("video_fallback_videos", 0)),
                     )
                 except Exception:
                     continue
@@ -406,12 +418,18 @@ class AICCompetitionEngine:
             "dataset_report_path": stats.dataset_report_path,
             "invalid_video_count": stats.invalid_video_count,
             "record_schema_version": stats.record_schema_version,
+            "scope_mode": stats.scope_mode,
             "scope_include_patterns": list(stats.scope_include_patterns),
             "scope_exclude_patterns": list(stats.scope_exclude_patterns),
             "discovered_video_count": stats.discovered_videos,
             "selected_video_count": stats.videos,
             "excluded_video_count": stats.excluded_videos,
             "selected_video_ids_hash": stats.selected_video_ids_hash,
+            "retrieval_valid_videos": stats.retrieval_valid_videos,
+            "visual_accessible_videos": stats.visual_accessible_videos,
+            "refinement_ready_videos": stats.refinement_ready_videos,
+            "keyframe_jpeg_backed_videos": stats.keyframe_jpeg_backed_videos,
+            "video_fallback_videos": stats.video_fallback_videos,
             "build_seconds": elapsed,
         }
         stats_path.write_text(json.dumps(stats_payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -639,13 +657,16 @@ class AICCompetitionEngine:
             window, center.timestamp, max(1, evidence_frame_count), query=question
         )
         selected_records = [item.record for item in evidence]
+        # Decode lazily and only for the handful of selected evidence frames; the
+        # Top-100 search path never touches a video file.
         images: dict[str, bytes] = {}
         for frame in selected_records:
             raw = self.entry.raws.get(frame.id)
-            if raw is not None:
-                data = frame_jpeg_bytes(raw)
-                if data:
-                    images[frame.id] = data
+            if raw is None:
+                continue
+            result = self.frame_provider.get_frame(raw)
+            if result.available:
+                images[frame.id] = result.image_bytes
         ans = VqaModule(answerer or default_answerer()).answer(
             question or ground_query,
             selected_records,

@@ -17,9 +17,10 @@ from retrieval.video_engine import VideoIndexEntry
 
 from .config import AppConfig, DatasetScopeConfig
 from .dataset_scope import (
+    ResolvedDatasetScope,
     excluded_video_ids,
     hash_selected_video_ids,
-    normalize_scope,
+    resolve_dataset_scope,
     select_video_ids,
 )
 from .dataset_validation import (
@@ -63,7 +64,10 @@ class AICDataPaths:
             raise DatasetLayoutError(
                 f"AIC DATA_ROOT does not exist or is not a directory: {self.root}"
             )
-        required = (self.features_dir, self.keyframes_dir, self.map_dir)
+        # Only the retrieval sources are structurally required. `keyframes/` is
+        # supporting data: an index builds from the official CLIP features, and the
+        # original MP4 supplies pixels on demand.
+        required = (self.features_dir, self.map_dir)
         missing = [path for path in required if not path.is_dir()]
         if missing:
             joined = ", ".join(str(path) for path in missing)
@@ -83,11 +87,17 @@ class AICDatasetStats:
     dataset_report_path: str | None = None
     invalid_video_count: int = 0
     record_schema_version: int = AIC_RECORD_SCHEMA_VERSION
+    scope_mode: str = "patterns"
     scope_include_patterns: tuple[str, ...] = ("*",)
     scope_exclude_patterns: tuple[str, ...] = ()
     discovered_videos: int = 0
     excluded_videos: int = 0
     selected_video_ids_hash: str = ""
+    retrieval_valid_videos: int = 0
+    visual_accessible_videos: int = 0
+    refinement_ready_videos: int = 0
+    keyframe_jpeg_backed_videos: int = 0
+    video_fallback_videos: int = 0
 
 
 def _read_objects(
@@ -193,13 +203,14 @@ class AICDatasetLoader:
         verify_keyframes: bool = True,
         index_kind: str = "flat",
         app_config: AppConfig | None = None,
-        scope: DatasetScopeConfig | None = None,
+        scope: DatasetScopeConfig | ResolvedDatasetScope | None = None,
     ):
         self.paths = AICDataPaths.from_root(data_root)
-        self.scope = normalize_scope(
+        self.scope = resolve_dataset_scope(
             scope
             if scope is not None
-            else (app_config.dataset.scope if app_config is not None else None)
+            else (app_config.dataset.scope if app_config is not None else None),
+            self.paths.root,
         )
         self.object_score_threshold = object_score_threshold
         self.max_objects_per_frame = max_objects_per_frame
@@ -239,13 +250,12 @@ class AICDatasetLoader:
             validation = replace(
                 validation,
                 strict_alignment=True,
-                require_keyframe_images=True,
                 expected_feature_dim=feature_dim or None,
             )
-        if not validation.strict_alignment or not validation.require_keyframe_images:
+        if not validation.strict_alignment:
             raise DatasetSourceError(
-                "Index builds require strict_alignment=true and require_keyframe_images=true; "
-                "non-strict behavior is available only through inspect-data."
+                "Index builds require strict_alignment=true; non-strict behavior is "
+                "available only through inspect-data."
             )
         dataset = replace(
             base.dataset,
@@ -283,7 +293,12 @@ class AICDatasetLoader:
         inspection_scope = (
             self.scope
             if video_ids is None
-            else DatasetScopeConfig(include_patterns=tuple(requested_video_ids))
+            else ResolvedDatasetScope(
+                mode=self.scope.mode,
+                include_patterns=tuple(requested_video_ids),
+                exclude_patterns=(),
+                source_video_ids=self.scope.source_video_ids,
+            )
         )
         try:
             report = inspect_aic_dataset(
@@ -442,11 +457,17 @@ class AICDatasetLoader:
             feature_dtype=feature_dtype,
             dataset_validated=True,
             invalid_video_count=report.invalid_video_count,
+            scope_mode=str(report.scope["mode"]),
             scope_include_patterns=tuple(report.scope["include_patterns"]),
             scope_exclude_patterns=tuple(report.scope["exclude_patterns"]),
             discovered_videos=len(discovered_video_ids),
             excluded_videos=len(excluded_video_ids(discovered_video_ids, requested_video_ids)),
             selected_video_ids_hash=hash_selected_video_ids(requested_video_ids),
+            retrieval_valid_videos=report.retrieval_valid_video_count,
+            visual_accessible_videos=report.visual_accessible_video_count,
+            refinement_ready_videos=report.refinement_ready_video_count,
+            keyframe_jpeg_backed_videos=report.keyframe_jpeg_backed_video_count,
+            video_fallback_videos=report.video_fallback_video_count,
         )
         return entry, stats
 

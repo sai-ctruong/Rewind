@@ -5,11 +5,13 @@ prerequisite for every new AIC index. It does not implement dynamic UI `DATA_ROO
 retrieval changes, local refinement, Q&A hypotheses, TRAKE output, or submission
 editing.
 
-> **Superseded in part by Phase 3.1.** Validation now runs over the videos a configured
-> dataset scope selects, not over every discovered ID, and the frame-ID policy below was
-> corrected against the real map CSVs. Read
-> `docs/PHASE_3_1_DATASET_SCOPE_AND_MAPPING.md` alongside this document; the
-> differences are marked inline.
+> **Superseded in part by Phase 3.1 and Phase 3.2.** Validation now runs over the videos
+> a configured dataset scope selects, not over every discovered ID; the frame-ID policy
+> below was corrected against the real map CSVs; and keyframe JPEGs are supporting data
+> rather than a retrieval requirement. Read
+> `docs/PHASE_3_1_DATASET_SCOPE_AND_MAPPING.md` and
+> `docs/PHASE_3_2_VIDEO_BACKED_DEVELOPMENT.md` alongside this document; the differences
+> are marked inline.
 
 ## Alignment Policy
 
@@ -34,7 +36,12 @@ Required for the current keyframe index:
 
 - `map-keyframes/{video_id}.csv`
 - `clip-features-32/{video_id}.npy`
-- `keyframes/{video_id}` with one mapped image for each keyframe ordinal
+- ~~`keyframes/{video_id}` with one mapped image for each keyframe ordinal~~
+
+Phase 3.2 removed the keyframe-image requirement. Official AIC documentation makes the
+video the competition data and keyframes supporting data, so the global index is built
+from the CLIP features and the original MP4 supplies pixels on demand. Missing JPEGs
+are reported as `KEYFRAME_JPEG_UNAVAILABLE` and never block a build.
 
 Optional:
 
@@ -82,8 +89,11 @@ TIMESTAMP_INVALID TIMESTAMP_NON_MONOTONIC MAP_FPS_INVALID
 TIMESTAMP_FRAME_FPS_INCONSISTENT
 FEATURE_MISSING FEATURE_LOAD_ERROR FEATURE_INVALID_NDIM FEATURE_COUNT_MISMATCH
 FEATURE_DIM_MISMATCH FEATURE_DTYPE_UNSUPPORTED FEATURE_NON_FINITE FEATURE_ZERO_VECTOR
-KEYFRAME_FOLDER_MISSING KEYFRAME_IMAGE_MISSING KEYFRAME_IMAGE_ORPHAN
-KEYFRAME_IMAGE_CORRUPT KEYFRAME_COUNT_MISMATCH
+KEYFRAME_IMAGE_CORRUPT KEYFRAME_IMAGE_ORPHAN
+KEYFRAME_FOLDER_MISSING KEYFRAME_IMAGE_MISSING KEYFRAME_COUNT_MISMATCH
+KEYFRAME_JPEG_UNAVAILABLE   # info/warning since Phase 3.2, never a retrieval error
+VISUAL_SOURCE_UNAVAILABLE   # error only when require_visual_source=true
+VIDEO_PRESENT_BUT_RETRIEVAL_SUPPORT_MISSING
 OBJECT_FILE_MISSING OBJECT_JSON_CORRUPT OBJECT_SCHEMA_INVALID
 OBJECT_SCORE_INVALID OBJECT_BOX_INVALID
 MEDIA_INFO_MISSING MEDIA_JSON_CORRUPT MEDIA_SCHEMA_INVALID

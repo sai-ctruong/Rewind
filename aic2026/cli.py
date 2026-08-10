@@ -51,6 +51,15 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATTERN",
         help="Override dataset.scope.exclude_patterns; applied after the include patterns.",
     )
+    p.add_argument(
+        "--scope-existing-videos",
+        action="store_true",
+        help=(
+            "Restrict the dataset to videos whose original MP4 is on disk AND that have "
+            "map-keyframes plus CLIP features. Resolved from DATA_ROOT at run time, and "
+            "combinable with --video-include/--video-exclude."
+        ),
+    )
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--production-mode", action=argparse.BooleanOptionalAction, default=None, help="Override production mode")
     p.add_argument("--hashing-fallback", action=argparse.BooleanOptionalAction, default=None, help="Allow hashing fallback when real CLIP is unavailable")
@@ -103,6 +112,8 @@ def cli_overrides(args: argparse.Namespace) -> dict[str, Any]:
     # leaves the YAML scope untouched; settings.yaml is never rewritten.
     _set_nested(overrides, ("dataset", "scope", "include_patterns"), args.video_include)
     _set_nested(overrides, ("dataset", "scope", "exclude_patterns"), args.video_exclude)
+    if getattr(args, "scope_existing_videos", False):
+        _set_nested(overrides, ("dataset", "scope", "mode"), "existing_videos")
     _set_nested(overrides, ("runtime", "production_mode"), args.production_mode)
     _set_nested(overrides, ("runtime", "device"), args.device)
     _set_nested(overrides, ("encoder", "allow_hashing_fallback"), args.hashing_fallback)
