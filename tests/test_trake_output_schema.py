@@ -170,13 +170,15 @@ def test_no_complete_alignment_returns_an_empty_result(tmp_path: Path) -> None:
     assert outcome.structural_summary()["malformed_prediction_count"] == 0
 
 
-def test_refine_window_s_is_reported_as_not_implemented(tmp_path: Path) -> None:
+def test_refinement_is_off_by_default_and_reported_honestly(tmp_path: Path) -> None:
     engine = build(tmp_path)
     outcome = engine.search_trake_detailed(["a", "b"], refine_window_s=6.0, max_results=5)
+    # Phase 8 wires refine_window_s into the local window, but refinement itself is
+    # opt-in, so a default query still does no video work and says so.
     assert outcome.diagnostics["refinement_applied"] is False
-    assert outcome.diagnostics["refinement_status"] == "not_implemented_phase_7"
+    assert outcome.diagnostics["refinement_status"] == "disabled"
     assert outcome.diagnostics["refine_window_s_requested"] == 6.0
-    # And it genuinely changes nothing about the result.
+    assert outcome.diagnostics["frames_decoded"] == 0
     other = engine.search_trake_detailed(["a", "b"], refine_window_s=None, max_results=5)
     assert [p.row() for p in outcome.predictions] == [p.row() for p in other.predictions]
 
@@ -265,8 +267,9 @@ def test_temporal_payload_reports_refinement_honestly(client) -> None:
         "/api/video/temporal", json={"events": ["a", "b"], "refine_window": 6.0}
     ).get_json()
     assert body["refinement"]["applied"] is False
-    assert body["refinement"]["status"] == "not_implemented_phase_7"
+    assert body["refinement"]["status"] == "disabled"
     assert body["diagnostics"]["refinement_applied"] is False
+    assert body["diagnostics"]["refine_window_s_requested"] == 6.0
 
 
 def test_temporal_payload_carries_the_runtime_generation_and_no_paths(client, tmp_path) -> None:

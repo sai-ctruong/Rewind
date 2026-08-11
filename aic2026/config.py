@@ -26,6 +26,8 @@ from .trake import ALIGNMENT_METHODS
 from .trake import AlignmentConfig as TrakeConfig
 
 QA_BACKEND_TYPES = ("auto", "mock", "local_vlm", "api")
+# Ceiling on frames one TRAKE query may decode, whatever the other refinement settings.
+TRAKE_MAX_FRAMES_PER_QUERY = 512
 # Upper bounds that keep a Q&A question affordable regardless of configuration.
 QA_MAX_EVIDENCE_FRAMES = 32
 QA_MAX_REFINEMENT_FRAMES = 32
@@ -270,6 +272,28 @@ def _refinement_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return source
 
 
+def _trake_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Accept the nested Phase 8 `sequence_diversity:` and `refinement:` blocks.
+
+    They read naturally in YAML, but `AlignmentConfig` is a flat frozen dataclass, so
+    they are flattened here rather than mirrored as a second settings structure.
+    """
+    source = dict(raw or {})
+    diversity = source.pop("sequence_diversity", None)
+    if isinstance(diversity, Mapping):
+        for key, value in diversity.items():
+            source.setdefault(f"min_sequence_{key}", value)
+    refinement = source.pop("refinement", None)
+    if isinstance(refinement, Mapping):
+        for key, value in refinement.items():
+            source.setdefault(f"refinement_{key}", value)
+    if "candidate_depth_expansion" in source:
+        value = source["candidate_depth_expansion"]
+        if isinstance(value, (list, tuple)):
+            source["candidate_depth_expansion"] = tuple(int(item) for item in value)
+    return source
+
+
 def _qa_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Accept the nested Phase 6 `backend:` block and the older flat Q&A keys."""
     source = dict(raw or {})
@@ -320,7 +344,7 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         fusion=_construct(FusionConfig, raw.get("fusion")),
         ranking=_construct(RankingConfig, raw.get("ranking")),
         refinement=_construct(RefinementConfig, _refinement_raw(raw.get("refinement"))),
-        trake=_construct(TrakeConfig, raw.get("trake")),
+        trake=_construct(TrakeConfig, _trake_raw(raw.get("trake"))),
         qa=_construct(QAConfig, _qa_raw(raw.get("qa"))),
         submission=_construct(SubmissionConfig, raw.get("submission")),
         evaluation=_construct(EvaluationConfig, raw.get("evaluation")),
@@ -578,6 +602,71 @@ def _validate_trake(cfg: TrakeConfig) -> None:
     _require(
         isinstance(cfg.recovery_respect_gap, bool),
         "trake.recovery_respect_gap must be a boolean",
+    )
+    _require(int(cfg.k_best_per_video) > 0, "trake.k_best_per_video must be > 0")
+    _require(
+        int(cfg.max_alignments_per_video) > 0,
+        "trake.max_alignments_per_video must be > 0",
+    )
+    _require(
+        int(cfg.k_best_per_video) >= int(cfg.max_alignments_per_video),
+        "trake.k_best_per_video must be >= trake.max_alignments_per_video; the kept "
+        "sequences are chosen from the enumerated ones",
+    )
+    _require(
+        int(cfg.min_sequence_difference_events) > 0,
+        "trake.sequence_diversity.min_difference_events must be > 0",
+    )
+    _require(
+        math.isfinite(float(cfg.min_sequence_time_distance_s))
+        and float(cfg.min_sequence_time_distance_s) >= 0,
+        "trake.sequence_diversity.min_time_distance_s must be finite and >= 0",
+    )
+    for depth in cfg.candidate_depth_expansion:
+        _require(
+            int(depth) > 0, "trake.candidate_depth_expansion entries must be > 0"
+        )
+    _require(
+        list(cfg.candidate_depth_expansion) == sorted(cfg.candidate_depth_expansion),
+        "trake.candidate_depth_expansion must be ascending; expansion only ever deepens",
+    )
+    _require(
+        int(cfg.candidate_depth_max) >= int(cfg.per_event_top_k),
+        "trake.candidate_depth_max must be >= trake.per_event_top_k",
+    )
+    _require(
+        int(cfg.target_complete_video_hypotheses) > 0,
+        "trake.target_complete_video_hypotheses must be > 0",
+    )
+    _require(int(cfg.exact_dp_max_states) > 0, "trake.exact_dp_max_states must be > 0")
+    _require(
+        isinstance(cfg.refinement_enabled, bool),
+        "trake.refinement.enabled must be a boolean",
+    )
+    _require(
+        int(cfg.refinement_top_alignment_budget) > 0,
+        "trake.refinement.top_alignment_budget must be > 0",
+    )
+    _require(
+        int(cfg.refinement_max_events_per_alignment) > 0,
+        "trake.refinement.max_events_per_alignment must be > 0",
+    )
+    _require(
+        int(cfg.refinement_frames_per_event) > 0,
+        "trake.refinement.frames_per_event must be > 0",
+    )
+    _require(float(cfg.refinement_fine_fps) > 0, "trake.refinement.fine_fps must be > 0")
+    _require(float(cfg.refinement_window_s) > 0, "trake.refinement.window_s must be > 0")
+    _require(int(cfg.refinement_batch_size) > 0, "trake.refinement.batch_size must be > 0")
+    _require(
+        math.isfinite(float(cfg.refinement_rerank_alpha))
+        and float(cfg.refinement_rerank_alpha) >= 0,
+        "trake.refinement.rerank_alpha must be finite and >= 0",
+    )
+    _require(
+        0 < int(cfg.refinement_max_frames_per_query) <= TRAKE_MAX_FRAMES_PER_QUERY,
+        f"trake.refinement.max_frames_per_query must be in (0, {TRAKE_MAX_FRAMES_PER_QUERY}]; "
+        "TRAKE refinement runs per event across several sequences and must stay bounded",
     )
 
 

@@ -327,14 +327,26 @@ def test_no_source_file_claims_exact_dp() -> None:
         root / "ui" / "app.py",
         root / "ui" / "index.html",
     ]
+    # Exact DP exists in Phase 8 only as a bounded TEST ORACLE. What must never appear is
+    # a claim that the SHIPPED search is exact, so a mention is allowed when the line
+    # denies it or marks it as a reference/oracle/bound.
+    allowed = (
+        "not ", "never", "deliberately", "reference", "oracle", "bound",
+        "max_states", "phase 8", "test", "align_video_exact_dp",
+    )
     for path in checked:
-        text = path.read_text(encoding="utf-8").lower()
-        # The phrase may appear only while explicitly denying it.
-        for line in text.splitlines():
+        for line in path.read_text(encoding="utf-8").lower().splitlines():
             if "exact dp" in line or "exact_dp" in line:
-                assert any(
-                    word in line for word in ("not ", "never", "phase 8", "deliberately")
-                ), f"{path.name} claims exact DP: {line.strip()}"
+                assert any(word in line for word in allowed), (
+                    f"{path.name} claims the shipped search is exact DP: {line.strip()}"
+                )
+
+
+def test_the_configured_method_can_never_be_exact_dp() -> None:
+    from aic2026.trake import ALIGNMENT_METHODS
+
+    assert "exact_dp" not in ALIGNMENT_METHODS
+    assert AlignmentConfig().alignment_method == METHOD_BEAM_DP
 
 
 def test_alignment_config_defaults_are_honest() -> None:

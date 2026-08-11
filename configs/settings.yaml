@@ -409,7 +409,35 @@ aic2026:
     # SAME video, constrained by its temporal neighbours. Never inserts a sentinel.
     recover_missing_events: true
     recovery_respect_gap: true
+    # INITIAL retrieval depth per event. When too few videos can cover every event, only
+    # the events actually holding videos back are re-retrieved at the depths below.
     per_event_top_k: 40
+    candidate_depth_expansion: [120, 300]
+    candidate_depth_max: 400
+    target_complete_video_hypotheses: 12
+    # One video may contribute several distinct readings of the same event sequence.
+    k_best_per_video: 4
+    max_alignments_per_video: 3
+    sequence_diversity:
+      # Two sequences of one video are near-identical unless this many event positions
+      # use a different frame AND some event moved at least this far in time.
+      difference_events: 1
+      time_distance_s: 1.0
+    refinement:
+      # Bounded, event-local visual refinement of a few already-complete sequences.
+      # Each event is scored against its OWN text, never the whole sentence.
+      enabled: false
+      top_alignment_budget: 3
+      max_events_per_alignment: 4
+      frames_per_event: 8
+      fine_fps: 2.0
+      window_s: 2.0
+      batch_size: 8
+      # final = coarse_alignment_score + rerank_alpha * mean(event visual gain).
+      # NOT tuned against accuracy: this repository has no AIC ground truth.
+      rerank_alpha: 0.10
+      # Hard ceiling on frames decoded for one TRAKE query.
+      max_frames_per_query: 96
     top_video_hypotheses: 20
     alignments_per_video: 1
     beam_width: 8

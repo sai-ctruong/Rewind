@@ -647,6 +647,7 @@ def create_app(
                 refine_window_s=(
                     None if data.get("refine_window") is None else float(data["refine_window"])
                 ),
+                refine=None if data.get("refine") is None else bool(data.get("refine")),
             )
         except ValueError as exc:
             return _error(str(exc), "QUERY_REQUIRED", 400)
@@ -667,19 +668,32 @@ def create_app(
                         "event_label": f"Event {step.event_index + 1}",
                         "status": step.status,
                         "submission_frame_id": step.submission_frame_idx,
+                        # Evidence only: a refined frame is never the submitted frame.
+                        "visual_frame_idx": step.visual_frame_idx,
+                        "visual_image": (
+                            None
+                            if step.visual_frame_idx is None
+                            else f"/api/video/decoded_frame/{alignment.video_id}/"
+                            f"{int(step.visual_frame_idx)}?generation={state.generation}"
+                        ),
                     },
                 )
                 steps.append(payload)
             out.append(
                 {
                     "video_id": alignment.video_id,
+                    "rank": alignment.rank,
+                    "sequence_variant_id": alignment.sequence_variant_id,
                     "event_count": alignment.event_count,
                     "frame_ids": list(alignment.frame_ids),
                     "alignment_status": alignment.alignment_status,
                     "recovered_event_indices": list(alignment.recovered_event_indices),
                     "missing_event_indices": list(alignment.missing_event_indices),
                     "method": alignment.method,
-                    "total_score": round(float(alignment.score), 6),
+                    "total_score": round(float(alignment.final_sequence_score or alignment.score), 6),
+                    "coarse_alignment_score": round(float(alignment.coarse_alignment_score), 6),
+                    "visual_gain_aggregate": round(float(alignment.visual_gain_aggregate), 6),
+                    "refinement_status": alignment.refinement_status,
                     "steps": steps,
                 }
             )
@@ -694,11 +708,23 @@ def create_app(
             predictions=[p.row() for p in preds],
             diagnostics=outcome.diagnostics,
             structural=outcome.structural_summary(),
-            # Truthful: the parameter is accepted for compatibility and does nothing.
             refinement={
-                "applied": False,
-                "status": "not_implemented_phase_7",
-                "note": "TRAKE local refinement is not implemented; refine_window has no effect.",
+                "applied": bool(outcome.diagnostics.get("refinement_applied", False)),
+                "status": outcome.diagnostics.get("refinement_status", "disabled"),
+                "window_s": outcome.diagnostics.get("refinement_window_s"),
+                "alignments_refined": outcome.diagnostics.get("alignments_refined", 0),
+                "events_refined": outcome.diagnostics.get("events_refined", 0),
+                "frames_decoded": outcome.diagnostics.get("frames_decoded", 0),
+                "order_violations_detected": outcome.diagnostics.get(
+                    "order_violations_detected", 0
+                ),
+                "order_violations_resolved": outcome.diagnostics.get(
+                    "order_violations_resolved", 0
+                ),
+                "note": (
+                    "Refined frames are visual evidence only; the submitted frame stays "
+                    "the coarse official mapped frame_idx."
+                ),
             },
         )
 

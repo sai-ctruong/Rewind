@@ -77,6 +77,7 @@ from .trake import (
     align_trake,
     joint_trake_alignment,
 )
+from .trake_refinement import FrameBudget, TrakeSequenceRefiner, apply_refinement
 from .text_encoder import (
     AutoCLIPTextEncoder,
     HashingTextEncoder,
@@ -164,6 +165,7 @@ class TrakeSearchResult:
     matches: list[TemporalMatch]
     trake_predictions: tuple[TrakePrediction, ...] = ()
     discarded: tuple[TrakeAlignment, ...] = ()
+    refinements: tuple = ()
     diagnostics: dict = field(default_factory=dict)
 
     def structural_summary(self) -> dict:
@@ -1514,6 +1516,7 @@ class AICCompetitionEngine:
         per_event_k: Optional[int] = None,
         max_results: Optional[int] = None,
         refine_window_s: Optional[float] = None,
+        refine: Optional[bool] = None,
     ) -> tuple[list[AICPrediction], list[TemporalMatch]]:
         """Align ordered events across one video.
 
@@ -1527,6 +1530,7 @@ class AICCompetitionEngine:
             per_event_k=per_event_k,
             max_results=max_results,
             refine_window_s=refine_window_s,
+            refine=refine,
         )
         return outcome.predictions, outcome.matches
 
@@ -1537,6 +1541,7 @@ class AICCompetitionEngine:
         per_event_k: Optional[int] = None,
         max_results: Optional[int] = None,
         refine_window_s: Optional[float] = None,
+        refine: Optional[bool] = None,
     ) -> "TrakeSearchResult":
         """Align ordered events and return ONLY structurally complete sequences.
 
@@ -1547,36 +1552,41 @@ class AICCompetitionEngine:
         event, and anything still incomplete is discarded instead of exported.
         """
         started = time.perf_counter()
+        config = self.trake_config
         clean = [event.strip() for event in events if event and event.strip()]
         if len(clean) < 2:
             raise ValueError("TRAKE requires at least two ordered events.")
-        per_event_k = int(per_event_k if per_event_k is not None else self.trake_config.per_event_top_k)
-        max_results = max(1, min(MAX_PREDICTIONS, int(max_results if max_results is not None else self.trake_config.final_top_k)))
-        by_event: dict[int, list[EventCandidate]] = {}
-        for event_index, event in enumerate(clean):
-            candidates: list[EventCandidate] = []
-            for candidate in self.search_candidates(event, top_k=per_event_k):
-                raw = self.entry.raws.get(candidate.keyframe_id)
-                if raw is None or raw.frame_idx is None:
-                    # An unmapped keyframe has no official frame to submit, so it cannot
-                    # stand for an event. It is skipped rather than given a placeholder.
-                    continue
-                candidates.append(
-                    EventCandidate(
-                        event_index=event_index,
-                        video_id=candidate.video_id,
-                        keyframe_id=candidate.keyframe_id,
-                        frame_id=official_frame_id(self.entry, candidate.keyframe_id),
-                        timestamp=candidate.timestamp,
-                        score=float(candidate.score),
-                    )
-                )
-            by_event[event_index] = candidates
+        per_event_k = int(per_event_k if per_event_k is not None else config.per_event_top_k)
+        max_results = max(1, min(MAX_PREDICTIONS, int(max_results if max_results is not None else config.final_top_k)))
+        refine = config.refinement_enabled if refine is None else bool(refine)
 
-        report = align_trake(clean, by_event, self.trake_config, max_results=max_results)
+        retrieval_started = time.perf_counter()
+        depth = {index: per_event_k for index in range(len(clean))}
+        by_event: dict[int, list[EventCandidate]] = {
+            index: self._trake_candidates(index, text, per_event_k)
+            for index, text in enumerate(clean)
+        }
+        initial_counts = {index: len(rows) for index, rows in by_event.items()}
+        report = align_trake(clean, by_event, config, max_results=max_results)
+        complete_before_expansion = int(report.diagnostics["returned_complete_predictions"])
+
+        # Adaptive expansion: only the events that are actually holding videos back are
+        # re-retrieved deeper, and only until enough videos can cover every event. A
+        # blanket deep retrieval for every event would cost far more for no reason.
+        expansion = self._expand_trake_candidates(
+            clean, by_event, depth, report, config, max_results
+        )
+        report, expansion_info = expansion
+        retrieval_ms = (time.perf_counter() - retrieval_started) * 1000.0
+
+        refinement_result = self._refine_trake_sequences(
+            report, config, refine=refine, refine_window_s=refine_window_s
+        )
+        refined_predictions, refinements, refinement_stats = refinement_result
+
         matches: list[TemporalMatch] = []
         predictions: list[AICPrediction] = []
-        for result in report.predictions[:max_results]:
+        for result in refined_predictions[:max_results]:
             # Every step is present, so step i is event i: the UI can no longer shift.
             steps = [
                 TemporalStep(
@@ -1586,26 +1596,190 @@ class AICCompetitionEngine:
                 )
                 for step in result.steps
             ]
-            match = TemporalMatch(result.video_id, steps, result.score)
+            match = TemporalMatch(result.video_id, steps, result.final_sequence_score)
             matches.append(match)
             predictions.append(self._from_trake(result))
 
         diagnostics = dict(report.diagnostics)
         diagnostics["per_event_top_k"] = per_event_k
-        diagnostics["alignment_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
-        # Truthful status for a parameter that is accepted but does nothing.
-        diagnostics["refinement_applied"] = False
-        diagnostics["refinement_status"] = "not_implemented_phase_7"
+        diagnostics["initial_candidate_counts"] = initial_counts
+        diagnostics["candidate_retrieval_ms"] = round(retrieval_ms, 3)
+        diagnostics["complete_alignments_before_expansion"] = complete_before_expansion
+        diagnostics["complete_alignments_after_expansion"] = int(
+            report.diagnostics["returned_complete_predictions"]
+        )
+        diagnostics.update(expansion_info)
+        diagnostics.update(refinement_stats)
+        # `refine_window_s` now genuinely selects the local sampling window.
         diagnostics["refine_window_s_requested"] = (
             None if refine_window_s is None else float(refine_window_s)
         )
+        diagnostics["alignment_ms"] = round(
+            max(0.0, (time.perf_counter() - started) * 1000.0 - retrieval_ms
+                - float(refinement_stats.get("refinement_ms", 0.0))),
+            3,
+        )
+        diagnostics["total_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
         return TrakeSearchResult(
             predictions=predictions,
             matches=matches,
-            trake_predictions=tuple(report.predictions[:max_results]),
+            trake_predictions=tuple(refined_predictions[:max_results]),
             discarded=report.discarded,
+            refinements=tuple(refinements),
             diagnostics=diagnostics,
         )
+
+    def _trake_candidates(self, event_index: int, text: str, depth: int) -> list[EventCandidate]:
+        """Retrieve one event's candidates through the EXISTING retrieval path.
+
+        Phase 8 deliberately does not add object/OCR/ASR generators; deeper coverage comes
+        from asking the same CLIP+BM25 fusion for more rows.
+        """
+        rows: list[EventCandidate] = []
+        for candidate in self.search_candidates(text, top_k=int(depth)):
+            raw = self.entry.raws.get(candidate.keyframe_id)
+            if raw is None or raw.frame_idx is None:
+                # An unmapped keyframe has no official frame to submit, so it cannot
+                # stand for an event. It is skipped rather than given a placeholder.
+                continue
+            rows.append(
+                EventCandidate(
+                    event_index=event_index,
+                    video_id=candidate.video_id,
+                    keyframe_id=candidate.keyframe_id,
+                    frame_id=official_frame_id(self.entry, candidate.keyframe_id),
+                    timestamp=candidate.timestamp,
+                    score=float(candidate.score),
+                )
+            )
+        return rows
+
+    def _expand_trake_candidates(
+        self,
+        events: Sequence[str],
+        by_event: dict[int, list[EventCandidate]],
+        depth: dict[int, int],
+        report,
+        config,
+        max_results: int,
+    ):
+        """Re-retrieve only the events that are blocking completeness, and only deeper.
+
+        The Phase 7 smoke showed 59 missing positions where the event simply had no
+        candidate for that video at depth 40. Expansion targets exactly those events;
+        it never fabricates a candidate and never exceeds `candidate_depth_max`.
+        """
+        info: dict[str, Any] = {
+            "candidate_expansion_triggered": False,
+            "candidate_expansion_stages": 0,
+            "events_expanded": [],
+            "depth_before": dict(depth),
+            "depth_after": dict(depth),
+            "new_candidates_added": 0,
+            "expanded_candidate_counts": {i: len(rows) for i, rows in by_event.items()},
+            "new_complete_video_hypotheses": 0,
+        }
+        target = max(1, int(config.target_complete_video_hypotheses))
+        maximum = max(int(config.per_event_top_k), int(config.candidate_depth_max))
+        stages = [int(value) for value in config.candidate_depth_expansion if int(value) > 0]
+        if not stages:
+            return report, info
+        coverage_before = int(report.diagnostics.get("videos_with_full_event_coverage", 0))
+        for stage in stages:
+            if int(report.diagnostics.get("videos_with_full_event_coverage", 0)) >= target:
+                break
+            # An event is "weak" when it reaches fewer videos than the others do; those
+            # are the ones actually preventing complete sequences.
+            reach = {index: len({row.video_id for row in rows}) for index, rows in by_event.items()}
+            best_reach = max(reach.values(), default=0)
+            weak = sorted(index for index, value in reach.items() if value < best_reach)
+            if not weak:
+                weak = sorted(by_event)
+            wanted = min(int(stage), maximum)
+            changed = False
+            for index in weak:
+                if wanted <= depth[index]:
+                    continue
+                before = len(by_event[index])
+                by_event[index] = self._trake_candidates(index, events[index], wanted)
+                depth[index] = wanted
+                info["new_candidates_added"] += max(0, len(by_event[index]) - before)
+                if index not in info["events_expanded"]:
+                    info["events_expanded"].append(index)
+                changed = True
+            if not changed:
+                continue
+            info["candidate_expansion_triggered"] = True
+            info["candidate_expansion_stages"] += 1
+            report = align_trake(events, by_event, config, max_results=max_results)
+        info["depth_after"] = dict(depth)
+        info["expanded_candidate_counts"] = {i: len(rows) for i, rows in by_event.items()}
+        info["new_complete_video_hypotheses"] = max(
+            0,
+            int(report.diagnostics.get("videos_with_full_event_coverage", 0)) - coverage_before,
+        )
+        return report, info
+
+    def _refine_trake_sequences(self, report, config, *, refine: bool, refine_window_s):
+        """Locally refine only the top few COMPLETE sequences, within a frame budget."""
+        predictions = list(report.predictions)
+        stats: dict[str, Any] = {
+            "alignments_refined": 0,
+            "events_refined": 0,
+            "frames_decoded": 0,
+            "frames_scored": 0,
+            "refinement_failures": 0,
+            "order_violations_detected": 0,
+            "order_violations_resolved": 0,
+            "refinement_budget_exhausted": False,
+            "refinement_ms": 0.0,
+            "refinement_applied": False,
+            "refinement_status": "disabled" if not refine else "no_sequences",
+        }
+        if not refine or not predictions:
+            return predictions, [], stats
+
+        started = time.perf_counter()
+        refiner = TrakeSequenceRefiner(
+            config,
+            frame_provider=self.frame_provider,
+            scorer=self.frame_scorer,
+            source_video_for=lambda video_id, keyframe_id: getattr(
+                self.entry.raws.get(keyframe_id or ""), "source_video", None
+            ),
+            window_s=None if refine_window_s is None else float(refine_window_s),
+        )
+        budget = FrameBudget(limit=max(1, int(config.refinement_max_frames_per_query)))
+        limit = max(1, int(config.refinement_top_alignment_budget))
+        refinements: list = []
+        out: list[TrakePrediction] = []
+        for position, prediction in enumerate(predictions):
+            if position >= limit:
+                out.append(prediction)
+                continue
+            outcome = refiner.refine(prediction, budget)
+            refinements.append(outcome)
+            if outcome.applied:
+                stats["alignments_refined"] += 1
+                stats["events_refined"] += outcome.events_refined
+                stats["frames_decoded"] += outcome.frames_decoded
+                stats["frames_scored"] += outcome.frames_scored
+                stats["order_violations_detected"] += int(outcome.order_violation_detected)
+                stats["order_violations_resolved"] += int(outcome.order_violation_resolved)
+                out.append(apply_refinement(prediction, outcome))
+            else:
+                stats["refinement_failures"] += 1
+                out.append(prediction)
+        stats["refinement_budget_exhausted"] = budget.exhausted
+        stats["refinement_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        stats["refinement_applied"] = stats["alignments_refined"] > 0
+        stats["refinement_status"] = (
+            "refined" if stats["refinement_applied"] else "unavailable"
+        )
+        stats["refinement_window_s"] = refiner.window_s
+        # Refinement may reorder the top sequences; the row contents never change.
+        out.sort(key=lambda p: (-float(p.final_sequence_score), p.video_id, p.frame_ids))
+        return [replace(p, rank=i) for i, p in enumerate(out, start=1)], refinements, stats
     def _from_candidate(
         self,
         c: Candidate,

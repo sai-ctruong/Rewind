@@ -226,10 +226,12 @@ def test_end_to_end_a_cross_video_candidate_cannot_fill_an_event() -> None:
         2: [candidate(2, "A", 300, 20.0, 0.99), candidate(2, "B", 300, 20.0, 0.10)],
     }
     report = align_trake(["a", "b", "c"], candidates, AlignmentConfig())
-    by_video = {a.video_id: a for a in report.alignments}
-    assert by_video["A"].is_complete is False
-    assert by_video["A"].missing_event_indices == (1,)
-    assert [p.video_id for p in report.predictions] == ["B"]
+    # `alignments` holds only the complete survivors, so A appears in `discarded`.
+    discarded = {a.video_id: a for a in report.discarded}
+    assert discarded["A"].is_complete is False
+    assert discarded["A"].missing_event_indices == (1,)
+    assert "A" not in {a.video_id for a in report.alignments}
+    assert {p.video_id for p in report.predictions} == {"B"}
     for prediction in report.predictions:
         assert {stp.video_id for stp in prediction.steps} == {prediction.video_id}
 

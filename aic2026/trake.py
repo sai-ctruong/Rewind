@@ -103,6 +103,36 @@ class AlignmentConfig:
     # Whether recovery must satisfy min_gap_s / max_gap_s as well as plain ordering.
     recovery_respect_gap: bool = True
 
+    # --- Phase 8: k-best, diversity, adaptive depth -------------------------------
+    # How many distinct sequences the search enumerates per video...
+    k_best_per_video: int = 4
+    # ...and how many of them may survive the diversity filter into the final list.
+    max_alignments_per_video: int = 3
+    # Two sequences of one video are near-identical unless at least this many event
+    # positions use a different frame, AND some event moved at least this far in time.
+    min_sequence_difference_events: int = 1
+    min_sequence_time_distance_s: float = 1.0
+    # `per_event_top_k` is the INITIAL retrieval depth. When too few videos can cover
+    # every event, only the poorly covered events are re-retrieved at these depths.
+    candidate_depth_expansion: tuple[int, ...] = (120, 300)
+    candidate_depth_max: int = 400
+    # Expansion stops once this many videos can cover every event.
+    target_complete_video_hypotheses: int = 12
+    # Safety bound for the exact-DP reference; it is a test oracle, not a default.
+    exact_dp_max_states: int = 400_000
+
+    # --- Phase 8: bounded local video refinement of a chosen sequence -------------
+    refinement_enabled: bool = False
+    refinement_top_alignment_budget: int = 3
+    refinement_max_events_per_alignment: int = 4
+    refinement_frames_per_event: int = 8
+    refinement_fine_fps: float = 2.0
+    refinement_window_s: float = 2.0
+    refinement_batch_size: int = 8
+    refinement_rerank_alpha: float = 0.10
+    # Hard ceiling on frames decoded for one TRAKE query, whatever the other settings.
+    refinement_max_frames_per_query: int = 96
+
 
 @dataclass
 class AlignmentState:
@@ -287,6 +317,14 @@ class TrakePrediction:
     method: str = METHOD_BEAM_DP
     coverage: float = 1.0
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    # Phase 8: position in the final list, which variant of its video this is, and the
+    # score decomposition once local visual refinement has run.
+    rank: int = 0
+    sequence_variant_id: int = 0
+    coarse_alignment_score: float = 0.0
+    visual_gain_aggregate: float = 0.0
+    final_sequence_score: float = 0.0
+    refinement_status: str = "not_requested"
 
     def __post_init__(self) -> None:
         if int(self.event_count) <= 0:
@@ -335,6 +373,8 @@ class TrakePrediction:
     def to_dict(self) -> dict[str, Any]:
         return {
             "video_id": self.video_id,
+            "rank": int(self.rank),
+            "sequence_variant_id": int(self.sequence_variant_id),
             "event_count": int(self.event_count),
             "frame_ids": list(self.frame_ids),
             "alignment_status": self.alignment_status,
@@ -342,6 +382,10 @@ class TrakePrediction:
             "missing_event_indices": list(self.missing_event_indices),
             "method": self.method,
             "score": round(float(self.score), 6),
+            "coarse_alignment_score": round(float(self.coarse_alignment_score), 6),
+            "visual_gain_aggregate": round(float(self.visual_gain_aggregate), 6),
+            "final_sequence_score": round(float(self.final_sequence_score), 6),
+            "refinement_status": self.refinement_status,
             "coverage": round(float(self.coverage), 6),
             "steps": [step.to_dict() for step in self.steps],
             "warnings": list(self.warnings),
@@ -370,7 +414,12 @@ class VideoHypothesis:
 
 @dataclass(frozen=True)
 class TrakeAlignmentReport:
-    """Complete predictions plus the structural diagnostics behind them."""
+    """Complete predictions plus the structural diagnostics behind them.
+
+    `alignments` holds the COMPLETE, diversity-filtered sequences that survived; a video
+    whose best variant stayed incomplete contributes to `discarded` instead. Since
+    Phase 8 one video may appear in `alignments` more than once.
+    """
 
     predictions: tuple[TrakePrediction, ...] = field(default_factory=tuple)
     alignments: tuple[TrakeAlignment, ...] = field(default_factory=tuple)
@@ -427,19 +476,115 @@ def _transition(previous: EventCandidate, current: EventCandidate, config: Align
     return config.transition_penalty + config.gap_penalty * gap
 
 
-def align_video_beam_dp(
+def alignment_objective(alignment: TrakeAlignment, config: AlignmentConfig | None = None) -> float:
+    """Recompute a sequence's score from the steps it ACTUALLY holds.
+
+    Phase 7 carried the beam's running score, which stopped describing the sequence once
+    recovery replaced a step. Ranking now reads the chosen steps, so a video is never
+    ranked on evidence it did not end up using.
+    """
+    config = config or AlignmentConfig()
+    total = 0.0
+    matched = 0
+    previous: EventCandidate | None = None
+    for step in alignment.steps:
+        if step.candidate is None:
+            total -= config.missing_event_penalty
+            continue
+        matched += 1
+        total += float(step.candidate.score)
+        if previous is not None:
+            transition = _transition(previous, step.candidate, config)
+            # A transition the search would have refused still costs the plain penalty
+            # rather than silently scoring as free.
+            total -= config.transition_penalty if transition is None else transition
+        previous = step.candidate
+    coverage = matched / max(1, alignment.event_count)
+    return total + coverage * config.coverage_bonus
+
+
+def _rescored(alignment: TrakeAlignment, config: AlignmentConfig) -> TrakeAlignment:
+    return TrakeAlignment(
+        video_id=alignment.video_id,
+        events=alignment.events,
+        steps=alignment.steps,
+        score=alignment_objective(alignment, config),
+        method=alignment.method,
+        warnings=alignment.warnings,
+    )
+
+
+def _paths_from_states(
+    states: Sequence[AlignmentState],
+    events: Sequence[TrakeEvent],
+    video_id: str,
+    config: AlignmentConfig,
+    *,
+    limit: int,
+) -> list[TrakeAlignment]:
+    """Reconstruct distinct event paths from the surviving search states.
+
+    k-best comes from enumerating genuinely different histories the beam kept, not from
+    re-running the search with perturbed inputs. Two states that end at the same
+    candidate but chose different earlier events are different sequences and both
+    survive, because each state keeps its own `previous` chain.
+    """
+    ordered = sorted(
+        states,
+        key=lambda s: (
+            -(s.score + (s.matched / max(1, len(events))) * config.coverage_bonus),
+            -s.matched,
+            s.candidate.timestamp if s.candidate else float("inf"),
+            s.candidate.keyframe_id if s.candidate else "",
+        ),
+    )
+    out: list[TrakeAlignment] = []
+    seen: set[tuple[str | None, ...]] = set()
+    for state in ordered:
+        chosen: dict[int, EventCandidate | None] = {}
+        cursor: AlignmentState | None = state
+        while cursor is not None and cursor.event_index >= 0:
+            chosen[cursor.event_index] = cursor.candidate
+            cursor = cursor.previous
+        signature = tuple(
+            None if chosen.get(event.index) is None else chosen[event.index].keyframe_id
+            for event in events
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
+        steps = tuple(
+            _step_for(event, video_id, chosen.get(event.index), STEP_ALIGNED)
+            for event in events
+        )
+        alignment = TrakeAlignment(
+            video_id=video_id,
+            events=tuple(events),
+            steps=steps,
+            score=0.0,
+            method=METHOD_BEAM_DP,
+        )
+        out.append(_rescored(alignment, config))
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def align_video_k_best_beam(
     events: Sequence[TrakeEvent],
     video: VideoEventCandidates,
     config: AlignmentConfig | None = None,
-) -> TrakeAlignment:
-    """Beam-pruned DP over one video, producing one step per event.
+    *,
+    k: int = 1,
+) -> list[TrakeAlignment]:
+    """Up to `k` distinct event sequences for one video, best first.
 
-    Skipping an event stays available inside the search because it is how a partial
-    hypothesis is represented, but the skip now materializes as an explicit `missing`
-    step rather than as an absent position.
+    Deterministic: identical inputs give identical output, including tie order. Every
+    returned alignment is event-preserving, single-video, and free of duplicates.
     """
     config = config or AlignmentConfig()
     ordered_events = tuple(events)
+    wanted = max(1, int(k))
     states: list[AlignmentState] = [AlignmentState(0.0, -1, None, None, 0)]
     for event in ordered_events:
         next_states: list[AlignmentState] = []
@@ -473,38 +618,172 @@ def align_video_beam_dp(
                     )
                 )
         next_states.sort(
-            key=lambda s: (-s.score, -s.matched, s.candidate.timestamp if s.candidate else float("inf"))
+            key=lambda s: (
+                -s.score,
+                -s.matched,
+                s.candidate.timestamp if s.candidate else float("inf"),
+                s.candidate.keyframe_id if s.candidate else "",
+            )
         )
-        states = next_states[
-            : max(config.beam_width, 1) * max(1, len(video.candidates_for(event.index)))
-        ]
-    best = max(
-        states,
-        key=lambda s: (s.score + (s.matched / max(1, len(ordered_events))) * config.coverage_bonus, s.matched),
-    )
-    chosen: dict[int, EventCandidate | None] = {}
-    cursor: AlignmentState | None = best
-    while cursor is not None and cursor.event_index >= 0:
-        chosen[cursor.event_index] = cursor.candidate
-        cursor = cursor.previous
-    steps = tuple(
-        _step_for(event, video.video_id, chosen.get(event.index), STEP_ALIGNED)
-        for event in ordered_events
-    )
-    coverage = best.matched / max(1, len(ordered_events))
-    warnings = (
-        ()
-        if coverage == 1.0
-        else ("One or more TRAKE events could not be aligned by the beam search.",)
-    )
+        # Keeping k times the usual beam is what makes several distinct completions
+        # survive to the end rather than being pruned in favour of one dominant path.
+        width = max(config.beam_width, 1) * wanted
+        states = next_states[: width * max(1, len(video.candidates_for(event.index)))]
+    return _paths_from_states(states, ordered_events, video.video_id, config, limit=wanted)
+
+
+def align_video_beam_dp(
+    events: Sequence[TrakeEvent],
+    video: VideoEventCandidates,
+    config: AlignmentConfig | None = None,
+) -> TrakeAlignment:
+    """Single best beam-DP sequence for one video (the Phase 7 entry point)."""
+    config = config or AlignmentConfig()
+    best = align_video_k_best_beam(events, video, config, k=1)
+    if best:
+        alignment = best[0]
+        if alignment.is_complete:
+            return alignment
+        return TrakeAlignment(
+            video_id=alignment.video_id,
+            events=alignment.events,
+            steps=alignment.steps,
+            score=alignment.score,
+            method=alignment.method,
+            warnings=("One or more TRAKE events could not be aligned by the beam search.",),
+        )
     return TrakeAlignment(
+        video_id=video.video_id,
+        events=tuple(events),
+        steps=tuple(_step_for(event, video.video_id, None, STEP_ALIGNED) for event in events),
+        score=0.0,
+        method=METHOD_BEAM_DP,
+        warnings=("No TRAKE event could be aligned for this video.",),
+    )
+
+
+def align_video_exact_dp(
+    events: Sequence[TrakeEvent],
+    video: VideoEventCandidates,
+    config: AlignmentConfig | None = None,
+) -> TrakeAlignment | None:
+    """Exhaustive DP over the same objective. A TEST ORACLE, not the default path.
+
+    The objective is Markovian in `(event_index, last present candidate, matched count)`,
+    so the exact optimum is polynomial rather than exponential. It is still bounded by
+    `exact_dp_max_states` and returns `None` when the bound would be exceeded, because a
+    reference that silently degrades is worse than no reference.
+
+    Nothing in production calls this: the shipped search is beam-pruned `beam_dp`.
+    """
+    config = config or AlignmentConfig()
+    ordered_events = tuple(events)
+    total_candidates = sum(len(video.candidates_for(e.index)) for e in ordered_events)
+    estimate = len(ordered_events) * (total_candidates + 1) * (len(ordered_events) + 1)
+    if estimate > max(1, int(config.exact_dp_max_states)):
+        return None
+
+    # key -> (score, chosen candidates so far)
+    best: dict[tuple[str | None, int], tuple[float, tuple[EventCandidate | None, ...]]] = {
+        (None, 0): (0.0, ())
+    }
+    lookup: dict[str, EventCandidate] = {}
+    for event in ordered_events:
+        nxt: dict[tuple[str | None, int], tuple[float, tuple[EventCandidate | None, ...]]] = {}
+
+        def offer(key, value) -> None:
+            current = nxt.get(key)
+            if current is None or value[0] > current[0] or (
+                value[0] == current[0] and value[1] < current[1]
+            ):
+                nxt[key] = value
+
+        for (last_id, matched), (score, path) in best.items():
+            offer((last_id, matched), (score - config.missing_event_penalty, path + (None,)))
+            last = lookup.get(last_id) if last_id else None
+            for candidate in video.candidates_for(event.index):
+                penalty = 0.0
+                if last is not None:
+                    transition = _transition(last, candidate, config)
+                    if transition is None:
+                        continue
+                    penalty = transition
+                lookup[candidate.keyframe_id] = candidate
+                offer(
+                    (candidate.keyframe_id, matched + 1),
+                    (score + float(candidate.score) - penalty, path + (candidate,)),
+                )
+        best = nxt
+        if not best:
+            return None
+
+    def objective(item) -> float:
+        (_, matched), (score, _) = item
+        return score + (matched / max(1, len(ordered_events))) * config.coverage_bonus
+
+    winner = max(best.items(), key=lambda item: (objective(item), -item[0][1]))
+    (_, _), (_, path) = winner
+    steps = tuple(
+        _step_for(event, video.video_id, path[position], STEP_ALIGNED)
+        for position, event in enumerate(ordered_events)
+    )
+    alignment = TrakeAlignment(
         video_id=video.video_id,
         events=ordered_events,
         steps=steps,
-        score=best.score + coverage * config.coverage_bonus,
-        method=METHOD_BEAM_DP,
-        warnings=warnings,
+        score=0.0,
+        method="exact_dp_reference",
     )
+    return _rescored(alignment, config)
+
+
+def sequence_signature(alignment: TrakeAlignment | TrakePrediction) -> tuple[str, ...]:
+    steps = alignment.steps
+    return tuple(str(step.submission_frame_idx) for step in steps)
+
+
+def sequences_are_near_duplicates(
+    first: TrakeAlignment, second: TrakeAlignment, config: AlignmentConfig
+) -> bool:
+    """Deterministic near-duplicate rule for two sequences of the same video.
+
+    Two sequences are near-identical unless enough event positions changed frame AND at
+    least one event moved appreciably in time. `[100, 200, 300]` versus `[100, 201, 300]`
+    is one alternative; `[120, 240, 340]` is a genuinely different reading.
+    """
+    if first.video_id != second.video_id:
+        return False
+    differing = sum(
+        1
+        for a, b in zip(first.steps, second.steps)
+        if a.submission_frame_idx != b.submission_frame_idx
+    )
+    if differing < max(1, int(config.min_sequence_difference_events)):
+        return True
+    shift = max(
+        (
+            abs(float(a.timestamp or 0.0) - float(b.timestamp or 0.0))
+            for a, b in zip(first.steps, second.steps)
+        ),
+        default=0.0,
+    )
+    return shift < float(config.min_sequence_time_distance_s)
+
+
+def select_diverse_alignments(
+    alignments: Sequence[TrakeAlignment], config: AlignmentConfig
+) -> list[TrakeAlignment]:
+    """Keep the strongest sequences of one video, dropping near-identical variants."""
+    kept: list[TrakeAlignment] = []
+    for alignment in sorted(
+        alignments, key=lambda a: (-a.score, sequence_signature(a))
+    ):
+        if any(sequences_are_near_duplicates(existing, alignment, config) for existing in kept):
+            continue
+        kept.append(alignment)
+        if len(kept) >= max(1, int(config.max_alignments_per_video)):
+            break
+    return kept
 
 
 def _step_for(
@@ -656,18 +935,81 @@ def to_complete_prediction(
     if not is_temporally_ordered(alignment, config):
         return None
     frame_ids = tuple(str(step.submission_frame_idx) for step in alignment.steps)
+    score = float(alignment.score)
     return TrakePrediction(
         video_id=alignment.video_id,
         frame_ids=frame_ids,
         event_count=alignment.event_count,
         alignment_status=alignment.status,
-        score=float(alignment.score),
+        score=score,
         steps=alignment.steps,
         recovered_event_indices=alignment.recovered_event_indices,
         method=alignment.method,
         coverage=alignment.coverage,
         warnings=alignment.warnings,
+        # Until refinement runs, the final score IS the coarse alignment score.
+        coarse_alignment_score=score,
+        final_sequence_score=score,
     )
+
+
+def _empty_alignment(
+    events: Sequence[TrakeEvent], video: VideoEventCandidates
+) -> TrakeAlignment:
+    return TrakeAlignment(
+        video_id=video.video_id,
+        events=tuple(events),
+        steps=tuple(_step_for(event, video.video_id, None, STEP_ALIGNED) for event in events),
+        score=0.0,
+        method=METHOD_BEAM_DP,
+        warnings=("No TRAKE event could be aligned for this video.",),
+    )
+
+
+def _select_final_sequences(
+    predictions: Sequence[TrakePrediction],
+    config: AlignmentConfig,
+    *,
+    max_results: int,
+) -> list[TrakePrediction]:
+    """Fill the final list by score, balancing video coverage against sequence variety.
+
+    One strong video may contribute several readings, but not fill the list with them:
+    a first pass takes the best sequence of each video in score order, and later passes
+    admit further sequences per video up to `max_alignments_per_video`. Deterministic
+    throughout, and never more than `final_top_k`.
+    """
+    limit = max(1, min(100, int(max_results), int(config.final_top_k)))
+    ordered = sorted(
+        predictions, key=lambda p: (-float(p.score), p.video_id, p.frame_ids)
+    )
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    unique: list[TrakePrediction] = []
+    for prediction in ordered:
+        key = (prediction.video_id, prediction.frame_ids)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(prediction)
+
+    out: list[TrakePrediction] = []
+    per_video: dict[str, int] = {}
+    for allowance in range(1, max(1, int(config.max_alignments_per_video)) + 1):
+        for prediction in unique:
+            if len(out) >= limit:
+                break
+            if prediction in out:
+                continue
+            if per_video.get(prediction.video_id, 0) >= allowance:
+                continue
+            per_video[prediction.video_id] = per_video.get(prediction.video_id, 0) + 1
+            out.append(prediction)
+        if len(out) >= limit:
+            break
+    return [
+        replace(prediction, rank=position)
+        for position, prediction in enumerate(out[:limit], start=1)
+    ]
 
 
 def align_trake(
@@ -689,21 +1031,50 @@ def align_trake(
     discarded: list[TrakeAlignment] = []
     initial_missing = 0
     recovered_events = 0
+    generated = 0
+    duplicates_removed = 0
     # Why a position could not be recovered, so "0 recovered" is explainable rather than
     # indistinguishable from a broken recovery path.
     without_candidates = 0
     with_rejected_candidates = 0
+    # Counted over each video's BEST variant, so they describe videos rather than the
+    # k-times-larger variant population.
+    initial_incomplete = 0
+    remaining_missing = 0
+    videos_with_full_coverage = 0
     for _, video in ranked:
-        alignment = align_video_beam_dp(parsed, video, config)
-        initial_missing += len(alignment.missing_event_indices)
-        alignment = recover_missing_events(alignment, video, config)
-        recovered_events += len(alignment.recovered_event_indices)
-        for index in alignment.missing_event_indices:
-            if video.candidates_for(index):
-                with_rejected_candidates += 1
-            else:
-                without_candidates += 1
-        alignments.append(alignment)
+        variants = align_video_k_best_beam(
+            parsed, video, config, k=max(1, int(config.k_best_per_video))
+        )
+        generated += len(variants)
+        repaired: list[TrakeAlignment] = []
+        for position, variant in enumerate(variants):
+            if position == 0:
+                initial_missing += len(variant.missing_event_indices)
+            recovered = recover_missing_events(variant, video, config)
+            if recovered is not variant:
+                recovered = _rescored(recovered, config)
+            if position == 0:
+                recovered_events += len(recovered.recovered_event_indices)
+                remaining_missing += len(recovered.missing_event_indices)
+                if not recovered.is_complete:
+                    initial_incomplete += 1
+                for index in recovered.missing_event_indices:
+                    if video.candidates_for(index):
+                        with_rejected_candidates += 1
+                    else:
+                        without_candidates += 1
+            repaired.append(recovered)
+        complete = [item for item in repaired if item.is_complete]
+        if complete:
+            videos_with_full_coverage += 1
+        if not complete:
+            # Report the best variant so the diagnostics can explain the discard.
+            discarded.append(repaired[0] if repaired else _empty_alignment(parsed, video))
+            continue
+        kept = select_diverse_alignments(complete, config)
+        duplicates_removed += len(complete) - len(kept)
+        alignments.extend(kept)
 
     predictions: list[TrakePrediction] = []
     for alignment in alignments:
@@ -713,17 +1084,10 @@ def align_trake(
             continue
         predictions.append(prediction)
 
-    predictions.sort(key=lambda p: (-p.score, p.video_id, p.frame_ids))
-    out: list[TrakePrediction] = []
-    seen: set[tuple[str, tuple[str, ...]]] = set()
-    for prediction in predictions:
-        key = (prediction.video_id, prediction.frame_ids)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(prediction)
-        if len(out) >= max(1, min(100, int(max_results))):
-            break
+    out = _select_final_sequences(predictions, config, max_results=max_results)
+    per_video: dict[str, int] = {}
+    for prediction in out:
+        per_video[prediction.video_id] = per_video.get(prediction.video_id, 0) + 1
 
     diagnostics = {
         "event_count": len(parsed),
@@ -732,22 +1096,34 @@ def align_trake(
         },
         "videos_considered": len(videos),
         "video_hypotheses_considered": len(ranked),
-        "initial_complete_alignments": sum(
-            1 for a in alignments if not a.missing_event_indices or a.recovered_event_indices
-        ),
+        "initial_complete_alignments": videos_with_full_coverage,
+        "videos_with_full_event_coverage": videos_with_full_coverage,
         "initial_missing_events": initial_missing,
         "recovered_events": recovered_events,
-        "remaining_missing_events": sum(len(a.missing_event_indices) for a in alignments),
+        "remaining_missing_events": remaining_missing,
         # Breakdown of what stayed missing: the event was never retrieved for that video,
         # or its candidates existed but did not fit between the neighbours.
         "missing_without_candidates": without_candidates,
         "missing_with_rejected_candidates": with_rejected_candidates,
-        "initial_incomplete_alignments": sum(1 for a in alignments if not a.is_complete),
+        "initial_incomplete_alignments": initial_incomplete,
         "discarded_incomplete_alignments": len(discarded),
         "returned_complete_predictions": len(out),
         "alignment_method": METHOD_BEAM_DP,
         "beam_width": int(config.beam_width),
         "recover_missing_events": bool(config.recover_missing_events),
+        "k_best_per_video": int(config.k_best_per_video),
+        "k_best_alignments_generated": generated,
+        "unique_alignments": len(alignments),
+        "sequence_duplicates_removed": duplicates_removed,
+        "complete_sequences_generated": len(predictions),
+        "unique_sequences_generated": len({(p.video_id, p.frame_ids) for p in predictions}),
+        "videos_with_multiple_alignments": sum(1 for count in per_video.values() if count > 1),
+        "max_sequences_from_one_video": max(per_video.values(), default=0),
+        "unordered_submission_sequence_count": sum(
+            1
+            for prediction in out
+            if list(prediction.timestamps) != sorted(prediction.timestamps)
+        ),
         # Structural invariants. All three must be zero.
         "malformed_prediction_count": sum(
             1 for p in out if len(p.frame_ids) != p.event_count
@@ -813,7 +1189,13 @@ __all__ = [
     "align_trake",
     "align_video_beam_dp",
     "align_video_dp",
+    "align_video_exact_dp",
+    "align_video_k_best_beam",
+    "alignment_objective",
     "group_candidates",
+    "select_diverse_alignments",
+    "sequence_signature",
+    "sequences_are_near_duplicates",
     "is_temporally_ordered",
     "joint_trake_alignment",
     "recover_missing_events",

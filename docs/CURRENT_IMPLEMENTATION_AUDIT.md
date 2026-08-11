@@ -75,7 +75,12 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | TRAKE metric truncation | **Fixed in Phase 7**: `trake_r_score` checks the frame count against the ground-truth event count before scoring and returns 0 for a mismatch. | `zip` silently truncated, so a 3-frame row answering 4 events scored as partially correct instead of invalid. | `aic2026/metrics.py` | Complete in Phase 7. |
 | TRAKE method | Named honestly since Phase 7: `beam_dp` in config, alignment, prediction, API and UI; `exact_dp` is rejected by config validation and a test scans the sources for false claims. | Beam-pruned DP is not exact DP; calling it so would misdescribe the algorithm. | `aic2026/trake.py`, `aic2026/config.py` | Naming complete in Phase 7; exact DP and k-best remain Phase 8. |
 | TRAKE `refine_window_s` | Phase 7 makes the inert parameter truthful: every response carries `refinement.applied=false` and `status="not_implemented_phase_7"`. | It is accepted for API compatibility but changes nothing, and a test asserts that. | `aic2026/engine.py`, `ui/app.py` | Truthful in Phase 7; TRAKE refinement remains Phase 8+. |
-| TRAKE alignments/video | `joint_trake_alignment` tao 1 prediction moi video hypothesis (`align_video_dp` mot lan/video). | Khong tan dung Top-100 bang nhieu sequence trong cung video. | `aic2026/trake.py`, `aic2026/engine.py` | Phase 8: k-best alternatives va diversification. |
+| TRAKE alignments/video | **Fixed in Phase 8**: `align_video_k_best_beam` enumerates distinct paths from the retained search states, and `select_diverse_alignments` keeps up to `max_alignments_per_video` after a deterministic near-duplicate filter. | Real smoke: 62 videos contributed more than one sequence, and complete sequences went from 12 to 187 on the same four queries. That is structural yield, not accuracy. | `aic2026/trake.py`, `aic2026/engine.py` | Complete in Phase 8. |
+| TRAKE candidate depth | **Fixed in Phase 8**: adaptive expansion re-retrieves only the events reaching fewer videos than the best-covered event, through the EXISTING fusion retriever, bounded by `candidate_depth_max` and stopped by `target_complete_video_hypotheses`. | The Phase 7 smoke showed 59 missing positions with no candidate at all at depth 40. Videos with full event coverage went from 12 to 66. No candidate is fabricated. | `aic2026/engine.py`, `aic2026/config.py` | Complete in Phase 8; independent retrieval channels remain Phase 9. |
+| TRAKE final scoring | **Fixed in Phase 8**: `alignment_objective` recomputes the score from the steps an alignment actually holds, and `score_video_hypothesis` is now explicitly a pre-filter only. | Phase 7 ranked on the beam's running score, which went stale after recovery replaced a step. | `aic2026/trake.py` | Complete in Phase 8. |
+| TRAKE local refinement | **Integrated in Phase 8**: `aic2026/trake_refinement.py` refines a few complete sequences event by event, each against its OWN text, reusing `LocalFrameRefiner` / `FrameProvider` / `FrameScorer` / the shared `CLIPBackend`. | Off by default (~10 s per query on CPU). Bounded by a hard per-query frame ceiling. Refined frames are evidence only: the submitted frame stays the coarse official mapped frame_idx. | `aic2026/trake_refinement.py`, `aic2026/engine.py`, `ui/app.py` | Integrated in Phase 8. |
+| TRAKE `refine_window_s` | **Fixed in Phase 8**: it now selects the local refinement window, and a test asserts a wider value samples more frames. | No longer a dead parameter. With refinement off the response reports `status: disabled` and `frames_decoded: 0`. | `aic2026/engine.py`, `aic2026/trake_refinement.py` | Complete in Phase 8. |
+| TRAKE exact DP | Phase 8 adds `align_video_exact_dp` as a bounded **test oracle** only; `trake.alignment_method` still rejects `exact_dp` and the shipped search reports `beam_dp`. | The objective is Markovian in (event, last candidate, matched), so the exact optimum is polynomial. Tests assert a wide beam matches it. | `aic2026/trake.py` | Reference complete in Phase 8; k-best exact search is not the production path. |
 | Top-100 duplicates | KIS `video_aware_top100` chan duplicate `(video_id, frame_id)`. TRAKE chan duplicate `(video_id, frame_ids)` nhung co the thieu event. Q&A khong co validator truoc export. | Duplicate/schema loi co the lot ra CSV, dac biet sau manual edit. | `aic2026/ranking.py`, `aic2026/metrics.py`, `ui/index.html` | Phase 11: submission validator bat buoc truoc export. |
 | Objects/metadata role | Dense CLIP va sparse BM25 tao union candidate; object/metadata chi tinh score tren union do. Object/metadata chua la independent generator. | Object-only hoac metadata-only frame co the khong bao gio duoc xet. | `aic2026/engine.py`, `aic2026/fusion.py`, `aic2026/dataset.py` | Phase 9: `retrieval_channels.py` voi union candidate tu tung channel. |
 | Metadata fields | Fixed in Phase 3: media title/description/tags/channel/duration are separate from `frame_caption`, OCR, ASR and objects; `llm_caption` is only a frame-caption compatibility alias. | Provenance is preserved in prefixed searchable text; independent metadata candidate generation remains pending Phase 9. | `aic2026/dataset.py`, `ingestion/schemas.py`, `ingestion/build_records.py` | Schema separation complete in Phase 3; channel generation remains Phase 9. |
@@ -95,7 +100,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 3. Since Phase 6, Q&A answers each top video hypothesis independently from that video's own evidence; the pre-Phase-6 behaviour of copying one answer across every returned candidate is gone, and two diagnostics assert it stays gone.
 4. Since Phase 7, TRAKE cannot output fewer frame IDs than the number of events: missing alignments remain explicit `missing` steps, recovery is attempted from the same video's candidates for that event, and anything still incomplete is discarded rather than shortened.
 5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`. Since Phase 7 the config rejects `exact_dp` and the method is reported as `beam_dp` everywhere.
-6. One video currently produces at most one TRAKE alignment sequence.
+6. Since Phase 8, one video can produce several distinct complete TRAKE sequences (`k_best_per_video` enumerated, `max_alignments_per_video` kept after diversity filtering).
 7. KIS Top-100 de-duplicates `(video_id, frame_id)`; TRAKE de-duplicates full sequence; Q&A/export still lacks a shared validator.
 8. New caches require schema-v1 manifests; legacy `entry.pkl`-only caches are rejected by default and stale/corrupt fields are reported.
 9. The `aic2026:` section in `settings.yaml` is the validated runtime source wired into engine, CLI, UI and benchmark snapshots.
@@ -274,3 +279,38 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 - **No accuracy claim**: no AIC ground truth exists and nothing was tuned against
   correctness.
 - k-best, exact DP, TRAKE local refinement and semantic verification all remain pending.
+
+## Phase 8 Status Update
+
+- **One-alignment-per-video limitation: fixed in Phase 8**, commit
+  `feat: add k-best TRAKE temporal refinement`; see
+  `docs/PHASE_8_TRAKE_KBEST_AND_REFINEMENT.md`.
+- `align_video_k_best_beam` enumerates distinct paths from the states the beam already
+  retains (widened to `beam_width * k`), deduplicated by keyframe signature and fully
+  deterministic. It is not the search re-run with perturbed inputs.
+- `align_video_exact_dp` is a bounded **test oracle** proving a wide beam reaches the
+  exact objective on small cases. The shipped method is still `beam_dp` and
+  `alignment_method` still rejects `exact_dp`.
+- Adaptive candidate expansion deepens only the events reaching fewer videos than the
+  best-covered event, through the existing CLIP+BM25 retriever, capped by
+  `candidate_depth_max`. No new retrieval channel; that is Phase 9.
+- `alignment_objective` rescores from the chosen steps, separating the pre-alignment
+  video filter from final ranking.
+- `aic2026/trake_refinement.py` refines a few complete sequences per query, event by
+  event, each against its own text, with a hard `max_frames_per_query` ceiling. Order
+  safety comes from a joint ordered DP over the already-sampled frames
+  (`local_ordered_refinement`), not from a post-hoc patch.
+- `refine_window_s` genuinely selects the local window and is no longer a dead parameter.
+- Frame-ID policy unchanged: `submission_frame_idx == coarse_official_frame_idx`, and
+  `apply_refinement` asserts the row is untouched.
+- Real L21 smoke, same four queries as Phase 7, cache reused: complete sequences
+  **12 → 187**, videos with full event coverage **12 → 66**, 62 videos contributing more
+  than one sequence, 12 events expanded (depth 40 → 120/300), 2,220 new candidates. With
+  refinement on: 12 sequences refined, 39 events, 312 frames decoded and scored, 0
+  failures, p50 9.9 s / p95 12.7 s on CPU.
+- All Phase 7 structural counters remain **0** across all three passes, and every
+  returned row still has exactly N frames.
+- **No accuracy claim**: complete-sequence yield is a structural count, not accuracy and
+  not recall. Nothing was tuned against quality.
+- Independent retrieval channels, the query-normalization redesign, the global submission
+  validator and the Phase 12 manual-edit architecture all remain pending.

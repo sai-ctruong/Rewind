@@ -13,8 +13,11 @@ Competition system for Textual KIS, grounded Q&A and ordered-event TRAKE over th
   the coarse mapped `frame_idx`; see `docs/PHASE_5_LOCAL_REFINEMENT.md`.
 - Joint monotonic **beam-pruned** dynamic programming for TRAKE (`beam_dp`, not exact
   DP). Since Phase 7 every emitted sequence carries exactly one frame per query event;
-  incomplete alignments are discarded rather than shortened. See
-  `docs/PHASE_7_TRAKE_STRUCTURAL_CORRECTNESS.md`.
+  incomplete alignments are discarded rather than shortened. Phase 8 adds k-best
+  sequences per video, adaptive candidate expansion, and opt-in event-local visual
+  refinement of the original MP4s. See
+  `docs/PHASE_7_TRAKE_STRUCTURAL_CORRECTNESS.md` and
+  `docs/PHASE_8_TRAKE_KBEST_AND_REFINEMENT.md`.
 - Grounded Q&A answered **per video hypothesis** (Phase 6): each video is answered from
   its own evidence, so an answer is never copied across videos. The shipped visual
   backend on a machine without a key or a local VLM is the **non-visual mock**, which
