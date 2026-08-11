@@ -422,6 +422,8 @@ def create_app(
             ),
             # Backend capability, reported truthfully and without loading any model.
             qa=None if engine is None else engine.qa_status(),
+            # Which independent candidate generators exist, and which have real data.
+            retrieval_channels=None if engine is None else engine.channel_status(),
         )
 
     @app.get("/api/video/progress")

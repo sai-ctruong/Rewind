@@ -339,15 +339,39 @@ aic2026:
     allow_hashing_fallback: true
 
   retrieval_channels:
-    clip_enabled: true
-    clip_top_k: 1200
-    bm25_enabled: true
-    bm25_top_k: 800
-    objects_enabled: true
-    objects_top_k: 800
-    object_confidence_threshold: 0.25
-    metadata_enabled: true
-    metadata_top_k: 300
+    # Independent candidate GENERATORS: each may introduce candidates the others never
+    # saw. A channel being enabled does not mean its data exists -- availability is
+    # measured from the built index, and an empty source reports available=false.
+    # `objects` and `metadata` need dataset.load_objects / include_media_text at BUILD
+    # time; a cache built without them will honestly report those channels unavailable.
+    normalization: rank        # rank | minmax -- never a raw sum across score spaces
+    channels:
+      clip:
+        enabled: true
+        top_k: 1200
+      bm25:
+        enabled: true
+        top_k: 800
+      objects:
+        enabled: true
+        top_k: 800
+        confidence_threshold: 0.25
+      metadata:
+        enabled: true
+        top_k: 300
+        # A metadata hit describes a VIDEO; it expands to this many spread frames.
+        frames_per_video: 8
+      # Optional frame-scoped text. Enabled so their absence is reported rather than
+      # hidden; on the L21 development scope all three are genuinely empty.
+      ocr:
+        enabled: true
+        top_k: 300
+      asr:
+        enabled: true
+        top_k: 300
+      caption:
+        enabled: true
+        top_k: 300
 
   fusion:
     method: adaptive

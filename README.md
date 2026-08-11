@@ -6,7 +6,13 @@ Competition system for Textual KIS, grounded Q&A and ordered-event TRAKE over th
 
 - Real openai/clip-vit-base-patch32 text encoder with strict 512-dimensional validation.
 - Explicit hashing fallback for unit/smoke tests only; production mode refuses it.
-- CLIP, confidence-aware objects, media metadata and BM25 score fusion with ablations.
+- **Independent retrieval channels** (Phase 9): CLIP, BM25, objects and media metadata each
+  generate their own candidates, so an object-only or metadata-only frame can enter the
+  pool. OCR/ASR/frame-caption channels exist but report `available=false` because those
+  sources are genuinely empty. Requires `dataset.load_objects` / `include_media_text` at
+  build time; see `docs/PHASE_9_MULTI_CHANNEL_RETRIEVAL.md`.
+- Vietnamese query normalization that preserves the original query for CLIP while giving
+  accent-folded and lightly expanded views to the lexical channels.
 - Video-aware diversified Top-100 ranking.
 - Bounded query-conditioned local refinement of the original MP4s, wired into **Textual
   KIS only** (Phase 5). Q&A and TRAKE do not refine. The official submission frame stays

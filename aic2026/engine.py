@@ -45,6 +45,18 @@ from .local_refinement import (
     LocalRefinementResult,
     RefinementCandidate,
 )
+from .query_normalization import QueryRepresentation, normalize_query
+from .retrieval_channels import (
+    CHANNEL_BM25,
+    CHANNEL_CLIP,
+    CHANNEL_METADATA,
+    CHANNEL_OBJECTS,
+    ChannelUnion,
+    PooledCandidate,
+    RetrievalChannelRegistry,
+    build_channel_registry,
+    channel_depths,
+)
 from .qa import (
     ANSWER_STATUS_ABSTAINED,
     ANSWER_STATUS_ANSWERED,
@@ -140,6 +152,7 @@ class KISSearchResult:
     coarse_search_ms: float = 0.0
     refinement_ms: float = 0.0
     total_search_ms: float = 0.0
+    coarse: Optional["CoarseSearchResult"] = None
 
     def diagnostics(self) -> dict:
         """Structural counters and timings. Never an accuracy measurement."""
@@ -152,9 +165,22 @@ class KISSearchResult:
         }
         if self.refinement is not None:
             base.update(self.refinement.diagnostics)
-            base["coarse_search_ms"] = round(self.coarse_search_ms, 3)
-            base["total_search_ms"] = round(self.total_search_ms, 3)
+        if self.coarse is not None:
+            # Channel coverage counters; never named recall.
+            base["channels"] = self.coarse.diagnostics
+        base["coarse_search_ms"] = round(self.coarse_search_ms, 3)
+        base["total_search_ms"] = round(self.total_search_ms, 3)
         return base
+
+
+@dataclass(frozen=True)
+class CoarseSearchResult:
+    """Coarse candidates plus which channels proposed them."""
+
+    candidates: list[Candidate]
+    union: Optional[ChannelUnion] = None
+    query: Optional[QueryRepresentation] = None
+    diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -306,6 +332,8 @@ class AICCompetitionEngine:
             max_images=self.qa_config.evidence_frame_count,
         )
         self._raws_by_video: Optional[dict[str, list]] = None
+        # Channel indices are built once, on first use, and reused for every query.
+        self._channels: Optional[RetrievalChannelRegistry] = None
 
     def _build_frame_scorer(self) -> Optional[FrameScorer]:
         """Construct the configured visual scorer without loading its weights.
@@ -698,55 +726,104 @@ class AICCompetitionEngine:
     ) -> list[Candidate]:
         return self.search_candidates(query, top_k=top_k)
 
+    @property
+    def channels(self) -> RetrievalChannelRegistry:
+        """Lazily built channel registry; the indices are built once per engine."""
+        if self._channels is None:
+            self._channels = build_channel_registry(
+                self.entry, self.encode_query, self.app_config.retrieval_channels
+            )
+        return self._channels
+
+    def channel_status(self) -> dict:
+        """Which channels exist, which are enabled, and which have real data."""
+        return self.channels.status()
+
     def search_candidates(
         self,
         query: str,
         *,
         top_k: int = 20,
         filters: Optional[dict] = None,
+        depth_scale: float = 1.0,
     ) -> list[Candidate]:
+        return self.search_candidates_detailed(
+            query, top_k=top_k, filters=filters, depth_scale=depth_scale
+        ).candidates
+
+    def search_candidates_detailed(
+        self,
+        query: str,
+        *,
+        top_k: int = 20,
+        filters: Optional[dict] = None,
+        depth_scale: float = 1.0,
+    ) -> "CoarseSearchResult":
+        """Coarse retrieval over the union of every enabled, available channel.
+
+        Before Phase 9 the pool was CLIP union BM25, and objects/metadata could only
+        rescore what was already inside it: a frame whose only strong signal was its
+        detector labels had no way in. Now each channel proposes its own candidates and
+        the pool is their union, with per-channel provenance kept all the way through.
+        """
+        started = time.perf_counter()
         top_k = max(1, min(self.fusion_depth, int(top_k)))
-        qvec = self.encode_query(query)
-        retriever = CoarseRetriever(self.entry.index, fusion_depth=self.fusion_depth)
-        rows = retriever._apply_filters(filters)
-        depth = min(self.fusion_depth, len(self.entry.index.ids))
-        if rows is None:
-            dense_pairs = self.entry.index.dense_search(qvec, "clip", depth)
-        else:
-            dense_pairs = self.entry.index.exact_dense_search(qvec, "clip", rows, depth)
-        sparse_pairs = self.entry.index.sparse_search(query, depth, rows)
-        dense = dict(dense_pairs)
-        sparse = dict(sparse_pairs)
-        union = set(dense) | set(sparse)
+        representation = normalize_query(query)
+        union = self.channels.search(
+            representation,
+            depths=channel_depths(self.app_config.retrieval_channels, scale=depth_scale),
+            default_top_k=self.fusion_depth,
+        )
+        channel_ms = (time.perf_counter() - started) * 1000.0
+
+        # A filter restricts which rows may participate; it is applied to the pool rather
+        # than to each channel, so a channel never has to know about it.
+        allowed: Optional[set[str]] = None
+        if filters:
+            retriever = CoarseRetriever(self.entry.index, fusion_depth=self.fusion_depth)
+            rows = retriever._apply_filters(filters)
+            if rows is not None:
+                allowed = {self.entry.index.ids[row] for row in rows}
+
+        fusion_started = time.perf_counter()
+        pooled = [
+            item
+            for item in union.candidates
+            if allowed is None or item.keyframe_id in allowed
+        ]
         ranked: list[RankedCandidate] = []
-        for row in union:
-            keyframe_id = self.entry.index.ids[row]
-            raw = self.entry.raws[keyframe_id]
-            object_score, matched_objects = object_match_score(
-                query, getattr(raw, "object_detections", None) or [
-                    {"label": label, "confidence": 0.5} for label in raw.objects
-                ]
-            )
-            metadata = self.entry.caption_by_id.get(keyframe_id, "")
-            metadata_score, metadata_terms = token_overlap_score(query, metadata)
+        provenance: dict[str, PooledCandidate] = {}
+        for item in pooled:
+            raw = self.entry.raws.get(item.keyframe_id)
+            if raw is None:
+                continue
+            provenance[item.keyframe_id] = item
+            object_evidence = item.by_channel.get(CHANNEL_OBJECTS)
+            metadata_evidence = item.by_channel.get(CHANNEL_METADATA)
             ranked.append(RankedCandidate(
                 video_id=raw.video_id,
-                frame_id=official_frame_id(self.entry, keyframe_id),
-                keyframe_id=keyframe_id,
+                frame_id=official_frame_id(self.entry, item.keyframe_id),
+                keyframe_id=item.keyframe_id,
                 timestamp=raw.timestamp,
                 keyframe_path=raw.image_path,
-                dense_score=float(dense.get(row, 0.0)),
-                object_score=object_score,
-                metadata_score=metadata_score,
-                bm25_score=float(sparse.get(row, 0.0)),
+                # Channel scores are already normalized onto a comparable scale, so
+                # fusion never adds a cosine to a BM25 sum to a detector confidence.
+                dense_score=item.normalized_score(CHANNEL_CLIP),
+                object_score=item.normalized_score(CHANNEL_OBJECTS),
+                metadata_score=item.normalized_score(CHANNEL_METADATA),
+                bm25_score=item.normalized_score(CHANNEL_BM25),
                 evidence=CandidateEvidence(
-                    matched_objects=matched_objects,
-                    metadata_terms=metadata_terms,
-                    sparse_terms=metadata_terms,
+                    matched_objects=() if object_evidence is None else object_evidence.evidence,
+                    metadata_terms=() if metadata_evidence is None else metadata_evidence.evidence,
+                    sparse_terms=tuple(item.channels),
                 ),
             ))
         fused = fuse_candidates(query, ranked, self.fusion_config)
-        row_by_id = {self.entry.index.ids[row]: row for row in union}
+        row_by_id = {
+            keyframe_id: self.entry.index._id_to_row[keyframe_id]
+            for keyframe_id in provenance
+            if keyframe_id in self.entry.index._id_to_row
+        }
         out: list[Candidate] = []
         for item in fused.candidates[:top_k]:
             # Use the identity fusion carried through. Rebuilding it from
@@ -772,8 +849,28 @@ class AICCompetitionEngine:
                 "fused": item.fused_score,
             }
             candidate.evidence = item.evidence
+            pooled_item = provenance.get(keyframe_id)
+            # Which channels found this candidate survives all the way to the response,
+            # so an object-only or metadata-only candidate stays identifiable as such.
+            candidate.channels = () if pooled_item is None else pooled_item.channels
+            candidate.channel_evidence = (
+                {} if pooled_item is None else pooled_item.to_dict()
+            )
             out.append(candidate)
-        return out
+        fusion_ms = (time.perf_counter() - fusion_started) * 1000.0
+        diagnostics = dict(union.diagnostics)
+        diagnostics["channel_search_ms"] = round(channel_ms, 3)
+        diagnostics["fusion_ms"] = round(fusion_ms, 3)
+        diagnostics["total_coarse_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        diagnostics["filtered_out"] = len(union.candidates) - len(pooled)
+        diagnostics["returned"] = len(out)
+        diagnostics["query"] = representation.to_dict()
+        return CoarseSearchResult(
+            candidates=out,
+            union=union,
+            query=representation,
+            diagnostics=diagnostics,
+        )
     def search_kis(
         self, query: str, *, top_k: Optional[int] = None, refine: Optional[bool] = None
     ) -> list[AICPrediction]:
@@ -791,7 +888,10 @@ class AICCompetitionEngine:
         """
         started = time.perf_counter()
         requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.ranking_config.final_top_k)))
-        pool = self.search_candidates(query, top_k=min(self.fusion_depth, max(requested * 3, 100)))
+        coarse = self.search_candidates_detailed(
+            query, top_k=min(self.fusion_depth, max(requested * 3, 100))
+        )
+        pool = coarse.candidates
         coarse_ms = (time.perf_counter() - started) * 1000.0
 
         refinement: Optional[LocalRefinementResult] = None
@@ -843,6 +943,7 @@ class AICCompetitionEngine:
             coarse_search_ms=coarse_ms,
             refinement_ms=refinement_ms,
             total_search_ms=(time.perf_counter() - started) * 1000.0,
+            coarse=coarse,
         )
 
     def _refine_candidates(
@@ -1636,7 +1737,10 @@ class AICCompetitionEngine:
         from asking the same CLIP+BM25 fusion for more rows.
         """
         rows: list[EventCandidate] = []
-        for candidate in self.search_candidates(text, top_k=int(depth)):
+        # Expansion must deepen the CHANNELS, not just widen the fused slice; otherwise a
+        # deeper request would silently fall back to the original channel depths.
+        scale = max(1.0, float(depth) / max(1.0, float(self.trake_config.per_event_top_k)))
+        for candidate in self.search_candidates(text, top_k=int(depth), depth_scale=scale):
             raw = self.entry.raws.get(candidate.keyframe_id)
             if raw is None or raw.frame_idx is None:
                 # An unmapped keyframe has no official frame to submit, so it cannot
@@ -1809,6 +1913,9 @@ class AICCompetitionEngine:
                 "matched_objects": list(getattr(getattr(c, "evidence", None), "matched_objects", ())),
                 "metadata_terms": list(getattr(getattr(c, "evidence", None), "metadata_terms", ())),
                 "sparse_terms": list(getattr(getattr(c, "evidence", None), "sparse_terms", ())),
+                # Which independent channels proposed this candidate. A candidate that
+                # only objects or only metadata found stays identifiable as such.
+                "channels": list(getattr(c, "channels", ()) or ()),
             },
             refinement=None if refinement is None else refinement.to_dict(),
         )

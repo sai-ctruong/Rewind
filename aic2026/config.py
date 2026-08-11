@@ -124,6 +124,14 @@ class EncoderConfig:
 
 @dataclass(frozen=True)
 class RetrievalChannelConfig:
+    """Independent candidate generators (Phase 9).
+
+    Every channel can be toggled on its own, which is what makes later ablations
+    possible. A channel being *enabled* never implies its source data exists:
+    availability is measured from the built index, and an empty source reports
+    `available=false` with a reason rather than pretending to search.
+    """
+
     clip_enabled: bool = True
     clip_top_k: int = 1200
     bm25_enabled: bool = True
@@ -133,6 +141,20 @@ class RetrievalChannelConfig:
     object_confidence_threshold: float = 0.25
     metadata_enabled: bool = True
     metadata_top_k: int = 300
+    # A metadata hit describes a VIDEO, so it is expanded into this many evenly spread
+    # frame hypotheses rather than the whole video.
+    metadata_frames_per_video: int = 8
+    # Optional frame-scoped text sources. Enabled by default so their absence is
+    # reported honestly instead of silently hidden by configuration.
+    ocr_enabled: bool = True
+    ocr_top_k: int = 300
+    asr_enabled: bool = True
+    asr_top_k: int = 300
+    caption_enabled: bool = True
+    caption_top_k: int = 300
+    # How each channel's raw scores are made comparable: rank (default, scale-free) or
+    # minmax. Never a raw sum of a cosine, a BM25 score and a detector confidence.
+    normalization: str = "rank"
 
 
 @dataclass(frozen=True)
@@ -272,6 +294,27 @@ def _refinement_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return source
 
 
+def _channels_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Accept the nested Phase 9 `channels:` block and the older flat keys.
+
+    `channels: {clip: {enabled, top_k}, ...}` reads far better than seven pairs of flat
+    keys, but `RetrievalChannelConfig` is a flat frozen dataclass, so it is flattened
+    here rather than mirrored as a second settings structure.
+    """
+    source = dict(raw or {})
+    channels = source.pop("channels", None)
+    if isinstance(channels, Mapping):
+        for name, settings in channels.items():
+            if not isinstance(settings, Mapping):
+                continue
+            for key, value in settings.items():
+                if key == "confidence_threshold":
+                    source.setdefault(f"{name[:-1] if name.endswith('s') else name}_confidence_threshold", value)
+                else:
+                    source.setdefault(f"{name}_{key}", value)
+    return source
+
+
 def _trake_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Accept the nested Phase 8 `sequence_diversity:` and `refinement:` blocks.
 
@@ -340,7 +383,9 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         dataset=_construct(DatasetConfig, dataset_raw),
         cache=_construct(CacheConfig, raw.get("cache")),
         encoder=_construct(EncoderConfig, raw.get("encoder")),
-        retrieval_channels=_construct(RetrievalChannelConfig, raw.get("retrieval_channels")),
+        retrieval_channels=_construct(
+            RetrievalChannelConfig, _channels_raw(raw.get("retrieval_channels"))
+        ),
         fusion=_construct(FusionConfig, raw.get("fusion")),
         ranking=_construct(RankingConfig, raw.get("ranking")),
         refinement=_construct(RefinementConfig, _refinement_raw(raw.get("refinement"))),
@@ -407,6 +452,7 @@ def validate_app_config(config: AppConfig) -> None:
         )
     _validate_cache(config.cache)
     _validate_encoder(config.runtime, config.encoder)
+    _validate_retrieval_channels(config.retrieval_channels)
     _validate_fusion(config.fusion)
     _validate_ranking(config.ranking)
     _validate_refinement(config.refinement)
@@ -507,6 +553,37 @@ def _validate_encoder(runtime: RuntimeConfig, cfg: EncoderConfig) -> None:
     _require(bool(str(cfg.model_name).strip()), "encoder.model_name must be non-empty")
     if runtime.production_mode:
         _require(cfg.type not in {"hashing", "hashing_fallback", "hashing-only"}, "encoder.type cannot be hashing-only in production mode")
+
+
+def _validate_retrieval_channels(cfg: RetrievalChannelConfig) -> None:
+    for name in ("clip", "bm25", "objects", "metadata", "ocr", "asr", "caption"):
+        _require(
+            int(getattr(cfg, f"{name}_top_k")) > 0,
+            f"retrieval_channels.{name}.top_k must be > 0",
+        )
+        _require(
+            isinstance(getattr(cfg, f"{name}_enabled"), bool),
+            f"retrieval_channels.{name}.enabled must be a boolean",
+        )
+    _require(
+        any(
+            getattr(cfg, f"{name}_enabled")
+            for name in ("clip", "bm25", "objects", "metadata", "ocr", "asr", "caption")
+        ),
+        "at least one retrieval channel must be enabled",
+    )
+    _require(
+        0.0 <= float(cfg.object_confidence_threshold) <= 1.0,
+        "retrieval_channels.objects.confidence_threshold must be in [0, 1]",
+    )
+    _require(
+        int(cfg.metadata_frames_per_video) > 0,
+        "retrieval_channels.metadata.frames_per_video must be > 0",
+    )
+    _require(
+        str(cfg.normalization) in {"rank", "minmax"},
+        "retrieval_channels.normalization must be rank or minmax",
+    )
 
 
 def _validate_fusion(cfg: FusionConfig) -> None:

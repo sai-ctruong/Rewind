@@ -82,9 +82,11 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | TRAKE `refine_window_s` | **Fixed in Phase 8**: it now selects the local refinement window, and a test asserts a wider value samples more frames. | No longer a dead parameter. With refinement off the response reports `status: disabled` and `frames_decoded: 0`. | `aic2026/engine.py`, `aic2026/trake_refinement.py` | Complete in Phase 8. |
 | TRAKE exact DP | Phase 8 adds `align_video_exact_dp` as a bounded **test oracle** only; `trake.alignment_method` still rejects `exact_dp` and the shipped search reports `beam_dp`. | The objective is Markovian in (event, last candidate, matched), so the exact optimum is polynomial. Tests assert a wide beam matches it. | `aic2026/trake.py` | Reference complete in Phase 8; k-best exact search is not the production path. |
 | Top-100 duplicates | KIS `video_aware_top100` chan duplicate `(video_id, frame_id)`. TRAKE chan duplicate `(video_id, frame_ids)` nhung co the thieu event. Q&A khong co validator truoc export. | Duplicate/schema loi co the lot ra CSV, dac biet sau manual edit. | `aic2026/ranking.py`, `aic2026/metrics.py`, `ui/index.html` | Phase 11: submission validator bat buoc truoc export. |
-| Objects/metadata role | Dense CLIP va sparse BM25 tao union candidate; object/metadata chi tinh score tren union do. Object/metadata chua la independent generator. | Object-only hoac metadata-only frame co the khong bao gio duoc xet. | `aic2026/engine.py`, `aic2026/fusion.py`, `aic2026/dataset.py` | Phase 9: `retrieval_channels.py` voi union candidate tu tung channel. |
+| Objects/metadata role | **Fixed in Phase 9**: `aic2026/retrieval_channels.py` makes CLIP, BM25, objects and metadata independent generators; the pool is their union with per-channel provenance. | Real smoke: 508 candidates introduced exclusively by objects and 347 by metadata across four KIS queries. A prior audit found the shipped cache had `load_objects: false` and `include_media_text: false`, so the pipeline was effectively CLIP-only and BM25's corpus was 7,800 empty sentinels. | `aic2026/retrieval_channels.py`, `aic2026/engine.py`, `aic2026/config.py` | Complete in Phase 9. |
+| Optional text channels | Phase 9 constructs OCR, ASR and frame-caption channels so their absence is REPORTED rather than hidden: all three are `available=false` with `no_populated_source_data` on the real L21 scope. | Nothing is substituted for them: object labels are not OCR, and media metadata is not a frame caption. | `aic2026/retrieval_channels.py`, `ui/app.py` | Honest status in Phase 9; the sources genuinely do not exist. |
+| Vietnamese query handling | **Fixed in Phase 9**: `aic2026/query_normalization.py` keeps the original query for CLIP and supplies folded/expanded views to the lexical channels, with a versioned bilingual vocabulary. | Accented and unaccented forms of one query overlap 83% of their candidate pool. Negation and temporal markers are preserved and marked instead of being normalized away. | `aic2026/query_normalization.py`, `aic2026/retrieval_channels.py` | Complete in Phase 9. |
 | Metadata fields | Fixed in Phase 3: media title/description/tags/channel/duration are separate from `frame_caption`, OCR, ASR and objects; `llm_caption` is only a frame-caption compatibility alias. | Provenance is preserved in prefixed searchable text; independent metadata candidate generation remains pending Phase 9. | `aic2026/dataset.py`, `ingestion/schemas.py`, `ingestion/build_records.py` | Schema separation complete in Phase 3; channel generation remains Phase 9. |
-| Vietnamese query handling | `normalize_label` va answer normalization co mot so token khong dau/co dau, nhung chua co module query normalization co struct rieng. | Truy van tieng Viet co dau/khong dau va phrase temporal co the mat tin hieu. | `aic2026/fusion.py`, `aic2026/qa.py` | Phase 10: `query_normalization.py` giu ca original va accent-folded representation. |
+| Vietnamese normalization module | Delivered in Phase 9 as `aic2026/query_normalization.py`; see the row above. | `fusion.normalize_label` remains for label canonicalization and now shares the same folding rules. | `aic2026/query_normalization.py` | Complete in Phase 9. |
 | Submission export | `write_submission` chi ghi CSV va cap 100 rows, khong validate schema/task/rank/duplicate/TRAKE event count/Q&A answer empty. | File submission sai co the duoc ghi thanh cong. | `aic2026/metrics.py`, `ui/app.py`, `aic2026/cli.py` | Phase 11: `submission_validation.py`, CLI `validate-submission`, UI/CLI export gate. |
 | Manual frame edit | JS input frame edit thay moi gia tri frame trung nhau trong moi task, va loop qua tat ca task rows. | Sua mot result co the sua nham row/task/video khac co cung frame_id. | `ui/index.html` | Phase 12: result-scoped edit model, backend validate, undo/reset, validator before export. |
 | UI checkbox semantics | UI checkbox `gv-ocr` label da doi thanh Objects nhung id van `gv-ocr`; backend chi doc `objects`, bo qua ASR/caption trong index endpoint. | Control ASR/Caption co the vo tac dung; id/ten gay nham. | `ui/index.html`, `ui/app.py` | Phase 12: bo control chua support hoac wire backend dung field. |
@@ -314,3 +316,31 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
   not recall. Nothing was tuned against quality.
 - Independent retrieval channels, the query-normalization redesign, the global submission
   validator and the Phase 12 manual-edit architecture all remain pending.
+
+## Phase 9 Status Update
+
+- **Objects/metadata independent candidate generation: fixed in Phase 9**, commit
+  `feat: add multi-channel AIC retrieval`; see
+  `docs/PHASE_9_MULTI_CHANNEL_RETRIEVAL.md`.
+- **Vietnamese query normalization: fixed in Phase 9** (`aic2026/query_normalization.py`).
+- A real-data audit found the shipped cache was built with `load_objects: false` and
+  `include_media_text: false`, so `searchable_text()` was empty for every record: the
+  BM25 corpus held 7,800 empty sentinels and the pipeline was effectively **CLIP-only**,
+  while 7,800 object JSONs and 29 complete media-info files sat unused on disk.
+- Seven channels exist. On real L21: clip 7,800 · bm25 7,800 · objects 7,709 (362 labels)
+  · metadata 29 available; **ocr, asr and frame captions are genuinely absent** and report
+  `available=false` with `no_populated_source_data`.
+- Real KIS smoke: **508 candidates introduced exclusively by objects, 347 exclusively by
+  metadata**, 857 over the CLIP+BM25 baseline; union up to 2,172 from 1,200.
+- Vietnamese: accented vs unaccented forms of one query overlap **83%** of their pool;
+  negation is preserved and excluded from positive object matching.
+- **Honest regression**: TRAKE full-event coverage fell from 50 to 42 videos and complete
+  sequences from 140 to 116, because a more diverse pool spreads the fixed per-event
+  `top_k` slice across more videos. Not tuned away, because tuning it would mean tuning
+  against imagined quality.
+- Coarse retrieval 54-58 ms to 82-127 ms: bounded, indices built once per engine.
+- A NEW cache `artifacts/aic2026_index_channels` was built (189 s); the CLIP-only cache is
+  untouched and still valid. `--allow-stale-cache` was never used.
+- **No accuracy claim**: candidate coverage is a structural count, not recall.
+- The global submission validator, the Phase 12 manual-edit architecture and deployment
+  packaging all remain pending.

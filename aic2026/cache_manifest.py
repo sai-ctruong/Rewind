@@ -17,6 +17,7 @@ import numpy as np
 from ingestion.schemas import AIC_RECORD_SCHEMA_VERSION
 
 from .config import AppConfig, DatasetScopeConfig, config_hash
+from .retrieval_channels import CHANNEL_SCHEMA_VERSION
 from .dataset_scope import (
     ResolvedDatasetScope,
     hash_selected_video_ids,
@@ -119,6 +120,9 @@ class CacheBuildOptions:
     selected_video_count: int = 0
     selected_video_ids_hash: str = ""
     selected_video_ids: tuple[str, ...] = ()
+    # How the build-time channel sources are shaped. Query-time channel weights and
+    # depths are deliberately NOT here: changing them must not force a rebuild.
+    channel_schema_version: int = CHANNEL_SCHEMA_VERSION
 
     def fingerprint_payload(self) -> dict[str, Any]:
         # Dataset identity is validated separately through signatures and counts, but the
@@ -139,6 +143,7 @@ class CacheBuildOptions:
             "feature_dim": self.feature_dim,
             "encoder_feature_space": self.encoder_feature_space,
             "record_schema_version": self.record_schema_version,
+            "channel_schema_version": self.channel_schema_version,
         }
 
 
@@ -173,13 +178,18 @@ class CacheManifest:
     # what validation compares, so a scope mode like `existing_videos` is identified by
     # what it actually resolved to and not by its name.
     selected_video_ids: list[str] = field(default_factory=list)
+    # Shape of the build-time channel sources. Query-time channel depths and weights are
+    # deliberately absent: changing them must not invalidate a cache.
+    channel_schema_version: int = CHANNEL_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "CacheManifest":
-        required = set(cls.__dataclass_fields__)
+        # `channel_schema_version` is optional on read so a manifest written before
+        # Phase 9 still loads; it defaults to the current schema.
+        required = set(cls.__dataclass_fields__) - {"channel_schema_version"}
         missing = sorted(required - set(data))
         if missing:
             raise CacheManifestError(
@@ -226,6 +236,9 @@ class CacheManifest:
                 selected_video_count=int(data["selected_video_count"]),
                 selected_video_ids_hash=str(data["selected_video_ids_hash"]),
                 selected_video_ids=[str(item) for item in data.get("selected_video_ids", ())],
+                channel_schema_version=int(
+                    data.get("channel_schema_version", CHANNEL_SCHEMA_VERSION)
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise CacheManifestError(f"Invalid cache manifest field: {exc}") from exc
@@ -577,6 +590,7 @@ def build_cache_manifest(
         selected_video_count=options.selected_video_count,
         selected_video_ids_hash=options.selected_video_ids_hash,
         selected_video_ids=list(options.selected_video_ids),
+        channel_schema_version=options.channel_schema_version,
     )
 
 
