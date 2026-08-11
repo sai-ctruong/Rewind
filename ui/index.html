@@ -173,9 +173,11 @@ a:hover { text-decoration: underline; }
       </form>
       <section class="panel">
         <div class="panel-header"><h2>Grounded Answer</h2><button id="qa-save">Save CSV</button></div>
+        <div id="qa-backend" class="status"></div>
         <div id="qa-answer" class="answer-box empty"></div>
         <div id="qa-confidence" class="status"></div>
-        <label>Manual answer correction<input id="qa-correction"></label>
+        <label>Manual answer correction (selected video only)<input id="qa-correction"></label>
+        <div id="qa-hypotheses" class="results"></div>
         <div id="qa-results" class="results"></div>
         <pre id="qa-output" class="output"></pre>
       </section>
@@ -214,7 +216,7 @@ a:hover { text-decoration: underline; }
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { indexed: [], rows: { kis: [], qa: [], trake: [] } };
+const state = { indexed: [], rows: { kis: [], qa: [], trake: [] }, qaHypotheses: [], qaSelectedVideo: null };
 
 function currentVideo() { return $("gv-select").value || "__dataset__"; }
 function opts() { return { objects: $("gv-ocr").checked, asr: $("gv-asr").checked, caption: $("gv-caption").checked }; }
@@ -311,6 +313,7 @@ function renderHealth(health) {
     badge(`${health.dataset_size || 0} frames`, ""),
     badge(`${health.mp4_available || 0} mp4`, "blue"),
     badge(`refine ${(health.refinement || {}).mode || "?"}/${((health.refinement || {}).scorer || {}).state || "n/a"}`, ""),
+    badge(`qa ${(health.qa || {}).backend_type || "n/a"}${(health.qa || {}).visual_capable ? " visual" : " non-visual"}`, (health.qa || {}).visual_capable ? "ok" : "warn"),
     badge(enc.encoder_type || "encoder pending", enc.production_ready ? "ok" : "warn"),
     badge(enc.device || "device pending", "")
   ];
@@ -365,7 +368,58 @@ $("kis-form").onsubmit = async (ev) => {
   status.className = "badge " + (d.refinement_triggered ? "ok" : "");
   status.textContent = `refine ${r.mode || "?"} · ${d.refinement_triggered ? "triggered" : "skipped"} (${d.trigger_reason || "n/a"}) · ${d.candidates_refined || 0} refined · ${d.frames_decoded || 0} frames · ${Math.round(d.refinement_ms || 0)}ms`;
 };
-$("qa-form").onsubmit = async (ev) => { ev.preventDefault(); const j = await api("/api/video/vqa", jsonBody({ video: currentVideo(), event: $("qa-event").value, question: $("qa-question").value, expected_answer_type: $("qa-type").value, window: $("qa-window").value })); $("qa-answer").textContent = j.value || j.answer || ""; $("qa-answer").classList.toggle("empty", !(j.value || j.answer)); $("qa-correction").value = j.value || j.answer || ""; $("qa-confidence").textContent = "confidence " + Number(j.answer_confidence || 0).toFixed(3) + (j.warning ? " · " + j.warning : ""); state.rows.qa = j.predictions || []; renderFrames("qa-results", j.frames); renderOutput("qa-output", state.rows.qa); };
+// A Q&A answer belongs to ONE video hypothesis. Each card shows that video's own
+// answer and its own evidence; selecting a card scopes the manual correction to it.
+function renderQaHypotheses(hypotheses) {
+  const box = $("qa-hypotheses"); box.innerHTML = "";
+  if (!hypotheses || !hypotheses.length) { box.innerHTML = '<div class="empty">No video hypotheses</div>'; return; }
+  hypotheses.forEach(h => {
+    const card = document.createElement("article");
+    card.className = "frame" + (h.video_id === state.qaSelectedVideo ? " is-ref" : "");
+    const meta = document.createElement("div"); meta.className = "meta";
+    const top = document.createElement("div"); top.className = "meta-top";
+    top.append(textEl("b", "", h.video_id), badge("#" + h.rank, ""),
+      badge(h.backend_visual ? "visual" : "non-visual", h.backend_visual ? "ok" : "warn"),
+      badge(h.answer_status || "?", h.answer_status === "answered" ? "ok" : "warn"));
+    meta.append(top, textEl("div", "answer-box", h.normalized_answer || h.answer || "(no answer)"));
+    meta.append(textEl("span", "", `backend ${h.backend_type} · reliability ${Number(h.answer_reliability_score || 0).toFixed(3)} · ${(h.evidence || []).length} evidence frames`));
+    if (h.warning) meta.append(textEl("div", "evidence", h.warning));
+    const strip = document.createElement("div"); strip.className = "score-line";
+    (h.evidence || []).slice(0, 6).forEach(ev => {
+      if (!ev.image) { strip.append(textEl("span", "score-chip", `${ev.source} n/a`)); return; }
+      const img = document.createElement("img"); img.loading = "lazy"; img.src = ev.image;
+      img.alt = `${ev.video_id} ${ev.frame_idx}`; img.title = `${ev.role} · frame ${ev.frame_idx} · ${ev.source}`;
+      img.className = "refined"; strip.append(img);
+    });
+    meta.append(strip);
+    card.append(meta);
+    card.onclick = () => { state.qaSelectedVideo = h.video_id; $("qa-correction").value = h.normalized_answer || h.answer || ""; renderQaHypotheses(state.qaHypotheses); };
+    box.append(card);
+  });
+}
+$("qa-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const j = await api("/api/video/vqa", jsonBody({ video: currentVideo(), event: $("qa-event").value, question: $("qa-question").value, expected_answer_type: $("qa-type").value, window: $("qa-window").value }));
+  $("qa-answer").textContent = j.answer_normalized || j.answer || "";
+  $("qa-answer").classList.toggle("empty", !(j.answer_normalized || j.answer));
+  $("qa-correction").value = j.answer_normalized || j.answer || "";
+  const backend = j.qa || {};
+  const badgeTone = backend.visual_capable ? "ok" : "warn";
+  $("qa-backend").innerHTML = "";
+  $("qa-backend").append(
+    badge(`backend ${backend.backend_type || "?"}`, badgeTone),
+    badge(backend.visual_capable ? "visual" : "Mock / non-visual fallback", badgeTone),
+    badge(`${(j.diagnostics || {}).answered_video_hypotheses || 0}/${(j.diagnostics || {}).retrieved_video_hypotheses || 0} videos answered`, ""),
+    badge(`${Math.round((j.diagnostics || {}).total_ms || 0)}ms`, "")
+  );
+  $("qa-confidence").textContent = "answer_reliability_score " + Number(j.answer_reliability_score || 0).toFixed(3) + " · status " + (j.answer_status || "?") + (j.warning ? " · " + j.warning : "");
+  state.rows.qa = j.predictions || [];
+  state.qaHypotheses = j.hypotheses || [];
+  state.qaSelectedVideo = j.video_id || null;
+  renderQaHypotheses(state.qaHypotheses);
+  renderFrames("qa-results", j.frames);
+  renderOutput("qa-output", state.rows.qa);
+};
 $("trake-form").onsubmit = async (ev) => { ev.preventDefault(); $("trake-status").textContent = "Aligning ordered events..."; const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean); const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value })); state.rows.trake = j.predictions || []; renderChains(j.matches); $("trake-status").textContent = j.count + " joint alignments"; renderOutput("trake-output", state.rows.trake); };
 refresh().catch(e => $("health").textContent = e.message);
 $("kis-save").onclick = () => saveRows("kis").catch(e => alert(e.message));
@@ -373,8 +427,15 @@ $("qa-save").onclick = () => saveRows("qa").catch(e => alert(e.message));
 $("trake-save").onclick = () => saveRows("trake").catch(e => alert(e.message));
 setInterval(pollProgress, 1200);
 $("qa-correction").onchange = () => {
+  // Scoped fix: a correction applies to the SELECTED video hypothesis only. Rewriting
+  // every row would re-introduce exactly the cross-video answer copying Phase 6 removed.
+  // A per-row edit model is Phase 12; this keeps the current control honest until then.
   const answer = $("qa-correction").value;
-  state.rows.qa = state.rows.qa.map(row => row.length >= 3 ? [row[0], row[1], answer] : row);
+  const video = state.qaSelectedVideo;
+  if (!video) { alert("Select a video hypothesis first."); return; }
+  state.rows.qa = state.rows.qa.map(row => (row.length >= 3 && row[0] === video) ? [row[0], row[1], answer] : row);
+  state.qaHypotheses = (state.qaHypotheses || []).map(h => h.video_id === video ? { ...h, normalized_answer: answer } : h);
+  renderQaHypotheses(state.qaHypotheses);
   $("qa-answer").textContent = answer;
   $("qa-answer").classList.toggle("empty", !answer);
   renderOutput("qa-output", state.rows.qa);

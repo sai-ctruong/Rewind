@@ -14,7 +14,7 @@ from ingestion.embed_clip import deterministic_unit_vector
 from ingestion.schemas import frame_jpeg_bytes
 from retrieval.coarse_retriever import DEFAULT_FUSION_DEPTH, Candidate, CoarseRetriever
 from retrieval.temporal_check import TemporalMatch, TemporalStep, temporal_consistency_filter
-from retrieval.vqa_module import VqaAnswerer, VqaModule, default_answerer, entry_records, retrieve_temporal_window
+from retrieval.vqa_module import entry_records, retrieve_temporal_window  # noqa: F401 - re-exported for callers
 from retrieval.video_engine import VideoIndexEntry, adaptive_bm25_weight
 
 from .cache_manifest import (
@@ -38,13 +38,34 @@ from .frame_scorer import FrameScorer, build_frame_scorer
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
 from .local_refinement import (
     FRAME_OUTPUT_DECODED_FRAME,
+    MODE_ALWAYS,
     MODE_DISABLED,
     LocalFrameRefiner,
     LocalRefinementRequest,
     LocalRefinementResult,
     RefinementCandidate,
 )
-from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
+from .qa import (
+    ANSWER_STATUS_ABSTAINED,
+    ANSWER_STATUS_ANSWERED,
+    ANSWER_STATUS_BACKEND_FAILED,
+    ANSWER_STATUS_VISUAL_UNAVAILABLE,
+    ANSWER_TYPE_AUTO,
+    UNKNOWN_ANSWER,
+    QAAnswerResult,
+    QAEvidenceBundle,
+    QAEvidenceFrame,
+    QAInput,
+    QAVideoHypothesis,
+    VisualQAAnswerer,
+    answer_reliability_score,
+    build_qa_answerer,
+    build_retrieval_query,
+    canonical_answer_type,
+    group_hypotheses_by_video,
+    is_unknown_answer,
+    select_evidence_frames,
+)
 from .ranking import RankingConfig, video_aware_top100
 from .trake import AlignmentConfig, EventCandidate, joint_trake_alignment
 from .text_encoder import (
@@ -56,6 +77,13 @@ from .text_encoder import (
 )
 
 MAX_PREDICTIONS = 100
+
+
+def _join_warnings(*parts: Optional[str]) -> Optional[str]:
+    kept = [part for part in parts if part]
+    return " ".join(kept) if kept else None
+
+
 QUERY_TEMPLATES = (
     "{q}",
     "a photo of {q}.",
@@ -79,6 +107,9 @@ class AICPrediction:
     # run. `frame_id` above stays the OFFICIAL submission frame under the default
     # preserve_coarse policy, whatever the refined visual frame turned out to be.
     refinement: Optional[dict] = None
+    # Per-video-hypothesis Q&A provenance: which video the answer was produced from,
+    # which evidence frames were used, and which backend answered.
+    qa: Optional[dict] = None
 
     def row(self) -> list[str]:
         if self.event_frame_ids:
@@ -171,6 +202,7 @@ class AICCompetitionEngine:
         app_config: Optional[AppConfig] = None,
         frame_provider: Optional[FrameProvider] = None,
         frame_scorer: Optional[FrameScorer] = None,
+        qa_answerer: Optional[VisualQAAnswerer] = None,
     ):
         self.entry = entry
         self.app_config = app_config or AppConfig()
@@ -216,6 +248,16 @@ class AICCompetitionEngine:
             frame_provider=self.frame_provider,
             scorer=self.frame_scorer,
         )
+        # Q&A backend selection is cheap and loads nothing; `auto` never downloads.
+        self.qa_answerer = qa_answerer if qa_answerer is not None else build_qa_answerer(
+            self.qa_config.backend_type,
+            model_name=self.qa_config.backend_model_name,
+            device=self.qa_config.backend_device,
+            max_answer_tokens=self.qa_config.max_answer_tokens,
+            temperature=self.qa_config.answer_temperature,
+            max_images=self.qa_config.evidence_frame_count,
+        )
+        self._raws_by_video: Optional[dict[str, list]] = None
 
     def _build_frame_scorer(self) -> Optional[FrameScorer]:
         """Construct the configured visual scorer without loading its weights.
@@ -265,6 +307,7 @@ class AICCompetitionEngine:
         index_kind: Optional[str] = None,
         text_encoder: Optional[TextQueryEncoder] = None,
         frame_scorer: Optional[FrameScorer] = None,
+        qa_answerer: Optional[VisualQAAnswerer] = None,
         production_mode: Optional[bool] = None,
         allow_hashing_fallback: Optional[bool] = None,
         allow_stale_cache: Optional[bool] = None,
@@ -350,6 +393,7 @@ class AICCompetitionEngine:
                 entry,
                 text_encoder=text_encoder,
                 frame_scorer=frame_scorer,
+                qa_answerer=qa_answerer,
                 production_mode=production_mode,
                 allow_hashing_fallback=allow_hashing_fallback,
                 encoder_model_name=encoder_model_name,
@@ -800,6 +844,139 @@ class AICCompetitionEngine:
             candidate.score = float(item.refined_score)
         return result
 
+    # ------------------------------------------------------------------------ Q&A
+
+    def qa_status(self) -> dict:
+        """Q&A configuration plus backend capability. Never loads a model."""
+        status = self.qa_answerer.status()
+        return {
+            "enabled": bool(self.qa_config.enabled),
+            "top_video_hypotheses": int(self.qa_config.top_video_hypotheses),
+            "frame_hypotheses_per_video": int(self.qa_config.frame_hypotheses_per_video),
+            "evidence_frame_count": int(self.qa_config.evidence_frame_count),
+            "default_answer_type": canonical_answer_type(self.qa_config.default_answer_type),
+            "abstain_enabled": bool(self.qa_config.abstain_enabled),
+            "abstain_threshold": float(self.qa_config.abstain_threshold),
+            "use_local_refinement": bool(self.qa_config.use_local_refinement),
+            "refinement_candidate_budget": int(self.qa_config.refinement_candidate_budget),
+            "refinement_max_frames": int(self.qa_config.refinement_max_frames),
+            "backend_required": bool(self.qa_config.backend_required),
+            "backend": status.to_dict(),
+            "backend_type": status.backend_type,
+            "backend_state": status.state,
+            "visual_capable": status.visual_capable,
+            "supports_multi_image": status.supports_multi_image,
+            "production_ready": status.production_ready,
+            "model_name": status.model_name,
+            "device": status.device,
+            "warning": status.warning,
+        }
+
+    def _raws_for_video(self, video_id: str) -> list:
+        """Every mapped keyframe of one video. The entry is immutable, so cache it."""
+        if self._raws_by_video is None:
+            index: dict[str, list] = {}
+            for raw in self.entry.raws.values():
+                index.setdefault(raw.video_id, []).append(raw)
+            for items in index.values():
+                items.sort(key=lambda raw: float(raw.timestamp))
+            self._raws_by_video = index
+        return self._raws_by_video.get(str(video_id), [])
+
+    def _qa_refiner(self) -> LocalFrameRefiner:
+        """A refiner with the Q&A budget, not the KIS budget.
+
+        Q&A refines several video hypotheses per question, so it uses its own much
+        smaller budget: reusing Phase 5's KIS budget would cost minutes per question.
+        """
+        config = replace(
+            self.refinement_config,
+            mode=MODE_ALWAYS,
+            top_hypotheses=max(1, int(self.qa_config.refinement_candidate_budget)),
+            candidate_budget=max(1, int(self.qa_config.refinement_candidate_budget)),
+            max_frames=max(1, int(self.qa_config.refinement_max_frames)),
+        )
+        return LocalFrameRefiner(
+            config, frame_provider=self.frame_provider, scorer=self.frame_scorer
+        )
+
+    def _qa_evidence_pool(
+        self, hypothesis: QAVideoHypothesis, window_s: float, scores: dict[str, float]
+    ) -> list[QAEvidenceFrame]:
+        """Candidate evidence for ONE video: retrieved frames plus nearby context.
+
+        Every frame is drawn from `hypothesis.video_id`, so nothing from another video
+        can enter the bundle. Availability is probed cheaply; pixels are not read here.
+        """
+        anchor = hypothesis.submission_frame
+        if anchor is None:
+            return []
+        center = float(anchor.timestamp)
+        pool: list[QAEvidenceFrame] = []
+        for raw in self._raws_for_video(hypothesis.video_id):
+            distance = abs(float(raw.timestamp) - center)
+            if distance > float(window_s) and raw.id not in scores:
+                continue
+            visual = self.frame_provider.describe(raw)
+            # A retrieved frame always outranks mere temporal proximity.
+            score = scores.get(raw.id)
+            if score is None:
+                score = 0.001 / (1.0 + distance)
+            pool.append(
+                QAEvidenceFrame(
+                    video_id=hypothesis.video_id,
+                    frame_idx=None if raw.frame_idx is None else int(raw.frame_idx),
+                    timestamp=float(raw.timestamp),
+                    source=visual["image_source"],
+                    keyframe_id=raw.id,
+                    retrieval_score=float(score),
+                    text=self.entry.caption_by_id.get(raw.id, "") or "",
+                    objects=tuple(raw.objects or ()),
+                    image_available=bool(visual["image_available"]),
+                )
+            )
+        return pool
+
+    def _qa_refine_video(
+        self, refiner: LocalFrameRefiner, hypothesis: QAVideoHypothesis, query: str
+    ) -> tuple[Optional[dict], Optional[QAEvidenceFrame]]:
+        """Bounded local refinement for one video. Failure degrades, never raises."""
+        candidates = tuple(
+            RefinementCandidate(
+                keyframe_id=frame.keyframe_id,
+                video_id=frame.video_id,
+                coarse_frame_idx=frame.frame_idx,
+                timestamp=float(frame.timestamp),
+                coarse_score=float(frame.score),
+                source_video=getattr(self.entry.raws.get(frame.keyframe_id), "source_video", None),
+            )
+            for frame in hypothesis.frames
+        )
+        if not candidates:
+            return None, None
+        result = refiner.refine(LocalRefinementRequest(query=str(query), candidates=candidates))
+        item = next((entry for entry in result.refinements if entry.applied), None)
+        if item is None or item.best_visual_frame_idx is None:
+            return (
+                result.refinements[0].to_dict() if result.refinements else None
+            ), None
+        frame = self.frame_provider.get_video_frame(
+            hypothesis.video_id, frame_idx=int(item.best_visual_frame_idx)
+        )
+        evidence = QAEvidenceFrame(
+            video_id=hypothesis.video_id,
+            frame_idx=int(item.best_visual_frame_idx),
+            timestamp=float(item.best_timestamp or 0.0),
+            source="local_refinement",
+            keyframe_id=None,
+            # Refined evidence is by construction the strongest local view, so it is
+            # ranked above the coarse candidates it was derived from.
+            retrieval_score=float(item.refined_score) + 1e-6,
+            visual_score=item.best_visual_score,
+            image_available=frame.available,
+        )
+        return item.to_dict(), evidence
+
     def answer_qa(
         self,
         event_text: str,
@@ -807,83 +984,483 @@ class AICCompetitionEngine:
         *,
         top_k: Optional[int] = None,
         window_s: float = 8.0,
-        answerer: Optional[VqaAnswerer] = None,
+        answerer: Optional[object] = None,
         expected_answer_type: Optional[str] = None,
         retrieval_query_mode: Optional[str] = None,
         evidence_frame_count: Optional[int] = None,
         answer_confidence_threshold: Optional[float] = None,
         abstain_enabled: Optional[bool] = None,
+        use_local_refinement: Optional[bool] = None,
     ) -> tuple[list[AICPrediction], dict]:
-        retrieval_query_mode = retrieval_query_mode or self.qa_config.retrieval_query_mode
-        qa_input = QAInput(event_text, question, expected_answer_type)
+        """Answer a question independently for each top VIDEO hypothesis.
+
+        The pre-Phase-6 implementation answered once for the globally top-ranked
+        candidate and attached that answer to every prediction row, so a row for video B
+        carried an answer produced from video A's frames. Here the unit of answering is
+        one video: evidence is collected from that video only, the backend is called for
+        that video only, and the answer is written onto that video's rows only. An
+        answer can no longer reach another video because it never leaves its hypothesis.
+        """
+        started = time.perf_counter()
+        qa_config = self.qa_config
+        retrieval_query_mode = retrieval_query_mode or qa_config.retrieval_query_mode
+        answer_type = canonical_answer_type(
+            expected_answer_type
+            if expected_answer_type not in (None, "")
+            else qa_config.default_answer_type
+        )
+        qa_input = QAInput(event_text, question, answer_type)
         ground_query = build_retrieval_query(qa_input, retrieval_query_mode)
-        requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.qa_config.max_answers)))
-        evidence_frame_count = int(evidence_frame_count if evidence_frame_count is not None else self.qa_config.evidence_frame_count)
-        answer_confidence_threshold = float(answer_confidence_threshold if answer_confidence_threshold is not None else self.qa_config.answer_confidence_threshold)
-        abstain_enabled = self.qa_config.abstain_enabled if abstain_enabled is None else bool(abstain_enabled)
-        candidates = self.search_candidates(ground_query, top_k=requested)
+        requested = max(
+            1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else qa_config.max_answers))
+        )
+        evidence_budget = max(
+            1,
+            int(
+                evidence_frame_count
+                if evidence_frame_count is not None
+                else qa_config.evidence_frame_count
+            ),
+        )
+        threshold = float(
+            answer_confidence_threshold
+            if answer_confidence_threshold is not None
+            else qa_config.abstain_threshold
+        )
+        abstain = qa_config.abstain_enabled if abstain_enabled is None else bool(abstain_enabled)
+        refine = (
+            qa_config.use_local_refinement
+            if use_local_refinement is None
+            else bool(use_local_refinement)
+        )
+        backend = answerer if answerer is not None else self.qa_answerer
+        backend_status = backend.status()
+        if qa_config.backend_required and not backend_status.visual_capable:
+            raise RuntimeError(
+                "qa.backend.required is set but the active Q&A backend "
+                f"({backend_status.backend_type}) cannot look at images."
+            )
+
+        retrieval_started = time.perf_counter()
+        # A pool deep enough to contain several distinct videos, not just the top rows.
+        pool_depth = min(
+            self.fusion_depth,
+            max(
+                requested * 3,
+                int(qa_config.top_video_hypotheses) * int(qa_config.frame_hypotheses_per_video) * 5,
+                100,
+            ),
+        )
+        candidates = self.search_candidates(ground_query, top_k=pool_depth)
+        retrieval_ms = (time.perf_counter() - retrieval_started) * 1000.0
         if not candidates:
-            return [], {
-                "answer": "unknown", "answer_normalized": "unknown", "frame_ids": [],
-                "center_time": None, "video_id": None, "answer_confidence": 0.0,
-                "warning": "No grounding candidate was retrieved.",
-            }
-        center = candidates[0]
-        records = entry_records(self.entry, video_id=center.video_id)
-        window = retrieve_temporal_window(records, center.timestamp, window_s, center.video_id)
-        evidence = select_diverse_evidence(
-            window, center.timestamp, max(1, evidence_frame_count), query=question
+            return [], self._empty_qa_info(
+                ground_query, retrieval_query_mode, answer_type, backend_status, started
+            )
+
+        def official_idx(candidate) -> Optional[int]:
+            raw = self.entry.raws.get(candidate.keyframe_id)
+            return None if raw is None or raw.frame_idx is None else int(raw.frame_idx)
+
+        hypotheses = group_hypotheses_by_video(
+            candidates,
+            top_video_hypotheses=int(qa_config.top_video_hypotheses),
+            frame_hypotheses_per_video=int(qa_config.frame_hypotheses_per_video),
+            diversity_s=float(qa_config.evidence_temporal_diversity_s),
+            support_bonus=float(qa_config.video_support_bonus),
+            frame_idx_of=official_idx,
         )
-        selected_records = [item.record for item in evidence]
-        # Decode lazily and only for the handful of selected evidence frames; the
-        # Top-100 search path never touches a video file.
-        images: dict[str, bytes] = {}
-        for frame in selected_records:
-            raw = self.entry.raws.get(frame.id)
-            if raw is None:
-                continue
-            result = self.frame_provider.get_frame(raw)
-            if result.available:
-                images[frame.id] = result.image_bytes
-        ans = VqaModule(answerer or default_answerer()).answer(
-            question or ground_query,
-            selected_records,
-            video_id=center.video_id,
-            center_time=None,
-            window_s=window_s,
-            images=images,
+        scores_by_keyframe = {c.keyframe_id: float(c.score) for c in candidates}
+        best_score = max(float(item.retrieval_score) for item in hypotheses)
+        second_score = (
+            float(hypotheses[1].retrieval_score) if len(hypotheses) > 1 else 0.0
         )
-        answer_text = str(ans.value) if ans.value is not None else ans.answer
-        normalized = normalize_answer(answer_text)
-        # RRF scores are small, so use rank-relative grounding evidence rather than pretending
-        # they are calibrated probabilities.
-        margin = max(0.0, float(center.score - candidates[1].score)) if len(candidates) > 1 else float(center.score)
-        grounding_score = min(1.0, 0.5 + margin * 10.0)
-        confidence = confidence_from_evidence(grounding_score, len(selected_records), answer_text)
-        warning = None
-        if confidence < answer_confidence_threshold:
-            warning = "Weak grounding or answer evidence; prediction is uncertain."
-            if abstain_enabled and not answer_text.strip():
-                answer_text = "unknown"
-                normalized = "unknown"
-        preds = [self._from_candidate(candidate, answer=answer_text) for candidate in candidates]
-        info = {
-            "answer": ans.answer,
-            "value": ans.value,
-            "answer_normalized": normalized,
-            "reasoning": ans.reasoning,
-            "used_frame_ids": ans.used_frame_ids,
-            "frame_ids": [item.record.id for item in evidence],
-            "evidence_roles": [item.role for item in evidence],
-            "center_time": round(center.timestamp, 3),
-            "video_id": center.video_id,
+        margin = (best_score - second_score) / max(abs(best_score), 1e-9)
+
+        refiner = self._qa_refiner() if refine else None
+        evidence_ms = 0.0
+        refinement_ms = 0.0
+        vqa_ms = 0.0
+        refinement_calls = 0
+        decode_failures = 0
+        answered: list[tuple[QAVideoHypothesis, QAEvidenceBundle, QAAnswerResult, float]] = []
+
+        for hypothesis in hypotheses:
+            refinement_payload: Optional[dict] = None
+            refined_evidence: Optional[QAEvidenceFrame] = None
+            if refiner is not None:
+                refine_started = time.perf_counter()
+                try:
+                    refinement_payload, refined_evidence = self._qa_refine_video(
+                        refiner, hypothesis, question or ground_query
+                    )
+                    refinement_calls += 1
+                except Exception:  # noqa: BLE001 - refinement is optional evidence
+                    refinement_payload, refined_evidence = None, None
+                refinement_ms += (time.perf_counter() - refine_started) * 1000.0
+            hypothesis = replace(hypothesis, refinement=refinement_payload)
+
+            evidence_started = time.perf_counter()
+            pool = self._qa_evidence_pool(hypothesis, window_s, scores_by_keyframe)
+            if refined_evidence is not None:
+                pool.append(refined_evidence)
+            selected = select_evidence_frames(
+                pool,
+                count=evidence_budget,
+                diversity_s=float(qa_config.evidence_temporal_diversity_s),
+            )
+            # Pixels are read ONLY for the selected frames, and only when the backend can
+            # actually use them; a non-visual backend never triggers a decode.
+            loaded: list[QAEvidenceFrame] = []
+            for frame in selected:
+                if not (backend_status.visual_capable and frame.image_available):
+                    loaded.append(frame)
+                    continue
+                payload = self._qa_image_bytes(frame)
+                if payload is None:
+                    decode_failures += 1
+                    loaded.append(frame)
+                else:
+                    loaded.append(replace(frame, image_bytes=payload))
+            bundle = QAEvidenceBundle(
+                video_id=hypothesis.video_id,
+                question=question or ground_query,
+                expected_answer_type=answer_type,
+                frames=tuple(loaded),
+            )
+            evidence_ms += (time.perf_counter() - evidence_started) * 1000.0
+
+            vqa_started = time.perf_counter()
+            result = self._answer_one_hypothesis(
+                backend, question or ground_query, bundle, answer_type
+            )
+            vqa_ms += (time.perf_counter() - vqa_started) * 1000.0
+
+            reliability = answer_reliability_score(
+                backend=backend_status,
+                evidence_count=len(bundle.frames),
+                visual_evidence_count=len(bundle.visual_frames),
+                answer=result.normalized_answer,
+                expected_answer_type=answer_type,
+                retrieval_margin=margin if hypothesis.rank == 1 else 0.0,
+            )
+            if (
+                abstain
+                and result.status == ANSWER_STATUS_ANSWERED
+                and (is_unknown_answer(result.normalized_answer) or reliability < threshold)
+                and is_unknown_answer(result.normalized_answer)
+            ):
+                result = replace(
+                    result,
+                    status=ANSWER_STATUS_ABSTAINED,
+                    answer=result.answer,
+                    normalized_answer=UNKNOWN_ANSWER,
+                    warning=_join_warnings(
+                        result.warning, "Abstained: no usable answer for this video."
+                    ),
+                )
+            answered.append((hypothesis, bundle, result, reliability))
+
+        predictions = self._qa_predictions(answered, requested, qa_config)
+        info = self._qa_info(
+            predictions=predictions,
+            answered=answered,
+            ground_query=ground_query,
+            retrieval_query_mode=retrieval_query_mode,
+            answer_type=answer_type,
+            backend_status=backend_status,
+            timings={
+                "retrieval_ms": retrieval_ms,
+                "evidence_selection_ms": evidence_ms,
+                "refinement_ms": refinement_ms,
+                "vqa_ms": vqa_ms,
+                "total_ms": (time.perf_counter() - started) * 1000.0,
+            },
+            refinement_calls=refinement_calls,
+            decode_failures=decode_failures,
+        )
+        return predictions, info
+
+    def _qa_image_bytes(self, frame: QAEvidenceFrame) -> Optional[bytes]:
+        """Load one evidence frame's pixels: BTC JPEG, MP4 fallback, or refined frame."""
+        try:
+            if frame.keyframe_id is not None:
+                raw = self.entry.raws.get(frame.keyframe_id)
+                if raw is None:
+                    return None
+                result = self.frame_provider.get_frame(raw)
+            else:
+                result = self.frame_provider.get_video_frame(
+                    frame.video_id, frame_idx=frame.frame_idx, timestamp=frame.timestamp
+                )
+        except Exception:  # noqa: BLE001 - a visual failure never fails the question
+            return None
+        return result.image_bytes if result.available else None
+
+    def _answer_one_hypothesis(
+        self,
+        backend,
+        question: str,
+        bundle: QAEvidenceBundle,
+        answer_type: str,
+    ) -> QAAnswerResult:
+        """Call the backend for ONE video. A failure is confined to this hypothesis."""
+        status = backend.status()
+        if status.visual_capable and not bundle.visual_frames:
+            return QAAnswerResult(
+                video_id=bundle.video_id,
+                answer="",
+                normalized_answer=UNKNOWN_ANSWER,
+                status=ANSWER_STATUS_VISUAL_UNAVAILABLE,
+                backend_type=status.backend_type,
+                visual=False,
+                warning=(
+                    f"No visual evidence could be loaded for video {bundle.video_id!r}; "
+                    "the backend was not called."
+                ),
+            )
+        try:
+            result = backend.answer(question, bundle, expected_answer_type=answer_type)
+        except Exception as exc:  # noqa: BLE001 - never fabricate an answer on failure
+            return QAAnswerResult(
+                video_id=bundle.video_id,
+                answer="",
+                normalized_answer=UNKNOWN_ANSWER,
+                status=ANSWER_STATUS_BACKEND_FAILED,
+                backend_type=status.backend_type,
+                visual=False,
+                warning=f"Q&A backend failed for this video: {type(exc).__name__}: {exc}",
+            )
+        if result.video_id != bundle.video_id:
+            # Structural guard: a backend must answer the video it was given.
+            raise RuntimeError(
+                f"Q&A backend returned an answer for {result.video_id!r} when asked about "
+                f"{bundle.video_id!r}."
+            )
+        return result
+
+    def _qa_predictions(
+        self,
+        answered: Sequence[tuple[QAVideoHypothesis, QAEvidenceBundle, QAAnswerResult, float]],
+        requested: int,
+        qa_config,
+    ) -> list[AICPrediction]:
+        """One row per (video, submission frame), each carrying its OWN video's answer."""
+        weight = float(qa_config.answer_reliability_weight)
+        rows: list[tuple[tuple, AICPrediction]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for hypothesis, bundle, result, reliability in answered:
+            for frame in hypothesis.frames:
+                raw = self.entry.raws.get(frame.keyframe_id)
+                if raw is None or raw.frame_idx is None:
+                    continue
+                # Phase 5 policy is unchanged: the submitted frame is the official mapped
+                # frame_idx, never a decoded or refined frame index.
+                submission_frame_id = official_frame_id(self.entry, frame.keyframe_id)
+                key = (hypothesis.video_id, submission_frame_id, result.normalized_answer)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Reliability may nudge, never overturn: it scales the retrieval score
+                # by at most +/- weight/2.
+                score = float(frame.score) * (1.0 + weight * (float(reliability) - 0.5))
+                prediction = AICPrediction(
+                    video_id=hypothesis.video_id,
+                    frame_id=submission_frame_id,
+                    keyframe_id=frame.keyframe_id,
+                    score=score,
+                    answer=result.normalized_answer or result.answer,
+                    timestamp=float(frame.timestamp),
+                    score_breakdown={
+                        "video_retrieval": round(float(hypothesis.retrieval_score), 6),
+                        "frame_retrieval": round(float(frame.score), 6),
+                        "answer_reliability": round(float(reliability), 6),
+                        "qa_score": round(score, 6),
+                    },
+                    evidence={
+                        "matched_objects": [],
+                        "metadata_terms": [],
+                        "sparse_terms": [],
+                    },
+                    qa={
+                        "video_id": hypothesis.video_id,
+                        # The video the ANSWER was produced from. Equal to `video_id` by
+                        # construction; reported so the invariant is checkable, not assumed.
+                        "answer_video_id": result.video_id,
+                        "rank": hypothesis.rank,
+                        "submission_frame_idx": int(raw.frame_idx),
+                        "coarse_official_frame_idx": int(raw.frame_idx),
+                        "best_visual_frame_idx": (
+                            None
+                            if not hypothesis.refinement
+                            else hypothesis.refinement.get("best_visual_frame_idx")
+                        ),
+                        "raw_answer": result.answer,
+                        "normalized_answer": result.normalized_answer,
+                        "answer_status": result.status,
+                        "expected_answer_type": bundle.expected_answer_type,
+                        "backend_type": result.backend_type,
+                        "backend_visual": result.visual,
+                        "answer_reliability_score": round(float(reliability), 6),
+                        "reasoning": result.reasoning,
+                        "warning": result.warning,
+                        "visual_available": bundle.visual_available,
+                        "evidence": [item.to_dict() for item in bundle.frames],
+                    },
+                )
+                rows.append(
+                    ((-score, hypothesis.video_id, int(raw.frame_idx)), prediction)
+                )
+        rows.sort(key=lambda item: item[0])
+        return [prediction for _, prediction in rows[:requested]]
+
+    def _empty_qa_info(
+        self, ground_query, retrieval_query_mode, answer_type, backend_status, started
+    ) -> dict:
+        return {
+            "answer": UNKNOWN_ANSWER,
+            "answer_normalized": UNKNOWN_ANSWER,
+            "frame_ids": [],
+            "center_time": None,
+            "video_id": None,
+            "answer_confidence": 0.0,
+            "answer_reliability_score": 0.0,
             "ground_query": ground_query,
             "retrieval_query_mode": retrieval_query_mode,
-            "grounding_score": grounding_score,
-            "answer_confidence": confidence,
-            "warning": warning,
+            "expected_answer_type": answer_type,
+            "hypotheses": [],
+            "backend": backend_status.to_dict(),
+            "warning": "No grounding candidate was retrieved.",
+            "diagnostics": {
+                "retrieved_video_hypotheses": 0,
+                "answered_video_hypotheses": 0,
+                "visual_hypotheses": 0,
+                "nonvisual_hypotheses": 0,
+                "abstentions": 0,
+                "backend_failures": 0,
+                "evidence_frames_used": 0,
+                "local_refinement_calls": 0,
+                "frame_decode_failures": 0,
+                "cross_video_answer_copy_count": 0,
+                "answer_without_matching_evidence_video_count": 0,
+                "total_ms": round((time.perf_counter() - started) * 1000.0, 3),
+            },
         }
-        return preds, info
+
+    def _qa_info(
+        self,
+        *,
+        predictions,
+        answered,
+        ground_query,
+        retrieval_query_mode,
+        answer_type,
+        backend_status,
+        timings,
+        refinement_calls,
+        decode_failures,
+    ) -> dict:
+        """Response payload plus the structural checks that prove answer isolation."""
+        # These two counters are the Phase 6 regression guards. They are computed from
+        # the produced rows, not asserted from the algorithm, so a future refactor that
+        # reintroduces cross-video copying makes them non-zero.
+        cross_video = sum(
+            1
+            for prediction in predictions
+            if prediction.qa and prediction.qa.get("answer_video_id") != prediction.video_id
+        )
+        mismatched_evidence = sum(
+            1
+            for prediction in predictions
+            if prediction.qa
+            and any(
+                item.get("video_id") != prediction.video_id
+                for item in prediction.qa.get("evidence", [])
+            )
+        )
+        top = answered[0] if answered else None
+        hypotheses_payload = []
+        for hypothesis, bundle, result, reliability in answered:
+            payload = hypothesis.to_dict()
+            payload.update(
+                {
+                    "answer": result.answer,
+                    "normalized_answer": result.normalized_answer,
+                    "answer_status": result.status,
+                    "answer_reliability_score": round(float(reliability), 6),
+                    "backend_type": result.backend_type,
+                    "backend_visual": result.visual,
+                    "visual_available": bundle.visual_available,
+                    "visual_evidence_loaded": len(bundle.visual_frames),
+                    "evidence": [item.to_dict() for item in bundle.frames],
+                    "warning": result.warning,
+                }
+            )
+            hypotheses_payload.append(payload)
+
+        info = {
+            # Compatibility surface: the previous single-answer fields now describe the
+            # TOP hypothesis only, and every hypothesis is available in `hypotheses`.
+            "answer": top[2].answer if top else UNKNOWN_ANSWER,
+            "value": top[2].value if top else None,
+            "answer_normalized": top[2].normalized_answer if top else UNKNOWN_ANSWER,
+            "answer_status": top[2].status if top else ANSWER_STATUS_BACKEND_FAILED,
+            "reasoning": top[2].reasoning if top else "",
+            "video_id": top[0].video_id if top else None,
+            "center_time": (
+                round(float(top[0].frames[0].timestamp), 3)
+                if top and top[0].frames
+                else None
+            ),
+            "frame_ids": (
+                [item.evidence_id for item in top[1].frames if item.keyframe_id] if top else []
+            ),
+            "used_frame_ids": list(top[2].used_evidence_ids) if top else [],
+            "evidence_roles": [item.role for item in top[1].frames] if top else [],
+            "ground_query": ground_query,
+            "retrieval_query_mode": retrieval_query_mode,
+            "expected_answer_type": answer_type,
+            "answer_reliability_score": round(float(top[3]), 6) if top else 0.0,
+            # Retained so existing callers keep working; it is the same heuristic value.
+            "answer_confidence": round(float(top[3]), 6) if top else 0.0,
+            "grounding_score": round(float(top[0].retrieval_score), 6) if top else 0.0,
+            "warning": top[2].warning if top else None,
+            "backend": backend_status.to_dict(),
+            "hypotheses": hypotheses_payload,
+            "diagnostics": {
+                "retrieved_video_hypotheses": len(answered),
+                "answered_video_hypotheses": sum(
+                    1 for _, _, result, _ in answered if result.status == ANSWER_STATUS_ANSWERED
+                ),
+                "visual_hypotheses": sum(1 for _, _, result, _ in answered if result.visual),
+                "nonvisual_hypotheses": sum(
+                    1 for _, _, result, _ in answered if not result.visual
+                ),
+                "abstentions": sum(
+                    1 for _, _, result, _ in answered if result.status == ANSWER_STATUS_ABSTAINED
+                ),
+                "backend_failures": sum(
+                    1
+                    for _, _, result, _ in answered
+                    if result.status == ANSWER_STATUS_BACKEND_FAILED
+                ),
+                "visual_unavailable": sum(
+                    1
+                    for _, _, result, _ in answered
+                    if result.status == ANSWER_STATUS_VISUAL_UNAVAILABLE
+                ),
+                "evidence_frames_used": sum(len(bundle.frames) for _, bundle, _, _ in answered),
+                "local_refinement_calls": refinement_calls,
+                "frame_decode_failures": decode_failures,
+                "predictions": len(predictions),
+                "distinct_answer_videos": len({p.video_id for p in predictions}),
+                "cross_video_answer_copy_count": cross_video,
+                "answer_without_matching_evidence_video_count": mismatched_evidence,
+                **{key: round(float(value), 3) for key, value in timings.items()},
+            },
+        }
+        return info
+
     def search_trake(
         self,
         events: Sequence[str],

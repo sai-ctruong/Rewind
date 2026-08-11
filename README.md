@@ -12,7 +12,10 @@ Competition system for Textual KIS, grounded Q&A and ordered-event TRAKE over th
   KIS only** (Phase 5). Q&A and TRAKE do not refine. The official submission frame stays
   the coarse mapped `frame_idx`; see `docs/PHASE_5_LOCAL_REFINEMENT.md`.
 - Joint monotonic dynamic programming for TRAKE.
-- Ordered diverse multi-frame Q&A evidence, answer normalization and confidence.
+- Grounded Q&A answered **per video hypothesis** (Phase 6): each video is answered from
+  its own evidence, so an answer is never copied across videos. The shipped visual
+  backend on a machine without a key or a local VLM is the **non-visual mock**, which
+  reports itself as such; see `docs/PHASE_6_GROUNDED_QA.md`.
 - Official-style R-score/R@k/Final Score evaluation artifacts and competition UI.
 
 See AUDIT.md and PHASE_REPORT.md for verified details and limitations.

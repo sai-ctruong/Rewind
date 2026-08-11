@@ -349,6 +349,25 @@ def create_app(
             out.update(extra)
         return out
 
+    def _evidence_url(state: RuntimeDatasetState, evidence: dict) -> str | None:
+        """A logical URL for one Q&A evidence frame; never a filesystem path.
+
+        A mapped keyframe goes through the normal frame route; a refined/decoded frame
+        goes through the decoded-frame route, which is explicitly NOT a submission frame.
+        """
+        if not evidence.get("image_available"):
+            return None
+        keyframe_id = evidence.get("keyframe_id")
+        if keyframe_id:
+            return f"/api/video/frame/{keyframe_id}?generation={state.generation}"
+        frame_idx = evidence.get("frame_idx")
+        if evidence.get("video_id") and frame_idx is not None:
+            return (
+                f"/api/video/decoded_frame/{evidence['video_id']}/{int(frame_idx)}"
+                f"?generation={state.generation}"
+            )
+        return None
+
     def _available_videos(state: RuntimeDatasetState) -> set[str]:
         video_dir = Path(state.app_config.dataset.root) / "video"
         if not video_dir.is_dir():
@@ -401,6 +420,8 @@ def create_app(
                 if engine is None
                 else engine.refinement_status()
             ),
+            # Backend capability, reported truthfully and without loading any model.
+            qa=None if engine is None else engine.qa_status(),
         )
 
     @app.get("/api/video/progress")
@@ -544,16 +565,39 @@ def create_app(
         event_text = (data.get("event") or data.get("query") or "").strip()
         if not question and not event_text:
             return _error("Question or event text is required.", "QUERY_REQUIRED", 400)
-        preds, info = engine.answer_qa(
-            event_text,
-            question,
-            top_k=max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20)))),
-            window_s=float(data.get("window", 8.0)),
-        )
+        try:
+            preds, info = engine.answer_qa(
+                event_text,
+                question,
+                top_k=max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20)))),
+                window_s=float(data.get("window", 8.0)),
+                # Finally wired: the UI's answer-type selector reaches normalization.
+                expected_answer_type=data.get("expected_answer_type"),
+                use_local_refinement=(
+                    None if data.get("refine") is None else bool(data.get("refine"))
+                ),
+            )
+        except ValueError as exc:
+            return _error(str(exc), "INVALID_ANSWER_TYPE", 400)
         frames = [
             _frame_json(state, fid)
             for fid in info.get("frame_ids", [])
             if fid in engine.entry.raws
+        ]
+        # One card per VIDEO hypothesis, each carrying only its own video's answer and
+        # its own evidence. Nothing here is shared between hypotheses.
+        hypotheses = [
+            {
+                **{k: v for k, v in item.items() if k != "evidence"},
+                "evidence": [
+                    {
+                        **evidence,
+                        "image": _evidence_url(state, evidence),
+                    }
+                    for evidence in item.get("evidence", [])
+                ],
+            }
+            for item in info.get("hypotheses", [])
         ]
         return jsonify(
             task="qa",
@@ -565,15 +609,23 @@ def create_app(
             value=info.get("value"),
             reasoning=info.get("reasoning"),
             answer_normalized=info.get("answer_normalized"),
+            answer_status=info.get("answer_status"),
+            expected_answer_type=info.get("expected_answer_type"),
             grounding_score=info.get("grounding_score"),
             answer_confidence=info.get("answer_confidence"),
+            answer_reliability_score=info.get("answer_reliability_score"),
             warning=info.get("warning"),
             evidence_roles=info.get("evidence_roles", []),
             used_frame_ids=info.get("used_frame_ids", []),
             frames=frames,
             center_time=info.get("center_time"),
             video_id=info.get("video_id"),
+            hypotheses=hypotheses,
+            backend=info.get("backend"),
+            qa=engine.qa_status(),
+            diagnostics=info.get("diagnostics"),
             predictions=[p.row() for p in preds],
+            results=[_prediction_json(state, p, _available_videos(state)) for p in preds],
             encoder=engine.encoder_status(),
         )
 

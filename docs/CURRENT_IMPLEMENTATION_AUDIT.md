@@ -65,9 +65,11 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | Frame-ID separation under refinement | Fixed in Phase 5: `coarse_official_frame_idx`, `best_visual_frame_idx` and `submission_frame_idx` are distinct and all reported; `frame_output_policy` defaults to `preserve_coarse`. | A refined frame is evidence only. The submitted row keeps the official mapped `frame_idx` until AIC confirms the semantics of an arbitrary decoded frame. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py`, `ui/index.html` | Complete in Phase 5. |
 | `refine_window_s` | Still accepted by `search_trake(..., refine_window_s=6.0)` and still unused, but now documented as such in the docstring rather than silently dead. | The UI control has no effect on TRAKE. Phase 5 wired refinement into KIS only. | `aic2026/engine.py`, `ui/app.py` | Phase 6: wire it into TRAKE refinement or remove the option. |
 | MP4 missing fallback | Fixed for KIS in Phase 5: a missing MP4, a decode failure, or an unavailable scorer marks the candidate `applied=false` with a reason and a warning, and the coarse candidate is preserved. | Warnings reach the prediction payload, the search response, and the UI. One failing video never fails a search. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py` | Complete for KIS in Phase 5. |
-| Q&A answer count | `answer_qa` chon `center = candidates[0]`, tao 1 answer tren video center, sau do gan cung answer cho tat ca candidate predictions. | Answer bi copy xuyen video; evidence video A co the gan cho prediction video B. | `aic2026/engine.py`, `aic2026/qa.py` | Phase 6: group theo video hypothesis, goi answerer rieng cho tung video hypothesis. |
-| Q&A visual backend | Mac dinh `default_answerer()` tra `MockVqaAnswerer` neu khong co `ANTHROPIC_API_KEY`; mock suy luan tren text/caption/object, khong nhin anh. | Khong duoc coi la visual Q&A production; can warning ro trong health/UI/output. | `retrieval/vqa_module.py`, `aic2026/qa.py`, `ui/app.py` | Phase 6: answerer status, `answer_reliability_score`, LocalVlmAnswerer interface/test fake backend. |
-| Expected answer type | UI gui `expected_answer_type`, engine nhan parameter nhung khong truyen vao `normalize_answer` theo type va khong prompt answerer theo type. | Number/color/boolean normalization khong dung nhu UI ham y. | `ui/app.py`, `aic2026/engine.py`, `aic2026/qa.py` | Phase 6: type-aware prompt/normalization, tests Vietnamese/English numbers and colors. |
+| Q&A answer count | **Fixed in Phase 6**: `answer_qa` groups the retrieval pool by video, ranks video hypotheses, and answers each one independently from its own evidence. `cross_video_answer_copy_count` and `answer_without_matching_evidence_video_count` are computed from the produced rows and are 0. | An answer can no longer reach another video: a `QAEvidenceBundle` refuses frames from a second video, and a backend answering the wrong video raises. | `aic2026/engine.py`, `aic2026/qa.py` | Complete in Phase 6. |
+| Q&A visual backend | Phase 6 defines the `VisualQAAnswerer` contract and three backends with truthful `QAAnswererStatus`. On this machine `auto` resolves to the **mock**, which reports `visual_capable=false`; the local-VLM and API backends report `not_available`. | Health, the search payload, and the UI all label a non-visual backend as such. **Real visual Q&A is still unavailable** — no key, no SDK, no local model. | `aic2026/qa.py`, `ui/app.py`, `ui/index.html` | Contract complete in Phase 6; a real image-capable backend is still not installed. |
+| Expected answer type | **Fixed in Phase 6**: UI -> request -> `answer_qa` -> backend prompt -> `normalize_answer(expected_type=...)` -> prediction. An unsupported type is a `400 INVALID_ANSWER_TYPE`. | Vietnamese `khong` is resolved to `0` or `no` by declared type, and left alone when no type is declared. Refusals short-circuit ahead of type handling so "khong co mo ta" can never become a confident "no". | `ui/app.py`, `aic2026/engine.py`, `aic2026/qa.py` | Complete in Phase 6. |
+| Q&A evidence selection | **Fixed in Phase 6**: `select_evidence_frames` picks strongest first, then a temporally diverse frame, then the opposite side, and only relaxes the diversity gap rather than under-filling. | The old selector seeded `{first, last, nearest}`, so one- or two-frame evidence returned window boundaries instead of the retrieved evidence. | `aic2026/qa.py` | Complete in Phase 6. |
+| Q&A manual answer edit | Scoped in Phase 6: the correction box applies to the SELECTED video hypothesis only. | Rewriting every row would re-create the cross-video answer copying Phase 6 removed. A full per-row edit model is still Phase 12. | `ui/index.html` | Scoped fix in Phase 6; full model pending Phase 12. |
 | TRAKE output length | DP cho phep skip missing event; `frame_ids` loai alignment `None`, engine cung chi xuat selected non-null steps. | Submission TRAKE co the thieu cot frame cho N event. | `aic2026/trake.py`, `aic2026/engine.py` | Phase 7: validator bat dung N event, fallback candidate hoac loai sequence thieu. |
 | TRAKE method | `align_video_dp` cat state bang beam width after moi event. Day la beam-pruned DP, khong phai exact DP day du. | Goi nham exact DP se tao bao cao sai ban chat thuat toan. | `aic2026/trake.py` | Phase 8: tach `align_events_exact_dp`, `align_events_beam_dp`, `k_best_alignments`. |
 | TRAKE alignments/video | `joint_trake_alignment` tao 1 prediction moi video hypothesis (`align_video_dp` mot lan/video). | Khong tan dung Top-100 bang nhieu sequence trong cung video. | `aic2026/trake.py`, `aic2026/engine.py` | Phase 8: k-best alternatives va diversification. |
@@ -87,7 +89,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 
 1. Since Phase 5, `LocalFrameRefiner` is called end-to-end by `search_kis`. Q&A and TRAKE still do not call it.
 2. `refine_window_s` is accepted by `AICCompetitionEngine.search_trake` and UI, but is still not used: Phase 5 integrated refinement into KIS only.
-3. Q&A currently creates one answer for the top center candidate's video, then attaches that same answer to every returned candidate.
+3. Since Phase 6, Q&A answers each top video hypothesis independently from that video's own evidence; the pre-Phase-6 behaviour of copying one answer across every returned candidate is gone, and two diagnostics assert it stays gone.
 4. TRAKE can output fewer frame IDs than the number of events because missing alignments are allowed internally and filtered out in `frame_ids`.
 5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`.
 6. One video currently produces at most one TRAKE alignment sequence.
@@ -204,3 +206,36 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
   quality, and no result is labelled correct or incorrect.
 - Refinement is wired into **KIS only**. Q&A per-video hypotheses, TRAKE k-best and
   TRAKE local refinement remain unimplemented.
+
+## Phase 6 Status Update
+
+- **Q&A one-answer-for-many-predictions bug: fixed in Phase 6**, commit
+  `fix: ground QA answers per video hypothesis`; see `docs/PHASE_6_GROUNDED_QA.md`.
+- The unit of answering is one **video hypothesis**: candidates are grouped by video,
+  ranked, and each video is answered from its own evidence with its own backend call.
+- `QAEvidenceBundle` raises if it is handed a frame from another video, and a backend
+  that answers about the wrong video raises. Isolation is structural, not conventional.
+- `aic2026/qa.py` adds the `VisualQAAnswerer` contract plus `MockTextQAAnswerer`,
+  `LocalVlmQAAnswerer` and `ApiVqaAnswerer`, each with a truthful `QAAnswererStatus`.
+- **Real visual Q&A is NOT available on this machine**: no `ANTHROPIC_API_KEY`, no
+  `anthropic` SDK, no local VLM. `auto` resolves to the non-visual mock, which says so in
+  health, in the search payload, and in the UI. No visual smoke was run and none is
+  claimed.
+- `expected_answer_type` now works end to end, and Vietnamese `khong` is resolved by the
+  declared type (`0` for number, `no` for boolean) and left alone without one.
+- The real smoke caught a fabrication: `"khong co mo ta"` was becoming a confident `"no"`
+  / `"0"`. Unknown answers now short-circuit ahead of type normalization, so the mock
+  abstains honestly on all 20 real hypotheses instead.
+- Evidence selection is strongest-first with temporal diversity; the old
+  `{first, last, nearest}` seeding is gone.
+- Q&A has its own refinement budget (off by default; 1 region, 12 frames per video), not
+  Phase 5's 5x32 KIS budget.
+- Real L21 structural probe (existing cache reused, not rebuilt): 4 questions x 5 video
+  hypotheses, **5 distinct answers per question**, `cross_video_answer_copy_count = 0`,
+  `answer_without_matching_evidence_video_count = 0`, 284 evidence frames, 0 backend or
+  decode failures.
+- Manual answer correction is scoped to the selected video hypothesis.
+- **No accuracy claim**: no AIC ground truth exists and nothing was tuned against
+  correctness.
+- TRAKE k-best/refinement, retrieval channels, query-normalization redesign, submission
+  validation and the Phase 12 manual-edit architecture all remain pending.

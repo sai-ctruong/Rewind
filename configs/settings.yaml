@@ -417,15 +417,36 @@ aic2026:
     final_top_k: 100
 
   qa:
+    enabled: true
+    # Q&A answers ONE video hypothesis at a time. An answer is never copied to another
+    # video's prediction row.
     top_video_hypotheses: 8
     frame_hypotheses_per_video: 3
     evidence_frame_count: 8
-    answerer_batch_size: 1
+    evidence_temporal_diversity_s: 1.5
+    video_support_bonus: 0.05
+    answer_reliability_weight: 0.2
     max_answers: 100
     retrieval_query_mode: event_only
-    answer_confidence_threshold: 0.35
     abstain_enabled: true
+    abstain_threshold: 0.35
     default_answer_type: auto
+    max_answer_tokens: 64
+    answer_temperature: 0.0
+    # Q&A has its OWN small refinement budget: Phase 5's KIS budget (5 regions x 32
+    # frames) would cost minutes per question across several video hypotheses.
+    use_local_refinement: false
+    refinement_candidate_budget: 1
+    refinement_max_frames: 12
+    backend:
+      # auto | mock | local_vlm | api. `auto` downloads nothing: it uses a hosted
+      # backend only when its key is already set, then an explicitly supplied local
+      # model, and otherwise the NON-VISUAL mock, which reports itself as such.
+      type: auto
+      model_name: ""
+      device: auto
+      # true = fail loudly instead of falling back to a non-visual answer.
+      required: false
 
   submission:
     max_predictions: 100

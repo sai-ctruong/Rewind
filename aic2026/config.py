@@ -20,8 +20,14 @@ from .local_refinement import (
     MODE_ALWAYS,
     RefinementConfig,
 )
+from .qa import canonical_answer_type
 from .ranking import RankingConfig
 from .trake import AlignmentConfig as TrakeConfig
+
+QA_BACKEND_TYPES = ("auto", "mock", "local_vlm", "api")
+# Upper bounds that keep a Q&A question affordable regardless of configuration.
+QA_MAX_EVIDENCE_FRAMES = 32
+QA_MAX_REFINEMENT_FRAMES = 32
 
 
 class ConfigError(ValueError):
@@ -128,15 +134,47 @@ class RetrievalChannelConfig:
 
 @dataclass(frozen=True)
 class QAConfig:
+    """Per-video-hypothesis Q&A settings (Phase 6).
+
+    Pre-Phase-6 field names and defaults are preserved. `answer_confidence_threshold` is
+    accepted as an alias for `abstain_threshold` at load time, because the value means
+    the same thing and only the name changed.
+    """
+
+    enabled: bool = True
     top_video_hypotheses: int = 8
     frame_hypotheses_per_video: int = 3
     evidence_frame_count: int = 8
-    answerer_batch_size: int = 1
     max_answers: int = 100
     retrieval_query_mode: str = "event_only"
-    answer_confidence_threshold: float = 0.35
     abstain_enabled: bool = True
+    abstain_threshold: float = 0.35
     default_answer_type: str = "auto"
+    # Two candidates of one video closer than this describe one moment.
+    evidence_temporal_diversity_s: float = 1.5
+    # Bounded, relative bonus for a video that has several supporting candidates.
+    video_support_bonus: float = 0.05
+    # How much the reliability heuristic may nudge the final ordering. Small on purpose:
+    # a heuristic must not overturn a strong retrieval signal.
+    answer_reliability_weight: float = 0.2
+    # Visual backend. `auto` never downloads anything: it uses a hosted backend only if
+    # its key is already set, then an explicitly supplied local model, else the mock.
+    backend_type: str = "auto"
+    backend_model_name: str = ""
+    backend_device: str = "auto"
+    backend_required: bool = False
+    max_answer_tokens: int = 64
+    answer_temperature: float = 0.0
+    # Q&A gets its OWN refinement budget. Phase 5's KIS budget (5 regions x 32 frames)
+    # would cost minutes per question across several video hypotheses.
+    use_local_refinement: bool = False
+    refinement_candidate_budget: int = 1
+    refinement_max_frames: int = 12
+
+    @property
+    def answer_confidence_threshold(self) -> float:
+        """Deprecated alias retained for existing callers."""
+        return self.abstain_threshold
 
 
 @dataclass(frozen=True)
@@ -231,6 +269,27 @@ def _refinement_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return source
 
 
+def _qa_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Accept the nested Phase 6 `backend:` block and the older flat Q&A keys."""
+    source = dict(raw or {})
+    backend = source.pop("backend", None)
+    if isinstance(backend, Mapping):
+        for key, value in backend.items():
+            name = "backend_type" if key == "type" else f"backend_{key}"
+            source.setdefault(name, value)
+    legacy_threshold = source.pop("answer_confidence_threshold", None)
+    if legacy_threshold is not None and "abstain_threshold" not in source:
+        source["abstain_threshold"] = legacy_threshold
+    if "answerer_batch_size" in source:
+        # Removed rather than silently ignored: it was never read, and a dropped key in a
+        # config that looks tuned is worse than an error that says so.
+        raise ConfigError(
+            "qa.answerer_batch_size was removed in Phase 6 because nothing ever read it. "
+            "The number of frames sent to a backend is bounded by qa.evidence_frame_count."
+        )
+    return source
+
+
 def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     source = copy.deepcopy(dict(data))
     raw = source.get("aic2026", source)
@@ -261,7 +320,7 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         ranking=_construct(RankingConfig, raw.get("ranking")),
         refinement=_construct(RefinementConfig, _refinement_raw(raw.get("refinement"))),
         trake=_construct(TrakeConfig, raw.get("trake")),
-        qa=_construct(QAConfig, raw.get("qa")),
+        qa=_construct(QAConfig, _qa_raw(raw.get("qa"))),
         submission=_construct(SubmissionConfig, raw.get("submission")),
         evaluation=_construct(EvaluationConfig, raw.get("evaluation")),
         ui=_construct(UIConfig, raw.get("ui")),
@@ -511,8 +570,58 @@ def _validate_qa(cfg: QAConfig) -> None:
     _require(int(cfg.top_video_hypotheses) > 0, "qa.top_video_hypotheses must be > 0")
     _require(int(cfg.frame_hypotheses_per_video) > 0, "qa.frame_hypotheses_per_video must be > 0")
     _require(int(cfg.evidence_frame_count) > 0, "qa.evidence_frame_count must be > 0")
+    _require(
+        int(cfg.evidence_frame_count) <= QA_MAX_EVIDENCE_FRAMES,
+        f"qa.evidence_frame_count must be <= {QA_MAX_EVIDENCE_FRAMES}; a Q&A backend call "
+        "must stay bounded",
+    )
     _require(1 <= int(cfg.max_answers) <= 100, "qa.max_answers must be in [1, 100]")
-    _require(str(cfg.default_answer_type) in {"auto", "number", "yes/no", "boolean", "color", "text"}, "qa.default_answer_type must be a supported answer type")
+    try:
+        canonical_answer_type(cfg.default_answer_type)
+    except ValueError as exc:
+        raise ConfigError(f"qa.default_answer_type is invalid: {exc}") from None
+    _require(
+        math.isfinite(float(cfg.abstain_threshold)) and 0.0 <= float(cfg.abstain_threshold) <= 1.0,
+        "qa.abstain_threshold must be finite and in [0, 1]",
+    )
+    _require(
+        math.isfinite(float(cfg.evidence_temporal_diversity_s))
+        and float(cfg.evidence_temporal_diversity_s) >= 0,
+        "qa.evidence_temporal_diversity_s must be finite and >= 0",
+    )
+    _require(
+        math.isfinite(float(cfg.video_support_bonus)) and 0.0 <= float(cfg.video_support_bonus) <= 1.0,
+        "qa.video_support_bonus must be finite and in [0, 1]",
+    )
+    _require(
+        math.isfinite(float(cfg.answer_reliability_weight))
+        and 0.0 <= float(cfg.answer_reliability_weight) <= 1.0,
+        "qa.answer_reliability_weight must be finite and in [0, 1]",
+    )
+    _require(
+        str(cfg.backend_type) in QA_BACKEND_TYPES,
+        f"qa.backend.type must be one of {', '.join(QA_BACKEND_TYPES)}",
+    )
+    _require(
+        cfg.backend_device in {"auto", "cpu", "cuda", "remote"}
+        or bool(re.fullmatch(r"cuda:\d+", str(cfg.backend_device))),
+        'qa.backend.device must be "auto", "cpu", "cuda", cuda:N, or "remote"',
+    )
+    _require(int(cfg.max_answer_tokens) > 0, "qa.max_answer_tokens must be > 0")
+    _require(
+        math.isfinite(float(cfg.answer_temperature)) and 0.0 <= float(cfg.answer_temperature) <= 2.0,
+        "qa.answer_temperature must be finite and in [0, 2]",
+    )
+    _require(
+        int(cfg.refinement_candidate_budget) > 0,
+        "qa.refinement_candidate_budget must be > 0",
+    )
+    _require(int(cfg.refinement_max_frames) > 0, "qa.refinement_max_frames must be > 0")
+    _require(
+        int(cfg.refinement_max_frames) <= QA_MAX_REFINEMENT_FRAMES,
+        f"qa.refinement_max_frames must be <= {QA_MAX_REFINEMENT_FRAMES}; Q&A refinement "
+        "runs once per video hypothesis and must stay affordable",
+    )
 
 
 def _validate_submission(cfg: SubmissionConfig) -> None:
