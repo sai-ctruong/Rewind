@@ -26,7 +26,7 @@ from aic2026.dataset import AICDataPaths, official_frame_id
 from aic2026.dataset_scope import DatasetScopeError, scope_payload
 from aic2026.dataset_validation import DatasetError, DatasetLayoutError, inspect_aic_dataset
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
-from aic2026.metrics import write_submission
+from aic2026.metrics import SubmissionStructureError, write_submission
 from aic2026.runtime_state import (
     ACTIVE_STATE_NOT_CHANGED,
     DATA_ROOT_INVALID,
@@ -640,24 +640,46 @@ def create_app(
         if len(events) < 2:
             return _error("At least two ordered events are required.", "QUERY_REQUIRED", 400)
         try:
-            preds, matches = engine.search_trake(
+            outcome = engine.search_trake_detailed(
                 events,
                 per_event_k=int(data.get("per_event_k", 40)),
                 max_results=max(1, min(MAX_PREDICTIONS, int(data.get("max_results", 20)))),
-                refine_window_s=float(data.get("refine_window", 6.0)),
+                refine_window_s=(
+                    None if data.get("refine_window") is None else float(data["refine_window"])
+                ),
             )
         except ValueError as exc:
             return _error(str(exc), "QUERY_REQUIRED", 400)
+        preds = outcome.predictions
         out = []
-        for match in matches:
-            steps = [
-                _frame_json(state, step.keyframe_id, {"event": events[index]})
-                for index, step in enumerate(match.steps)
-            ]
+        # Every returned sequence is complete, so step i IS event i. The old code zipped
+        # a compacted step list against the full event list and shifted every label after
+        # a gap; that is structurally impossible now.
+        for prediction, alignment in zip(preds, outcome.trake_predictions):
+            steps = []
+            for step in alignment.steps:
+                payload = _frame_json(
+                    state,
+                    str(step.keyframe_id),
+                    {
+                        "event": step.event_text,
+                        "event_index": step.event_index,
+                        "event_label": f"Event {step.event_index + 1}",
+                        "status": step.status,
+                        "submission_frame_id": step.submission_frame_idx,
+                    },
+                )
+                steps.append(payload)
             out.append(
                 {
-                    "video_id": match.video_id,
-                    "total_score": round(float(match.total_score), 6),
+                    "video_id": alignment.video_id,
+                    "event_count": alignment.event_count,
+                    "frame_ids": list(alignment.frame_ids),
+                    "alignment_status": alignment.alignment_status,
+                    "recovered_event_indices": list(alignment.recovered_event_indices),
+                    "missing_event_indices": list(alignment.missing_event_indices),
+                    "method": alignment.method,
+                    "total_score": round(float(alignment.score), 6),
                     "steps": steps,
                 }
             )
@@ -666,9 +688,18 @@ def create_app(
             video="__aic2026__",
             generation=state.generation,
             events=events,
+            event_count=len(events),
             count=len(out),
             matches=out,
             predictions=[p.row() for p in preds],
+            diagnostics=outcome.diagnostics,
+            structural=outcome.structural_summary(),
+            # Truthful: the parameter is accepted for compatibility and does nothing.
+            refinement={
+                "applied": False,
+                "status": "not_implemented_phase_7",
+                "note": "TRAKE local refinement is not implemented; refine_window has no effect.",
+            },
         )
 
     @app.get("/api/evaluation/status")
@@ -743,7 +774,21 @@ def create_app(
             return _error("No rows to save.", "NO_ROWS", 400)
         if not task.replace("_", "").replace("-", "").isalnum():
             return _error(f"Invalid submission name {task!r}.", "INVALID_SUBMISSION_NAME", 400)
-        path = write_submission(rows, submission_dir / f"{task}.csv")
+        # Local structural safety only; the full schema validator is Phase 11. A TRAKE
+        # export must never write a row with fewer frames than the query had events.
+        event_count = data.get("event_count")
+        required = None
+        if task.lower().startswith("trake") and event_count is not None:
+            try:
+                required = int(event_count) + 1
+            except (TypeError, ValueError):
+                return _error("event_count must be an integer.", "INVALID_EVENT_COUNT", 400)
+        try:
+            path = write_submission(
+                rows, submission_dir / f"{task}.csv", require_row_length=required
+            )
+        except SubmissionStructureError as exc:
+            return _error(str(exc), "MALFORMED_SUBMISSION_ROW", 422)
         return jsonify(path=str(path), rows=min(len(rows), MAX_PREDICTIONS))
 
     @app.get("/api/video/neighbors/<path:frame_id>")

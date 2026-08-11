@@ -70,8 +70,11 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | Expected answer type | **Fixed in Phase 6**: UI -> request -> `answer_qa` -> backend prompt -> `normalize_answer(expected_type=...)` -> prediction. An unsupported type is a `400 INVALID_ANSWER_TYPE`. | Vietnamese `khong` is resolved to `0` or `no` by declared type, and left alone when no type is declared. Refusals short-circuit ahead of type handling so "khong co mo ta" can never become a confident "no". | `ui/app.py`, `aic2026/engine.py`, `aic2026/qa.py` | Complete in Phase 6. |
 | Q&A evidence selection | **Fixed in Phase 6**: `select_evidence_frames` picks strongest first, then a temporally diverse frame, then the opposite side, and only relaxes the diversity gap rather than under-filling. | The old selector seeded `{first, last, nearest}`, so one- or two-frame evidence returned window boundaries instead of the retrieved evidence. | `aic2026/qa.py` | Complete in Phase 6. |
 | Q&A manual answer edit | Scoped in Phase 6: the correction box applies to the SELECTED video hypothesis only. | Rewriting every row would re-create the cross-video answer copying Phase 6 removed. A full per-row edit model is still Phase 12. | `ui/index.html` | Scoped fix in Phase 6; full model pending Phase 12. |
-| TRAKE output length | DP cho phep skip missing event; `frame_ids` loai alignment `None`, engine cung chi xuat selected non-null steps. | Submission TRAKE co the thieu cot frame cho N event. | `aic2026/trake.py`, `aic2026/engine.py` | Phase 7: validator bat dung N event, fallback candidate hoac loai sequence thieu. |
-| TRAKE method | `align_video_dp` cat state bang beam width after moi event. Day la beam-pruned DP, khong phai exact DP day du. | Goi nham exact DP se tao bao cao sai ban chat thuat toan. | `aic2026/trake.py` | Phase 8: tach `align_events_exact_dp`, `align_events_beam_dp`, `k_best_alignments`. |
+| TRAKE output length | **Fixed in Phase 7**: a `TrakeAlignment` always holds one step per query event, a deterministic recovery pass fills gaps from the same video's candidates for that event, and anything still incomplete is discarded. `TrakePrediction` raises `TrakeStructureError` unless it carries exactly `event_count` frames. | A short or mislabelled TRAKE row is no longer representable. The cost is recall: 65 of 77 alignments were discarded on the real smoke rather than emitted short. | `aic2026/trake.py`, `aic2026/engine.py`, `aic2026/metrics.py`, `ui/app.py`, `ui/index.html` | Complete in Phase 7. |
+| TRAKE event labelling | **Fixed in Phase 7**: the API returns each step's own `event_index` / `event_label`, and the UI labels from that rather than from the loop position. | The old code zipped a compacted step list against the full event list, so every event after a gap displayed the wrong text. | `ui/app.py`, `ui/index.html` | Complete in Phase 7. |
+| TRAKE metric truncation | **Fixed in Phase 7**: `trake_r_score` checks the frame count against the ground-truth event count before scoring and returns 0 for a mismatch. | `zip` silently truncated, so a 3-frame row answering 4 events scored as partially correct instead of invalid. | `aic2026/metrics.py` | Complete in Phase 7. |
+| TRAKE method | Named honestly since Phase 7: `beam_dp` in config, alignment, prediction, API and UI; `exact_dp` is rejected by config validation and a test scans the sources for false claims. | Beam-pruned DP is not exact DP; calling it so would misdescribe the algorithm. | `aic2026/trake.py`, `aic2026/config.py` | Naming complete in Phase 7; exact DP and k-best remain Phase 8. |
+| TRAKE `refine_window_s` | Phase 7 makes the inert parameter truthful: every response carries `refinement.applied=false` and `status="not_implemented_phase_7"`. | It is accepted for API compatibility but changes nothing, and a test asserts that. | `aic2026/engine.py`, `ui/app.py` | Truthful in Phase 7; TRAKE refinement remains Phase 8+. |
 | TRAKE alignments/video | `joint_trake_alignment` tao 1 prediction moi video hypothesis (`align_video_dp` mot lan/video). | Khong tan dung Top-100 bang nhieu sequence trong cung video. | `aic2026/trake.py`, `aic2026/engine.py` | Phase 8: k-best alternatives va diversification. |
 | Top-100 duplicates | KIS `video_aware_top100` chan duplicate `(video_id, frame_id)`. TRAKE chan duplicate `(video_id, frame_ids)` nhung co the thieu event. Q&A khong co validator truoc export. | Duplicate/schema loi co the lot ra CSV, dac biet sau manual edit. | `aic2026/ranking.py`, `aic2026/metrics.py`, `ui/index.html` | Phase 11: submission validator bat buoc truoc export. |
 | Objects/metadata role | Dense CLIP va sparse BM25 tao union candidate; object/metadata chi tinh score tren union do. Object/metadata chua la independent generator. | Object-only hoac metadata-only frame co the khong bao gio duoc xet. | `aic2026/engine.py`, `aic2026/fusion.py`, `aic2026/dataset.py` | Phase 9: `retrieval_channels.py` voi union candidate tu tung channel. |
@@ -90,8 +93,8 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 1. Since Phase 5, `LocalFrameRefiner` is called end-to-end by `search_kis`. Q&A and TRAKE still do not call it.
 2. `refine_window_s` is accepted by `AICCompetitionEngine.search_trake` and UI, but is still not used: Phase 5 integrated refinement into KIS only.
 3. Since Phase 6, Q&A answers each top video hypothesis independently from that video's own evidence; the pre-Phase-6 behaviour of copying one answer across every returned candidate is gone, and two diagnostics assert it stays gone.
-4. TRAKE can output fewer frame IDs than the number of events because missing alignments are allowed internally and filtered out in `frame_ids`.
-5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`.
+4. Since Phase 7, TRAKE cannot output fewer frame IDs than the number of events: missing alignments remain explicit `missing` steps, recovery is attempted from the same video's candidates for that event, and anything still incomplete is discarded rather than shortened.
+5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`. Since Phase 7 the config rejects `exact_dp` and the method is reported as `beam_dp` everywhere.
 6. One video currently produces at most one TRAKE alignment sequence.
 7. KIS Top-100 de-duplicates `(video_id, frame_id)`; TRAKE de-duplicates full sequence; Q&A/export still lacks a shared validator.
 8. New caches require schema-v1 manifests; legacy `entry.pkl`-only caches are rejected by default and stale/corrupt fields are reported.
@@ -239,3 +242,35 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
   correctness.
 - TRAKE k-best/refinement, retrieval channels, query-normalization redesign, submission
   validation and the Phase 12 manual-edit architecture all remain pending.
+
+## Phase 7 Status Update
+
+- **TRAKE incomplete-frame output bug: fixed in Phase 7**, commit
+  `fix: enforce complete TRAKE event alignments`; see
+  `docs/PHASE_7_TRAKE_STRUCTURAL_CORRECTNESS.md`.
+- `TrakeAlignment` always holds exactly one step per query event; a skipped event is an
+  explicit `missing` step, so an event can no longer vanish and the ones after it can no
+  longer shift.
+- `TrakePrediction` raises `TrakeStructureError` unless it carries exactly `event_count`
+  frames from one video with no missing positions. The invariant is enforced in the
+  dataclass, in `to_complete_prediction`, in `align_trake`, in `engine._from_trake`, and
+  in `write_submission`.
+- Deterministic recovery fills a missing event from that event's own candidates in the
+  same video, bounded by its temporal neighbours. It never inserts a sentinel, frame 0, a
+  neighbouring event's frame, or a candidate from another video; an order-breaking
+  recovery is discarded wholesale.
+- Ordering is judged on timestamps, not frame-ID uniqueness, so a repeated official
+  `frame_idx` stays valid data.
+- `trake_r_score` no longer `zip`-truncates: a row with the wrong frame count scores 0.
+- `refine_window_s` is reported as `not_implemented_phase_7` rather than looking
+  functional.
+- Real L21 structural smoke (existing cache reused, not rebuilt): 4 queries, 77 video
+  hypotheses, 65 incomplete alignments **discarded**, **12 complete predictions**, every
+  row carrying exactly N frames, and `malformed_prediction_count` /
+  `wrong_event_count_prediction_count` / `cross_video_step_count` all **0**. Recovery
+  fired 0 times because 59 missing positions had no candidate for that event in that
+  video and 42 had candidates that violated the temporal constraints — now visible in the
+  diagnostics rather than requiring a probe.
+- **No accuracy claim**: no AIC ground truth exists and nothing was tuned against
+  correctness.
+- k-best, exact DP, TRAKE local refinement and semantic verification all remain pending.

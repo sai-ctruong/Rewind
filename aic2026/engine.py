@@ -67,7 +67,16 @@ from .qa import (
     select_evidence_frames,
 )
 from .ranking import RankingConfig, video_aware_top100
-from .trake import AlignmentConfig, EventCandidate, joint_trake_alignment
+from .trake import (
+    METHOD_BEAM_DP,
+    AlignmentConfig,
+    EventCandidate,
+    TrakeAlignment,
+    TrakePrediction,
+    TrakeStructureError,
+    align_trake,
+    joint_trake_alignment,
+)
 from .text_encoder import (
     AutoCLIPTextEncoder,
     HashingTextEncoder,
@@ -110,6 +119,8 @@ class AICPrediction:
     # Per-video-hypothesis Q&A provenance: which video the answer was produced from,
     # which evidence frames were used, and which backend answered.
     qa: Optional[dict] = None
+    # TRAKE provenance: the complete event sequence, its status, and any recovered events.
+    trake: Optional[dict] = None
 
     def row(self) -> list[str]:
         if self.event_frame_ids:
@@ -143,6 +154,41 @@ class KISSearchResult:
             base["coarse_search_ms"] = round(self.coarse_search_ms, 3)
             base["total_search_ms"] = round(self.total_search_ms, 3)
         return base
+
+
+@dataclass(frozen=True)
+class TrakeSearchResult:
+    """A TRAKE search: only complete sequences, plus what was discarded and why."""
+
+    predictions: list[AICPrediction]
+    matches: list[TemporalMatch]
+    trake_predictions: tuple[TrakePrediction, ...] = ()
+    discarded: tuple[TrakeAlignment, ...] = ()
+    diagnostics: dict = field(default_factory=dict)
+
+    def structural_summary(self) -> dict:
+        """The invariants that must hold for every emitted row."""
+        return {
+            "returned_complete_predictions": len(self.predictions),
+            "wrong_event_count_prediction_count": sum(
+                1
+                for prediction in self.predictions
+                if len(prediction.event_frame_ids)
+                != int(self.diagnostics.get("event_count", len(prediction.event_frame_ids)))
+            ),
+            "malformed_prediction_count": sum(
+                1
+                for prediction in self.trake_predictions
+                if len(prediction.frame_ids) != prediction.event_count
+            ),
+            "cross_video_step_count": sum(
+                1
+                for prediction in self.trake_predictions
+                for step in prediction.steps
+                if step.video_id != prediction.video_id
+            ),
+            "discarded_incomplete_alignments": len(self.discarded),
+        }
 
 
 @dataclass
@@ -1476,6 +1522,31 @@ class AICCompetitionEngine:
         into KIS only. It is kept rather than removed so the UI/CLI call signature does
         not churn twice, but it changes nothing today.
         """
+        outcome = self.search_trake_detailed(
+            events,
+            per_event_k=per_event_k,
+            max_results=max_results,
+            refine_window_s=refine_window_s,
+        )
+        return outcome.predictions, outcome.matches
+
+    def search_trake_detailed(
+        self,
+        events: Sequence[str],
+        *,
+        per_event_k: Optional[int] = None,
+        max_results: Optional[int] = None,
+        refine_window_s: Optional[float] = None,
+    ) -> "TrakeSearchResult":
+        """Align ordered events and return ONLY structurally complete sequences.
+
+        An official TRAKE row needs exactly one frame per event. Before Phase 7 a skipped
+        event was dropped from the row, which both shortened it and shifted every later
+        event's label. Now the alignment keeps every event position, a deterministic
+        recovery pass tries to fill the gaps from the same video's candidates for that
+        event, and anything still incomplete is discarded instead of exported.
+        """
+        started = time.perf_counter()
         clean = [event.strip() for event in events if event and event.strip()]
         if len(clean) < 2:
             raise ValueError("TRAKE requires at least two ordered events.")
@@ -1483,41 +1554,58 @@ class AICCompetitionEngine:
         max_results = max(1, min(MAX_PREDICTIONS, int(max_results if max_results is not None else self.trake_config.final_top_k)))
         by_event: dict[int, list[EventCandidate]] = {}
         for event_index, event in enumerate(clean):
-            by_event[event_index] = [
-                EventCandidate(
-                    event_index=event_index,
-                    video_id=c.video_id,
-                    keyframe_id=c.keyframe_id,
-                    frame_id=official_frame_id(self.entry, c.keyframe_id),
-                    timestamp=c.timestamp,
-                    score=float(c.score),
+            candidates: list[EventCandidate] = []
+            for candidate in self.search_candidates(event, top_k=per_event_k):
+                raw = self.entry.raws.get(candidate.keyframe_id)
+                if raw is None or raw.frame_idx is None:
+                    # An unmapped keyframe has no official frame to submit, so it cannot
+                    # stand for an event. It is skipped rather than given a placeholder.
+                    continue
+                candidates.append(
+                    EventCandidate(
+                        event_index=event_index,
+                        video_id=candidate.video_id,
+                        keyframe_id=candidate.keyframe_id,
+                        frame_id=official_frame_id(self.entry, candidate.keyframe_id),
+                        timestamp=candidate.timestamp,
+                        score=float(candidate.score),
+                    )
                 )
-                for c in self.search_candidates(event, top_k=per_event_k)
-            ]
-        aligned = joint_trake_alignment(
-            clean,
-            by_event,
-            self.trake_config,
-            max_results=max_results,
-        )
+            by_event[event_index] = candidates
+
+        report = align_trake(clean, by_event, self.trake_config, max_results=max_results)
         matches: list[TemporalMatch] = []
         predictions: list[AICPrediction] = []
-        for result in aligned:
-            selected = [alignment for alignment in result.alignments if alignment.candidate is not None]
+        for result in report.predictions[:max_results]:
+            # Every step is present, so step i is event i: the UI can no longer shift.
             steps = [
                 TemporalStep(
-                    event=alignment.event.text,
-                    keyframe_id=alignment.candidate.keyframe_id,
-                    timestamp=alignment.candidate.timestamp,
+                    event=step.event_text,
+                    keyframe_id=str(step.keyframe_id),
+                    timestamp=float(step.timestamp or 0.0),
                 )
-                for alignment in selected
+                for step in result.steps
             ]
-            if not steps:
-                continue
             match = TemporalMatch(result.video_id, steps, result.score)
             matches.append(match)
-            predictions.append(self._from_match(match))
-        return predictions[:max_results], matches[:max_results]
+            predictions.append(self._from_trake(result))
+
+        diagnostics = dict(report.diagnostics)
+        diagnostics["per_event_top_k"] = per_event_k
+        diagnostics["alignment_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        # Truthful status for a parameter that is accepted but does nothing.
+        diagnostics["refinement_applied"] = False
+        diagnostics["refinement_status"] = "not_implemented_phase_7"
+        diagnostics["refine_window_s_requested"] = (
+            None if refine_window_s is None else float(refine_window_s)
+        )
+        return TrakeSearchResult(
+            predictions=predictions,
+            matches=matches,
+            trake_predictions=tuple(report.predictions[:max_results]),
+            discarded=report.discarded,
+            diagnostics=diagnostics,
+        )
     def _from_candidate(
         self,
         c: Candidate,
@@ -1551,7 +1639,30 @@ class AICCompetitionEngine:
             refinement=None if refinement is None else refinement.to_dict(),
         )
 
+    def _from_trake(self, result: TrakePrediction) -> AICPrediction:
+        """Build a submission row from a COMPLETE alignment, re-checking the invariant."""
+        frame_ids = [str(step.submission_frame_idx) for step in result.steps]
+        if len(frame_ids) != result.event_count:
+            raise TrakeStructureError(
+                f"TRAKE row for {result.video_id!r} would carry {len(frame_ids)} frames "
+                f"for {result.event_count} events."
+            )
+        return AICPrediction(
+            video_id=result.video_id,
+            frame_id=frame_ids[0],
+            keyframe_id=str(result.steps[0].keyframe_id),
+            score=float(result.score),
+            timestamp=float(result.steps[0].timestamp or 0.0),
+            event_frame_ids=frame_ids,
+            trake=result.to_dict(),
+        )
+
     def _from_match(self, match: TemporalMatch) -> AICPrediction:
+        """Legacy conversion, retained for callers that hold a `TemporalMatch`.
+
+        It no longer filters anything: `match.steps` is event-preserving by construction
+        since Phase 7, so the row length equals the event count.
+        """
         frame_ids = [official_frame_id(self.entry, s.keyframe_id) for s in match.steps]
         key = match.steps[0].keyframe_id if match.steps else ""
         return AICPrediction(

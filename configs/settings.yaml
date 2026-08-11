@@ -402,7 +402,13 @@ aic2026:
       required: false
 
   trake:
+    # Beam-PRUNED dynamic programming. Not exact DP; an exact/k-best comparison is a
+    # Phase 8 task, and `exact_dp` is not an accepted value.
     alignment_method: beam_dp
+    # Fill an event the beam search skipped, using that event's own candidates from the
+    # SAME video, constrained by its temporal neighbours. Never inserts a sentinel.
+    recover_missing_events: true
+    recovery_respect_gap: true
     per_event_top_k: 40
     top_video_hypotheses: 20
     alignments_per_video: 1

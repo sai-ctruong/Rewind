@@ -41,7 +41,7 @@ Date: 2026-08-04
 ## Phase 5 - TRAKE Joint Alignment
 
 - Added: `aic2026/trake.py`, `tests/test_trake_dp.py`.
-- Modified: `AICCompetitionEngine.search_trake` now uses event-coverage video hypotheses and monotonic DP with gap/transition/missing penalties.
+- Modified: `AICCompetitionEngine.search_trake` now uses event-coverage video hypotheses and monotonic beam-pruned DP (`beam_dp`, not exact DP) with gap/transition/missing penalties.
 - Verified: order, min/max gap, incomplete-video penalty, deterministic output, duplicate suppression and partial R-score.
 - Limitation: TRAKE still does not use local refinement. The AIC2026 Phase 5 work enabled
   refinement for Textual KIS only; `search_trake(refine_window_s=...)` remains unused.

@@ -22,6 +22,7 @@ from .local_refinement import (
 )
 from .qa import canonical_answer_type
 from .ranking import RankingConfig
+from .trake import ALIGNMENT_METHODS
 from .trake import AlignmentConfig as TrakeConfig
 
 QA_BACKEND_TYPES = ("auto", "mock", "local_vlm", "api")
@@ -554,7 +555,13 @@ def _validate_refinement(cfg: RefinementConfig) -> None:
 
 
 def _validate_trake(cfg: TrakeConfig) -> None:
-    _require(str(cfg.alignment_method) == "beam_dp", "trake.alignment_method must be beam_dp for the current implementation")
+    # The search is beam-PRUNED DP. `exact_dp` is deliberately not accepted: claiming it
+    # would misdescribe the algorithm, and an exact search is a Phase 8 task.
+    _require(
+        str(cfg.alignment_method) in ALIGNMENT_METHODS,
+        f"trake.alignment_method must be one of {', '.join(ALIGNMENT_METHODS)}; the "
+        "current implementation is beam-pruned DP, not exact DP",
+    )
     _require(int(cfg.per_event_top_k) > 0, "trake.per_event_top_k must be > 0")
     _require(int(cfg.top_video_hypotheses) > 0, "trake.top_video_hypotheses must be > 0")
     _require(int(cfg.beam_width) > 0, "trake.beam_width must be > 0")
@@ -564,6 +571,14 @@ def _validate_trake(cfg: TrakeConfig) -> None:
     _require(float(cfg.missing_event_penalty) >= 0, "trake.missing_event_penalty must be >= 0")
     _require(float(cfg.transition_penalty) >= 0, "trake.transition_penalty must be >= 0")
     _require(1 <= int(cfg.final_top_k) <= 100, "trake.final_top_k must be in [1, 100]")
+    _require(
+        isinstance(cfg.recover_missing_events, bool),
+        "trake.recover_missing_events must be a boolean",
+    )
+    _require(
+        isinstance(cfg.recovery_respect_gap, bool),
+        "trake.recovery_respect_gap must be a boolean",
+    )
 
 
 def _validate_qa(cfg: QAConfig) -> None:

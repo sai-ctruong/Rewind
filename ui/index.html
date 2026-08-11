@@ -216,7 +216,7 @@ a:hover { text-decoration: underline; }
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { indexed: [], rows: { kis: [], qa: [], trake: [] }, qaHypotheses: [], qaSelectedVideo: null };
+const state = { indexed: [], rows: { kis: [], qa: [], trake: [] }, qaHypotheses: [], qaSelectedVideo: null, trakeEventCount: null };
 
 function currentVideo() { return $("gv-select").value || "__dataset__"; }
 function opts() { return { objects: $("gv-ocr").checked, asr: $("gv-asr").checked, caption: $("gv-caption").checked }; }
@@ -234,7 +234,11 @@ function badge(value, tone = "") { const el = textEl("span", "badge " + tone, va
 async function saveRows(task) {
   const rows = state.rows[task] || [];
   if (!rows.length) { alert("No rows to save"); return; }
-  const j = await api("/api/submission/save", jsonBody({ task, rows }));
+  // TRAKE tells the backend how many events the query had, so an export with the wrong
+  // number of frames is refused rather than written.
+  const body = { task, rows };
+  if (task === "trake" && state.trakeEventCount) body.event_count = state.trakeEventCount;
+  const j = await api("/api/submission/save", jsonBody(body));
   alert(`Saved ${j.rows} rows to ${j.path}`);
 }
 function frameCard(it) {
@@ -284,17 +288,37 @@ function renderFrames(id, items) {
   if (!items || !items.length) { box.innerHTML = '<div class="empty">No results</div>'; return; }
   items.forEach(it => box.append(frameCard(it)));
 }
-function renderChains(chains) {
+function renderChains(chains, eventCount) {
   const box = $("trake-results"); box.innerHTML = "";
-  if (!chains || !chains.length) { box.innerHTML = '<div class="empty">No chains</div>'; return; }
+  if (!chains || !chains.length) { box.innerHTML = '<div class="empty">No complete event alignments</div>'; return; }
   chains.forEach(ch => {
     const chain = document.createElement("div"); chain.className = "chain";
     const times = ch.steps.map(step => Number(step.timestamp));
-    const valid = times.every((time, i) => i === 0 || time > times[i - 1]);
+    const valid = times.every((time, i) => i === 0 || time >= times[i - 1]);
+    // Every returned sequence carries one step per event, so the count is a real check
+    // rather than a formality, and step i is always event i.
+    const complete = (ch.event_count ?? ch.steps.length) === (eventCount ?? ch.steps.length)
+      && ch.steps.length === (ch.event_count ?? ch.steps.length);
     const label = document.createElement("div"); label.className = "chain-label";
-    label.append(badge("score " + Number(ch.total_score).toFixed(4), "ok"), badge(valid ? "order valid" : "invalid order", valid ? "blue" : "warn"));
+    label.append(
+      textEl("b", "", ch.video_id || ""),
+      badge("score " + Number(ch.total_score).toFixed(4), "ok"),
+      badge(`${ch.steps.length}/${ch.event_count ?? "?"} events`, complete ? "ok" : "warn"),
+      badge(ch.alignment_status || "complete", ch.alignment_status === "complete" ? "ok" : "blue"),
+      badge(valid ? "order valid" : "invalid order", valid ? "blue" : "warn")
+    );
+    if (ch.method) label.append(badge(ch.method, ""));
     chain.append(label);
-    ch.steps.forEach(step => chain.append(frameCard(step)));
+    ch.steps.forEach((step, i) => {
+      const card = frameCard(step);
+      const tag = document.createElement("div"); tag.className = "evidence";
+      // Label from the step's OWN event_index, never from the loop position.
+      const index = step.event_index ?? i;
+      tag.textContent = `Event ${index + 1}: ${step.event || ""}`
+        + (step.status && step.status !== "aligned" ? ` · ${step.status}` : "");
+      card.prepend(tag);
+      chain.append(card);
+    });
     box.append(chain);
   });
 }
@@ -420,7 +444,19 @@ $("qa-form").onsubmit = async (ev) => {
   renderFrames("qa-results", j.frames);
   renderOutput("qa-output", state.rows.qa);
 };
-$("trake-form").onsubmit = async (ev) => { ev.preventDefault(); $("trake-status").textContent = "Aligning ordered events..."; const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean); const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value })); state.rows.trake = j.predictions || []; renderChains(j.matches); $("trake-status").textContent = j.count + " joint alignments"; renderOutput("trake-output", state.rows.trake); };
+$("trake-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  $("trake-status").textContent = "Aligning ordered events...";
+  const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value }));
+  state.rows.trake = j.predictions || [];
+  state.trakeEventCount = j.event_count || events.length;
+  renderChains(j.matches, j.event_count);
+  const d = j.diagnostics || {};
+  $("trake-status").textContent = `${j.count} complete alignments (${d.discarded_incomplete_alignments || 0} incomplete discarded, `
+    + `${d.recovered_events || 0} events recovered) · ${d.alignment_method || "beam_dp"} · refinement ${(j.refinement || {}).status || "n/a"}`;
+  renderOutput("trake-output", state.rows.trake);
+};
 refresh().catch(e => $("health").textContent = e.message);
 $("kis-save").onclick = () => saveRows("kis").catch(e => alert(e.message));
 $("qa-save").onclick = () => saveRows("qa").catch(e => alert(e.message));

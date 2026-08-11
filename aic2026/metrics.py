@@ -94,14 +94,32 @@ def qa_r_score(
     return 1.0 if qa_answer_match(pred.answer, gt.answers, semantic_matcher) else 0.0
 
 
+def is_structurally_valid_trake_row(
+    frame_ids: Sequence[object], event_count: int
+) -> bool:
+    """One frame per event, exactly. Nothing shorter is a partial answer."""
+    return int(event_count) > 0 and len(tuple(frame_ids)) == int(event_count)
+
+
 def trake_r_score(pred: RankedAnswer, gt: TRAKEGroundTruth) -> float:
+    """Fraction of events whose submitted frame falls in that event's range.
+
+    A row with the wrong number of frames scores 0, not a partial credit. `zip` used to
+    silently truncate here, so a three-frame row answering a four-event query was scored
+    over the three events it happened to cover and looked merely imperfect rather than
+    malformed. Length is a structural precondition, checked before any scoring.
+    """
     if pred.video_id != gt.video_id:
         return 0.0
     if not gt.event_ranges:
         return 0.0
-    hits = 0
-    for frame_id, frame_range in zip(pred.frame_ids, gt.event_ranges):
-        hits += 1 if frame_range.contains(frame_id) else 0
+    if not is_structurally_valid_trake_row(pred.frame_ids, len(gt.event_ranges)):
+        return 0.0
+    hits = sum(
+        1
+        for frame_id, frame_range in zip(pred.frame_ids, gt.event_ranges)
+        if frame_range.contains(frame_id)
+    )
     return hits / len(gt.event_ranges)
 
 
@@ -158,11 +176,37 @@ def parse_ground_truth_row(task: str, row: dict) -> KISGroundTruth | QAGroundTru
     return KISGroundTruth(video_id, ranges)
 
 
-def write_submission(rows: Sequence[Sequence[object]], path: str | Path, *, max_rows: int = 100) -> Path:
+class SubmissionStructureError(ValueError):
+    """Raised when a row would be written with the wrong number of columns."""
+
+
+def write_submission(
+    rows: Sequence[Sequence[object]],
+    path: str | Path,
+    *,
+    max_rows: int = 100,
+    require_row_length: int | None = None,
+) -> Path:
+    """Write submission rows, optionally refusing a malformed shape.
+
+    `require_row_length` is a local structural safety check, not the full submission
+    validator (Phase 11). It exists so a TRAKE export cannot silently write a row with
+    fewer frames than the query had events: the caller passes `1 + event_count` and a
+    mismatch raises instead of producing a plausible-looking bad file.
+    """
     path = Path(path)
+    kept = list(rows[:max_rows])
+    if require_row_length is not None:
+        expected = int(require_row_length)
+        for position, row in enumerate(kept):
+            if len(list(row)) != expected:
+                raise SubmissionStructureError(
+                    f"Row {position} has {len(list(row))} columns but {expected} are "
+                    "required; refusing to write a structurally invalid submission."
+                )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
-        for row in rows[:max_rows]:
+        for row in kept:
             writer.writerow(list(row))
     return path
