@@ -60,9 +60,11 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | Video-backed scope | Fixed in Phase 3.2: scope mode `existing_videos` intersects MP4s on disk with map + CLIP, resolved from `DATA_ROOT` at run time. | The current development subset is reproducible without hard-coded IDs, and the cache fingerprint depends on the resolved IDs, not the mode name. | `aic2026/video_inventory.py`, `aic2026/dataset_scope.py`, `aic2026/cache_manifest.py`, `aic2026/cli.py` | Complete in Phase 3.2. |
 | Keyframe identity | Fixed in Phase 3.1: internal ID is `{video_id}/kf_{keyframe_ordinal:06d}`; `frame_idx` is carried separately and is the only submission value. Record schema advanced to v3. | v2's `{video_id}/{frame_idx}` collided on the 192 official videos that repeat a `frame_idx`, silently overwriting `entry.raws` entries. Engine no longer rebuilds the ID from `(video_id, frame_id)` after fusion. | `aic2026/dataset.py`, `aic2026/engine.py`, `aic2026/fusion.py`, `ingestion/schemas.py`, `retrieval/video_engine.py` | Complete in Phase 3.1. |
 | DATA_ROOT state | Fixed in Phase 4: one frozen `RuntimeDatasetState` plus a `RuntimeStateManager` own every dataset fact; each request takes one snapshot; activation builds a whole new state and replaces it atomically. | Engine, frame provider, health, video/frame routes, cache status and result URLs can no longer disagree about the active root; a failed switch leaves the previous state serving. | `aic2026/runtime_state.py`, `ui/app.py`, `aic2026/engine.py` | Complete in Phase 4. |
-| LocalFrameRefiner usage | `LocalFrameRefiner` ton tai va co test rieng, nhung `AICCompetitionEngine` khong khoi tao hoac goi refiner trong KIS/Q&A/TRAKE. | Documentation noi refinement co the lam nguoi doc hieu nham pipeline that da refine. | `aic2026/local_refinement.py`, `aic2026/engine.py` | Phase 5: interface result day du, goi refiner end-to-end theo config. |
-| `refine_window_s` | `search_trake(..., refine_window_s=6.0)` nhan tham so nhung khong dung. | UI/CLI co tham so vo tac dung; benchmark refinement bi gia. | `aic2026/engine.py`, `ui/app.py` | Phase 5: wire window vao refiner hoac bo option cho den khi hoat dong. |
-| MP4 missing fallback | Local refiner co keyframe-only fallback khi goi truc tiep, nhung engine khong goi refiner nen missing MP4 khong tham gia KIS/Q&A/TRAKE. | Khong co warning pipeline-level ve gioi han sampling khi thieu MP4. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py` | Phase 5: propagate refinement warning vao prediction/evidence/UI. |
+| LocalFrameRefiner usage | **Fixed for KIS in Phase 5**: `AICCompetitionEngine` owns a `LocalFrameRefiner` and calls it inside `search_kis` before Top-100 allocation, under an explicit `always`/`uncertainty`/`disabled` policy with a candidate budget. | Documentation no longer overstates the pipeline: a KIS search really does densely sample bounded MP4 windows and rerank on local visual evidence. Q&A and TRAKE still do **not** refine. | `aic2026/local_refinement.py`, `aic2026/frame_scorer.py`, `aic2026/clip_backend.py`, `aic2026/engine.py`, `ui/app.py` | Complete for KIS in Phase 5; Q&A/TRAKE refinement remains Phase 6+. |
+| Visual frame scorer | Fixed in Phase 5: `CLIPFrameScorer` embeds the query once and scores decoded frames in one batched call, sharing the `openai/clip-vit-base-patch32` checkpoint with the text tower through `aic2026/clip_backend.py`. | The refiner no longer needs an injected callable; there is no production fake, and a scorer that cannot load skips refinement with a warning instead of pretending. | `aic2026/frame_scorer.py`, `aic2026/clip_backend.py`, `aic2026/text_encoder.py` | Complete in Phase 5. |
+| Frame-ID separation under refinement | Fixed in Phase 5: `coarse_official_frame_idx`, `best_visual_frame_idx` and `submission_frame_idx` are distinct and all reported; `frame_output_policy` defaults to `preserve_coarse`. | A refined frame is evidence only. The submitted row keeps the official mapped `frame_idx` until AIC confirms the semantics of an arbitrary decoded frame. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py`, `ui/index.html` | Complete in Phase 5. |
+| `refine_window_s` | Still accepted by `search_trake(..., refine_window_s=6.0)` and still unused, but now documented as such in the docstring rather than silently dead. | The UI control has no effect on TRAKE. Phase 5 wired refinement into KIS only. | `aic2026/engine.py`, `ui/app.py` | Phase 6: wire it into TRAKE refinement or remove the option. |
+| MP4 missing fallback | Fixed for KIS in Phase 5: a missing MP4, a decode failure, or an unavailable scorer marks the candidate `applied=false` with a reason and a warning, and the coarse candidate is preserved. | Warnings reach the prediction payload, the search response, and the UI. One failing video never fails a search. | `aic2026/local_refinement.py`, `aic2026/engine.py`, `ui/app.py` | Complete for KIS in Phase 5. |
 | Q&A answer count | `answer_qa` chon `center = candidates[0]`, tao 1 answer tren video center, sau do gan cung answer cho tat ca candidate predictions. | Answer bi copy xuyen video; evidence video A co the gan cho prediction video B. | `aic2026/engine.py`, `aic2026/qa.py` | Phase 6: group theo video hypothesis, goi answerer rieng cho tung video hypothesis. |
 | Q&A visual backend | Mac dinh `default_answerer()` tra `MockVqaAnswerer` neu khong co `ANTHROPIC_API_KEY`; mock suy luan tren text/caption/object, khong nhin anh. | Khong duoc coi la visual Q&A production; can warning ro trong health/UI/output. | `retrieval/vqa_module.py`, `aic2026/qa.py`, `ui/app.py` | Phase 6: answerer status, `answer_reliability_score`, LocalVlmAnswerer interface/test fake backend. |
 | Expected answer type | UI gui `expected_answer_type`, engine nhan parameter nhung khong truyen vao `normalize_answer` theo type va khong prompt answerer theo type. | Number/color/boolean normalization khong dung nhu UI ham y. | `ui/app.py`, `aic2026/engine.py`, `aic2026/qa.py` | Phase 6: type-aware prompt/normalization, tests Vietnamese/English numbers and colors. |
@@ -83,8 +85,8 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 
 ## Direct Answers To Required Verification Questions
 
-1. `LocalFrameRefiner` is currently called only by its unit tests, not by KIS/Q&A/TRAKE engine paths.
-2. `refine_window_s` is accepted by `AICCompetitionEngine.search_trake` and UI, but is not used.
+1. Since Phase 5, `LocalFrameRefiner` is called end-to-end by `search_kis`. Q&A and TRAKE still do not call it.
+2. `refine_window_s` is accepted by `AICCompetitionEngine.search_trake` and UI, but is still not used: Phase 5 integrated refinement into KIS only.
 3. Q&A currently creates one answer for the top center candidate's video, then attaches that same answer to every returned candidate.
 4. TRAKE can output fewer frame IDs than the number of events because missing alignments are allowed internally and filtered out in `frame_ids`.
 5. TRAKE is beam-pruned dynamic programming, not exact exhaustive DP, because states are truncated by `beam_width`.
@@ -120,7 +122,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 
 1. **Submission-invalid logic can pass silently**: dataset mismatch truncation, missing TRAKE events, copied Q&A answers, and no export validator can all produce a syntactically plausible but semantically wrong CSV.
 2. **Runtime/config/cache mismatch can invalidate benchmark runs**: YAML is not the source of truth, cache has no manifest, and UI custom DATA_ROOT does not propagate to all endpoints.
-3. **Documentation can overstate current capability**: local refinement and multi-frame visual Q&A exist as modules/interfaces, but are not fully integrated into engine runtime without fallback/mock limitations.
+3. **Documentation can overstate current capability**: since Phase 5 local refinement is genuinely wired into KIS, but it is KIS only, and multi-frame visual Q&A still exists as an interface with a mock answerer rather than a fully integrated visual backend.
 ## Phase 1 Status Update
 
 - Runtime config: fixed in Phase 1 commit `feat: wire validated runtime configuration`.
@@ -163,7 +165,42 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 - Cache directories follow the dataset: explicit wins, the configured cache serves the configured root, and any other root derives a distinct directory.
 - Real smoke on the 29-video `existing_videos` development set reused the existing cache (`cached: true`) and verified JPEG serving, MP4 fallback, a KIS query, and stale-generation rejection.
 - Answers 10 and 11 in the verification list above are superseded: UI custom DATA_ROOT now updates all routes.
-- Local refinement, Q&A per-video hypotheses, TRAKE k-best, retrieval channels, submission validation and manual editing all remain pending.
-- Local refinement integration: pending Phase 5.
+- Q&A per-video hypotheses, TRAKE k-best, retrieval channels, submission validation and manual editing all remain pending.
 - Q&A per-video hypothesis: pending Phase 6.
 - TRAKE complete/k-best output: pending Phase 7-8.
+
+## Phase 5 Status Update
+
+- **LocalFrameRefiner runtime integration: fixed for KIS in Phase 5**, commit
+  `feat: integrate query-conditioned local refinement`; see
+  `docs/PHASE_5_LOCAL_REFINEMENT.md`.
+- Global retrieval is unchanged: the BTC precomputed CLIP index is still the only
+  recall layer, nothing was re-embedded, and no index was replaced.
+- `aic2026/frame_scorer.py` adds a `FrameScorer` protocol and `CLIPFrameScorer`;
+  `aic2026/clip_backend.py` owns one `openai/clip-vit-base-patch32` checkpoint shared by
+  the text tower and the image tower, so the two spaces are provably comparable and the
+  weights are not loaded twice.
+- `FrameProvider` gained `video_metadata`, `decode_frames` (one capture for a whole
+  window) and `get_video_frame`; the refiner no longer has its own OpenCV code, and its
+  keyframe-record API is unchanged.
+- Bounded sampling: `top_hypotheses` -> region dedup -> `candidate_budget` ->
+  `max_frames` per candidate. Worst case 5 x 32 frames per query; no full-video decode.
+- Trigger policy `always` / `uncertainty` / `disabled`; the uncertainty heuristic is the
+  relative gap between the two best candidate regions against `margin_threshold`, fully
+  logged in a `RefinementDecision`.
+- Reranking is `coarse_fusion_score + rerank_alpha * (best_visual - coarse_visual)`;
+  all components are preserved and visible, and untouched candidates keep their coarse
+  score.
+- Frame-ID safety: `frame_output_policy` defaults to `preserve_coarse`, so the submitted
+  `frame_id` remains the official mapped `frame_idx` even when a different local frame
+  scores higher. `decoded_frame` exists but is never the default.
+- Runtime state: the state adopts the engine's frame provider and
+  `verify_engine_identity()` rejects a refiner paired with another generation's provider.
+- Real L21 smoke (existing cache **reused, not rebuilt**), real CLIP on CPU: 4 queries,
+  20 candidates refined, 631 frames decoded and scored, 0 decode/scorer failures,
+  refinement p50 14.4 s, 13 of 20 refined frames differ from the coarse frame, mean
+  absolute offset 0.909 s. The shipped uncertainty policy triggered on 2 of 4 queries.
+- **No accuracy claim**: there is no AIC ground truth, no threshold was tuned against
+  quality, and no result is labelled correct or incorrect.
+- Refinement is wired into **KIS only**. Q&A per-video hypotheses, TRAKE k-best and
+  TRAKE local refinement remain unimplemented.

@@ -34,14 +34,17 @@ Date: 2026-08-04
 - Added: `aic2026/local_refinement.py`, `tests/test_local_refinement.py`.
 - Design: bounded OpenCV decoding, interval cache/memory cap, injected visual scorer and explicit map-keyframe fallback.
 - Verified: synthetic MP4 selects the stronger local frame and never exceeds `max_frames`; missing MP4 returns `keyframe_only` warning.
-- Limitation: production MP4 refinement needs a compatible image scorer; it does not pretend the text tower can score decoded images.
+- Superseded by the AIC2026 Phase 5 work (`docs/PHASE_5_LOCAL_REFINEMENT.md`): a production
+  image scorer now exists (`aic2026/frame_scorer.CLIPFrameScorer`, sharing one CLIP
+  checkpoint with the text tower), and the refiner is called end-to-end by `search_kis`.
 
 ## Phase 5 - TRAKE Joint Alignment
 
 - Added: `aic2026/trake.py`, `tests/test_trake_dp.py`.
 - Modified: `AICCompetitionEngine.search_trake` now uses event-coverage video hypotheses and monotonic DP with gap/transition/missing penalties.
 - Verified: order, min/max gap, incomplete-video penalty, deterministic output, duplicate suppression and partial R-score.
-- Limitation: local refinement is implemented independently but not enabled without a production frame scorer.
+- Limitation: TRAKE still does not use local refinement. The AIC2026 Phase 5 work enabled
+  refinement for Textual KIS only; `search_trake(refine_window_s=...)` remains unused.
 
 ## Phase 6 - Grounded Q&A
 

@@ -164,6 +164,14 @@ class RuntimeDatasetState:
                 f"{canonical_data_root(provider_root)!r} but the engine was built for "
                 f"{engine_root!r}."
             )
+        # Phase 5: the local refiner decodes original MP4s, so it must never pair with a
+        # frame provider from another generation.
+        refiner = getattr(self.engine, "local_refiner", None)
+        if refiner is not None and refiner.frame_provider is not self.frame_provider:
+            raise RuntimeStateError(
+                "Runtime state is inconsistent: the local refiner does not use this "
+                "state's frame provider."
+            )
 
     def runtime_summary(self) -> dict[str, Any]:
         return {
@@ -277,6 +285,14 @@ def build_runtime_state(
             selected = tuple(indexed)
 
     inventory = discover_videos(root)
+    # One frame provider per generation. When an engine exists its provider is adopted
+    # rather than duplicated, so the routes, the engine, and the local refiner all
+    # decode from the same object — and switching DATA_ROOT replaces all three at once.
+    frame_provider = (
+        engine.frame_provider
+        if engine is not None
+        else FrameProvider(root, cache_dir=effective_config.dataset.frame_cache_dir)
+    )
     state = RuntimeDatasetState(
         generation=int(generation),
         created_at_utc=_now(),
@@ -289,9 +305,7 @@ def build_runtime_state(
         dataset_scope=scope_payload(resolved_scope),
         resolved_video_ids=tuple(selected),
         selected_video_ids_hash=hash_selected_video_ids(selected),
-        frame_provider=FrameProvider(
-            root, cache_dir=effective_config.dataset.frame_cache_dir
-        ),
+        frame_provider=frame_provider,
         engine=engine,
         load=load,
         cache_status=(

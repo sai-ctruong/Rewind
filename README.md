@@ -8,7 +8,9 @@ Competition system for Textual KIS, grounded Q&A and ordered-event TRAKE over th
 - Explicit hashing fallback for unit/smoke tests only; production mode refuses it.
 - CLIP, confidence-aware objects, media metadata and BM25 score fusion with ablations.
 - Video-aware diversified Top-100 ranking.
-- Bounded MP4 local refinement with map-keyframe fallback.
+- Bounded query-conditioned local refinement of the original MP4s, wired into **Textual
+  KIS only** (Phase 5). Q&A and TRAKE do not refine. The official submission frame stays
+  the coarse mapped `frame_idx`; see `docs/PHASE_5_LOCAL_REFINEMENT.md`.
 - Joint monotonic dynamic programming for TRAKE.
 - Ordered diverse multi-frame Q&A evidence, answer normalization and confidence.
 - Official-style R-score/R@k/Final Score evaluation artifacts and competition UI.

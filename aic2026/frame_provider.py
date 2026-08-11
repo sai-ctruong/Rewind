@@ -26,12 +26,15 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from .video_inventory import video_path_for
 
 DEFAULT_FRAME_CACHE_DIR = Path("artifacts") / "video_frame_cache"
 JPEG_QUALITY = 90
+# Reading forward is cheaper than re-seeking for small gaps; past this many frames a
+# fresh seek wins. Only affects speed, never which frame is returned.
+SEQUENTIAL_READ_LIMIT = 24
 
 SOURCE_KEYFRAME_JPEG = "keyframe_jpeg"
 SOURCE_VIDEO_DECODE = "video_decode"
@@ -48,6 +51,34 @@ class MappedKeyframe(Protocol):
     source_video: str | None
     frame_idx: int | None
     keyframe_ordinal: int | None
+
+
+@dataclass(frozen=True)
+class VideoMetadata:
+    """Container facts needed to plan a bounded sample window."""
+
+    fps: float
+    frame_count: int
+    duration_s: float
+
+    @property
+    def usable(self) -> bool:
+        return self.fps > 0.0 and self.frame_count > 0
+
+
+@dataclass(frozen=True)
+class DecodedFrame:
+    """One frame decoded from an MP4, kept in memory as a BGR array.
+
+    `requested_frame_idx` is what the sample plan asked for and is the identity used
+    everywhere downstream; `decoded_frame_idx` records where the decoder actually
+    landed, and the two are reported separately for the same reason as in `FrameResult`.
+    """
+
+    requested_frame_idx: int
+    decoded_frame_idx: int
+    timestamp: float
+    image: Any
 
 
 @dataclass(frozen=True)
@@ -185,6 +216,9 @@ class FrameProvider:
     ):
         self.data_root = None if data_root is None else Path(data_root)
         self.cache = cache or DerivedFrameCache(cache_dir, enabled=cache_enabled)
+        # Container properties only (fps, frame count): no pixels, tiny, and re-read
+        # whenever the file's size or mtime changes.
+        self._metadata: dict[str, tuple[str, VideoMetadata]] = {}
 
     # ------------------------------------------------------------------ resolution
 
@@ -199,6 +233,13 @@ class FrameProvider:
             if path.is_file():
                 return path
         return None
+
+    def video_path(self, video_id: str) -> Path | None:
+        """Locate the original MP4 for a video ID under the ACTIVE data root."""
+        if self.data_root is None:
+            return None
+        path = video_path_for(self.data_root, str(video_id))
+        return path if path.is_file() else None
 
     @staticmethod
     def _keyframe_jpeg(record: MappedKeyframe) -> Path | None:
@@ -266,6 +307,91 @@ class FrameProvider:
                 return self._decode(record, requested, timestamp, warning=jpeg_warning)
 
         return self._decode(record, requested, timestamp)
+
+    # ------------------------------------------------------ low-level video access
+
+    def video_metadata(
+        self, video_id: str, *, source_video: str | Path | None = None
+    ) -> VideoMetadata | None:
+        """FPS and frame count for one video, or None when it cannot be opened.
+
+        Needed to clamp a local sample window to the real video, because AIC videos do
+        not all share one frame rate. Cached per file identity: opening a container to
+        read two properties is cheap but not free, and a refinement request asks for
+        the same video several times.
+        """
+        source = Path(source_video) if source_video else self.video_path(video_id)
+        if source is None or not source.is_file():
+            return None
+        try:
+            stat = source.stat()
+            stamp = f"{source}|{stat.st_size}:{stat.st_mtime_ns}"
+        except OSError:
+            return None
+        cached = self._metadata.get(str(video_id))
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        metadata = _read_video_metadata(source)
+        if metadata is not None:
+            self._metadata[str(video_id)] = (stamp, metadata)
+        return metadata
+
+    def decode_frames(
+        self,
+        video_id: str,
+        frame_indices: Sequence[int],
+        *,
+        source_video: str | Path | None = None,
+    ) -> tuple[list[DecodedFrame], str | None]:
+        """Decode several frames of one video with a SINGLE capture.
+
+        This is the shared video-access primitive for local refinement. Opening the
+        container once and reading forward between nearby targets is what keeps a
+        bounded window affordable; one open-and-seek per frame would not be.
+
+        Returns the frames that could be decoded plus an optional warning. It never
+        raises for a missing or unreadable video: a visualization/refinement failure
+        must never fail a retrieval request.
+        """
+        source = Path(source_video) if source_video else self.video_path(video_id)
+        if source is None or not source.is_file():
+            return [], f"No original MP4 is available for video {video_id!r}."
+        return _decode_frames_bgr(source, frame_indices)
+
+    def get_video_frame(
+        self,
+        video_id: str,
+        *,
+        frame_idx: int | None = None,
+        timestamp: float | None = None,
+        source_video: str | Path | None = None,
+    ) -> FrameResult:
+        """Decode ONE arbitrary frame of a video, by index or by timestamp.
+
+        The keyframe-record API (`get_frame`) stays exactly as it was; this is the
+        addition Phase 5 needs, because a refined frame is generally not a mapped
+        keyframe and therefore has no record.
+        """
+        source = Path(source_video) if source_video else self.video_path(video_id)
+        if source is None or not source.is_file():
+            return FrameResult(
+                video_id=str(video_id),
+                source=SOURCE_NONE,
+                frame_idx=frame_idx,
+                timestamp=timestamp,
+                requested_frame_idx=frame_idx,
+                warning=f"No original MP4 is available for video {video_id!r}.",
+            )
+        record = _AdHocFrame(
+            id=f"{video_id}/decoded",
+            video_id=str(video_id),
+            timestamp=float(timestamp or 0.0),
+            image_path=None,
+            source_video=str(source),
+            frame_idx=None if frame_idx is None else int(frame_idx),
+            keyframe_ordinal=None,
+        )
+        return self._decode(record, record.frame_idx, record.timestamp)
 
     def _decode(
         self,
@@ -338,9 +464,108 @@ class FrameProvider:
         )
 
 
+@dataclass(frozen=True)
+class _AdHocFrame:
+    """A `MappedKeyframe` for a frame that has no BTC map row."""
+
+    id: str
+    video_id: str
+    timestamp: float
+    image_path: str | None
+    source_video: str | None
+    frame_idx: int | None
+    keyframe_ordinal: int | None
+
+
 def _join(*parts: str | None) -> str | None:
     kept = [part for part in parts if part]
     return " ".join(kept) if kept else None
+
+
+def _read_video_metadata(source_video: Path) -> VideoMetadata | None:
+    try:
+        import cv2
+    except ImportError:  # pragma: no cover - OpenCV is a project dependency
+        return None
+    capture = cv2.VideoCapture(str(source_video))
+    try:
+        if not capture.isOpened():
+            return None
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    except Exception:  # pragma: no cover - defensive: containers vary
+        return None
+    finally:
+        capture.release()
+    if not (fps > 0.0):
+        return None
+    duration = float(frame_count) / fps if frame_count > 0 else 0.0
+    return VideoMetadata(fps=fps, frame_count=max(0, frame_count), duration_s=duration)
+
+
+def _decode_frames_bgr(
+    source_video: Path, frame_indices: Sequence[int]
+) -> tuple[list[DecodedFrame], str | None]:
+    """Decode the requested frame indices from one capture, in ascending order.
+
+    Deterministic: the same request against the same file yields the same frames in the
+    same order, regardless of the order the caller listed them in.
+    """
+    wanted = sorted({int(index) for index in frame_indices if int(index) >= 0})
+    if not wanted:
+        return [], None
+    try:
+        import cv2
+    except ImportError as exc:  # pragma: no cover - OpenCV is a project dependency
+        return [], f"OpenCV is unavailable: {exc}"
+
+    capture = cv2.VideoCapture(str(source_video))
+    decoded: list[DecodedFrame] = []
+    failures = 0
+    try:
+        if not capture.isOpened():
+            return [], f"OpenCV cannot open {source_video.name}."
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        position: int | None = None  # index the next read() would return
+        for target in wanted:
+            if position is None or target < position or target - position > SEQUENTIAL_READ_LIMIT:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, int(target))
+                position = int(target)
+            while position < target:
+                ok, _ = capture.read()
+                if not ok:
+                    break
+                position += 1
+            if position != target:
+                failures += 1
+                position = None
+                continue
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                failures += 1
+                position = None
+                continue
+            landed = position
+            position += 1
+            decoded.append(
+                DecodedFrame(
+                    requested_frame_idx=int(target),
+                    decoded_frame_idx=int(landed),
+                    timestamp=(float(target) / fps) if fps > 0 else 0.0,
+                    image=frame,
+                )
+            )
+    except Exception as exc:  # pragma: no cover - defensive: corrupt containers vary
+        return decoded, f"Decoding {source_video.name} failed: {type(exc).__name__}: {exc}"
+    finally:
+        capture.release()
+    warning = (
+        f"{failures} of {len(wanted)} requested frames could not be decoded from "
+        f"{source_video.name}."
+        if failures
+        else None
+    )
+    return decoded, warning
 
 
 def _decode_frame_jpeg(
@@ -396,11 +621,14 @@ def _decode_frame_jpeg(
 
 __all__ = [
     "DEFAULT_FRAME_CACHE_DIR",
+    "SEQUENTIAL_READ_LIMIT",
     "SOURCE_KEYFRAME_JPEG",
     "SOURCE_NONE",
     "SOURCE_VIDEO_DECODE",
+    "DecodedFrame",
     "DerivedFrameCache",
     "FrameProvider",
     "FrameResult",
     "MappedKeyframe",
+    "VideoMetadata",
 ]

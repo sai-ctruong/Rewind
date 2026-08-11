@@ -8,6 +8,8 @@ import numpy as np
 
 from ingestion.embed_clip import deterministic_unit_vector
 
+from .clip_backend import get_clip_backend
+
 
 FALLBACK_WARNING = "Fallback encoder - results are not meaningful for accuracy"
 
@@ -80,7 +82,14 @@ class HashingTextEncoder:
 
 
 class CLIPTextEncoder:
-    """OpenAI CLIP ViT-B/32 text tower matching 512-dimensional BTC features."""
+    """OpenAI CLIP ViT-B/32 text tower matching 512-dimensional BTC features.
+
+    Phase 5 added query-conditioned image scoring, which needs the image tower of the
+    *same* checkpoint. Rather than loading `CLIPModel` twice, this encoder now takes its
+    model from `aic2026.clip_backend`, which hands the identical instance to
+    `CLIPFrameScorer`. Behaviour is unchanged: the same model, the same offline-first
+    policy, the same projection-dimension check, and the same public attributes.
+    """
 
     def __init__(
         self,
@@ -91,54 +100,31 @@ class CLIPTextEncoder:
         batch_size: int = 32,
         local_files_only: bool = False,
     ):
-        try:
-            import torch
-            from transformers import CLIPModel, CLIPProcessor
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "CLIPTextEncoder requires torch and transformers. Install with: "
-                ".venv\\Scripts\\pip.exe install -r requirements-full.txt"
-            ) from exc
-        self._torch = torch
         self.model_name = model_name
         self.feature_dim = int(feature_dim)
         self.batch_size = max(1, int(batch_size))
-        requested = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        if requested.startswith("cuda") and not torch.cuda.is_available():
-            raise RuntimeError(f"CUDA device {requested!r} requested but CUDA is unavailable.")
-        self.device = requested
-        self.processor = CLIPProcessor.from_pretrained(model_name, local_files_only=local_files_only)
-        self.model = CLIPModel.from_pretrained(model_name, local_files_only=local_files_only).to(self.device)
-        projection_dim = int(getattr(self.model.config, "projection_dim", 0) or 0)
-        if projection_dim != self.feature_dim:
+        backend = get_clip_backend(
+            model_name, device=device, local_files_only=local_files_only
+        )
+        backend.ensure_loaded()
+        if int(backend.projection_dim or 0) != self.feature_dim:
             raise ValueError(
-                f"Model {model_name!r} outputs {projection_dim} dimensions, "
+                f"Model {model_name!r} outputs {backend.projection_dim} dimensions, "
                 f"but the AIC index requires {self.feature_dim}."
             )
-        self.model.eval()
+        self._backend = backend
+        self.device = str(backend.device)
+        self.processor = backend.processor
+        self.model = backend.model
 
     def encode_batch(self, texts: Sequence[str]) -> np.ndarray:  # pragma: no cover - integration
         clean = [str(text) for text in texts]
         if not clean:
             return np.empty((0, self.feature_dim), dtype=np.float32)
         unique = list(dict.fromkeys(clean))
-        chunks: list[np.ndarray] = []
-        torch = self._torch
-        for start in range(0, len(unique), self.batch_size):
-            inputs = self.processor(
-                text=unique[start:start + self.batch_size],
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-            ).to(self.device)
-            with torch.inference_mode():
-                features = self.model.get_text_features(**inputs)
-            if hasattr(features, "pooler_output"):
-                features = features.pooler_output
-            elif isinstance(features, (tuple, list)):
-                features = features[0]
-            chunks.append(features.detach().float().cpu().numpy())
-        unique_matrix = _validate_embeddings(np.concatenate(chunks, axis=0), self.feature_dim)
+        unique_matrix = _validate_embeddings(
+            self._backend.encode_text(unique, batch_size=self.batch_size), self.feature_dim
+        )
         row_by_text = {text: row for text, row in zip(unique, unique_matrix)}
         return np.ascontiguousarray([row_by_text[text] for text in clean], dtype=np.float32)
 

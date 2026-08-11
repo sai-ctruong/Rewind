@@ -34,7 +34,16 @@ from .config import AppConfig, config_hash, config_to_dict
 from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
 from .dataset_validation import write_dataset_report
 from .frame_provider import FrameProvider
+from .frame_scorer import FrameScorer, build_frame_scorer
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
+from .local_refinement import (
+    FRAME_OUTPUT_DECODED_FRAME,
+    MODE_DISABLED,
+    LocalFrameRefiner,
+    LocalRefinementRequest,
+    LocalRefinementResult,
+    RefinementCandidate,
+)
 from .qa import QAInput, build_retrieval_query, confidence_from_evidence, normalize_answer, select_diverse_evidence
 from .ranking import RankingConfig, video_aware_top100
 from .trake import AlignmentConfig, EventCandidate, joint_trake_alignment
@@ -66,6 +75,10 @@ class AICPrediction:
     timestamp: float = 0.0
     score_breakdown: dict[str, float] = field(default_factory=dict)
     evidence: dict = field(default_factory=dict)
+    # Local-refinement provenance for this candidate, or None when refinement did not
+    # run. `frame_id` above stays the OFFICIAL submission frame under the default
+    # preserve_coarse policy, whatever the refined visual frame turned out to be.
+    refinement: Optional[dict] = None
 
     def row(self) -> list[str]:
         if self.event_frame_ids:
@@ -73,6 +86,32 @@ class AICPrediction:
         if self.answer is not None:
             return [self.video_id, self.frame_id, self.answer]
         return [self.video_id, self.frame_id]
+
+
+@dataclass(frozen=True)
+class KISSearchResult:
+    """A KIS search plus everything Phase 5 can say about it without ground truth."""
+
+    predictions: list[AICPrediction]
+    refinement: Optional[LocalRefinementResult] = None
+    coarse_search_ms: float = 0.0
+    refinement_ms: float = 0.0
+    total_search_ms: float = 0.0
+
+    def diagnostics(self) -> dict:
+        """Structural counters and timings. Never an accuracy measurement."""
+        base = {
+            "coarse_search_ms": round(self.coarse_search_ms, 3),
+            "refinement_ms": round(self.refinement_ms, 3),
+            "total_search_ms": round(self.total_search_ms, 3),
+            "refinement_triggered": False,
+            "candidates_refined": 0,
+        }
+        if self.refinement is not None:
+            base.update(self.refinement.diagnostics)
+            base["coarse_search_ms"] = round(self.coarse_search_ms, 3)
+            base["total_search_ms"] = round(self.total_search_ms, 3)
+        return base
 
 
 @dataclass
@@ -131,6 +170,7 @@ class AICCompetitionEngine:
         fusion_config: Optional[FusionConfig] = None,
         app_config: Optional[AppConfig] = None,
         frame_provider: Optional[FrameProvider] = None,
+        frame_scorer: Optional[FrameScorer] = None,
     ):
         self.entry = entry
         self.app_config = app_config or AppConfig()
@@ -167,6 +207,48 @@ class AICCompetitionEngine:
         self.frame_provider = frame_provider or FrameProvider(
             self.app_config.dataset.root, cache_dir=self.app_config.dataset.frame_cache_dir
         )
+        # The refiner and its scorer belong to THIS engine, and the engine belongs to one
+        # runtime generation. That is what stops a refiner from ever pairing with the
+        # frame provider or data root of a different generation.
+        self.frame_scorer = frame_scorer if frame_scorer is not None else self._build_frame_scorer()
+        self.local_refiner = LocalFrameRefiner(
+            self.refinement_config,
+            frame_provider=self.frame_provider,
+            scorer=self.frame_scorer,
+        )
+
+    def _build_frame_scorer(self) -> Optional[FrameScorer]:
+        """Construct the configured visual scorer without loading its weights.
+
+        Construction is deliberately cheap; the checkpoint loads on the first refined
+        query. A configuration error is fatal only when refinement is actually enabled,
+        so a disabled-refinement deployment is never blocked by scorer settings.
+        """
+        config = self.refinement_config
+        if config.effective_mode == MODE_DISABLED:
+            return None
+        try:
+            return build_frame_scorer(
+                config.scorer_type,
+                model_name=config.scorer_model_name,
+                device=None if config.scorer_device == "auto" else config.scorer_device,
+                batch_size=config.batch_size,
+                expected_dim=self.feature_dim,
+            )
+        except Exception:
+            if config.scorer_required or self.production_mode:
+                raise
+            return None
+
+    def refinement_status(self, *, initialize: bool = False) -> dict:
+        """Refinement configuration and scorer state.
+
+        `initialize=False` (the default, and what `/health` uses) never loads the CLIP
+        checkpoint: the answer is simply `not_loaded` until a query needs it.
+        """
+        status = dict(self.refinement_config.summary())
+        status["scorer"] = self.local_refiner.scorer_status(initialize=initialize)
+        return status
 
     @classmethod
     def from_data_root(
@@ -182,6 +264,7 @@ class AICCompetitionEngine:
         verify_keyframes: Optional[bool] = None,
         index_kind: Optional[str] = None,
         text_encoder: Optional[TextQueryEncoder] = None,
+        frame_scorer: Optional[FrameScorer] = None,
         production_mode: Optional[bool] = None,
         allow_hashing_fallback: Optional[bool] = None,
         allow_stale_cache: Optional[bool] = None,
@@ -266,6 +349,7 @@ class AICCompetitionEngine:
             return cls(
                 entry,
                 text_encoder=text_encoder,
+                frame_scorer=frame_scorer,
                 production_mode=production_mode,
                 allow_hashing_fallback=allow_hashing_fallback,
                 encoder_model_name=encoder_model_name,
@@ -598,9 +682,33 @@ class AICCompetitionEngine:
             candidate.evidence = item.evidence
             out.append(candidate)
         return out
-    def search_kis(self, query: str, *, top_k: Optional[int] = None) -> list[AICPrediction]:
+    def search_kis(
+        self, query: str, *, top_k: Optional[int] = None, refine: Optional[bool] = None
+    ) -> list[AICPrediction]:
+        return self.search_kis_detailed(query, top_k=top_k, refine=refine).predictions
+
+    def search_kis_detailed(
+        self, query: str, *, top_k: Optional[int] = None, refine: Optional[bool] = None
+    ) -> KISSearchResult:
+        """Coarse retrieval, then bounded local refinement, then Top-100 allocation.
+
+        Refinement runs BEFORE the final allocation so local evidence can actually
+        rerank; refining after truncation would only relabel an already fixed list.
+        `refine=False` forces refinement off for an A/B comparison; `None` follows the
+        configured mode.
+        """
+        started = time.perf_counter()
         requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.ranking_config.final_top_k)))
         pool = self.search_candidates(query, top_k=min(self.fusion_depth, max(requested * 3, 100)))
+        coarse_ms = (time.perf_counter() - started) * 1000.0
+
+        refinement: Optional[LocalRefinementResult] = None
+        refinement_ms = 0.0
+        if refine is not False and self.refinement_config.effective_mode != MODE_DISABLED:
+            refine_started = time.perf_counter()
+            refinement = self._refine_candidates(query, pool)
+            refinement_ms = (time.perf_counter() - refine_started) * 1000.0
+        by_keyframe = {} if refinement is None else refinement.by_keyframe()
 
         def nearby(anchor: Candidate, offsets: Sequence[int]) -> list[Candidate]:
             rows = [
@@ -634,7 +742,63 @@ class AICCompetitionEngine:
             neighbors=nearby,
             config=replace(self.ranking_config, final_top_k=requested, top_k=None),
         )
-        return [self._from_candidate(c) for c in ranked]
+        predictions = [
+            self._from_candidate(c, refinement=by_keyframe.get(c.keyframe_id)) for c in ranked
+        ]
+        return KISSearchResult(
+            predictions=predictions,
+            refinement=refinement,
+            coarse_search_ms=coarse_ms,
+            refinement_ms=refinement_ms,
+            total_search_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    def _refine_candidates(
+        self, query: str, pool: Sequence[Candidate]
+    ) -> Optional[LocalRefinementResult]:
+        """Run local refinement over the coarse pool and fold the result into scores.
+
+        The refined score is `coarse_fusion_score + alpha * (best_visual - coarse_visual)`.
+        It is the *improvement over the coarse frame's own visual score*, not the raw
+        local similarity: the coarse CLIP vector is already inside the fused score, so
+        adding the raw local score back would count the same evidence twice, and the two
+        scales are unrelated anyway. Candidates that were not refined keep their coarse
+        score untouched and are never dropped.
+        """
+        if not pool:
+            return None
+        candidates: list[RefinementCandidate] = []
+        for candidate in pool:
+            raw = self.entry.raws.get(candidate.keyframe_id)
+            if raw is None:
+                continue
+            candidates.append(
+                RefinementCandidate(
+                    keyframe_id=candidate.keyframe_id,
+                    video_id=candidate.video_id,
+                    coarse_frame_idx=None if raw.frame_idx is None else int(raw.frame_idx),
+                    timestamp=float(candidate.timestamp),
+                    coarse_score=float(candidate.score),
+                    source_video=raw.source_video,
+                )
+            )
+        if not candidates:
+            return None
+        result = self.local_refiner.refine(
+            LocalRefinementRequest(query=str(query), candidates=tuple(candidates))
+        )
+        refined = result.by_keyframe()
+        for candidate in pool:
+            item = refined.get(candidate.keyframe_id)
+            if item is None or not item.applied:
+                continue
+            breakdown = dict(getattr(candidate, "score_breakdown", {}) or {})
+            breakdown["coarse_fused"] = float(candidate.score)
+            breakdown["visual_gain"] = float(item.score_gain)
+            breakdown["refined"] = float(item.refined_score)
+            candidate.score_breakdown = breakdown
+            candidate.score = float(item.refined_score)
+        return result
 
     def answer_qa(
         self,
@@ -728,6 +892,13 @@ class AICCompetitionEngine:
         max_results: Optional[int] = None,
         refine_window_s: Optional[float] = None,
     ) -> tuple[list[AICPrediction], list[TemporalMatch]]:
+        """Align ordered events across one video.
+
+        `refine_window_s` is accepted for interface compatibility and is **not used**:
+        TRAKE local refinement is a Phase 6 task, and Phase 5 integrates the refiner
+        into KIS only. It is kept rather than removed so the UI/CLI call signature does
+        not churn twice, but it changes nothing today.
+        """
         clean = [event.strip() for event in events if event and event.strip()]
         if len(clean) < 2:
             raise ValueError("TRAKE requires at least two ordered events.")
@@ -770,10 +941,26 @@ class AICCompetitionEngine:
             matches.append(match)
             predictions.append(self._from_match(match))
         return predictions[:max_results], matches[:max_results]
-    def _from_candidate(self, c: Candidate, answer: Optional[str] = None) -> AICPrediction:
+    def _from_candidate(
+        self,
+        c: Candidate,
+        answer: Optional[str] = None,
+        refinement=None,
+    ) -> AICPrediction:
+        # The submission frame is the OFFICIAL mapped frame_idx. A refined visual frame
+        # replaces it only under the explicit `decoded_frame` policy, which is not the
+        # default because AIC has not confirmed those frame-ID semantics.
+        frame_id = official_frame_id(self.entry, c.keyframe_id)
+        if (
+            refinement is not None
+            and refinement.applied
+            and refinement.submission_frame_idx is not None
+            and str(self.refinement_config.frame_output_policy) == FRAME_OUTPUT_DECODED_FRAME
+        ):
+            frame_id = str(int(refinement.submission_frame_idx))
         return AICPrediction(
             video_id=c.video_id,
-            frame_id=official_frame_id(self.entry, c.keyframe_id),
+            frame_id=frame_id,
             keyframe_id=c.keyframe_id,
             score=float(c.score),
             answer=answer,
@@ -784,6 +971,7 @@ class AICCompetitionEngine:
                 "metadata_terms": list(getattr(getattr(c, "evidence", None), "metadata_terms", ())),
                 "sparse_terms": list(getattr(getattr(c, "evidence", None), "sparse_terms", ())),
             },
+            refinement=None if refinement is None else refinement.to_dict(),
         )
 
     def _from_match(self, match: TemporalMatch) -> AICPrediction:

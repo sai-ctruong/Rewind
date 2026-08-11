@@ -124,6 +124,8 @@ def create_app(
             "fusion_method": cfg.fusion.method,
             "final_top_k": cfg.ranking.final_top_k,
             "refinement_enabled": cfg.refinement.enabled,
+            "refinement_mode": cfg.refinement.effective_mode,
+            "refinement_frame_output_policy": cfg.refinement.frame_output_policy,
             "trake_alignment_method": cfg.trake.alignment_method,
             "qa_top_video_hypotheses": cfg.qa.top_video_hypotheses,
         }
@@ -295,9 +297,22 @@ def create_app(
             if pred.video_id in available_videos
             else None
         )
+        # The refined visual frame is EVIDENCE. `frame_id` above stays the official
+        # submission frame, and the two are labelled separately because under the
+        # default preserve_coarse policy they legitimately differ.
+        refinement = pred.refinement
+        refined_image = None
+        refined_frame_idx = None
+        if refinement and refinement.get("applied") and refinement.get("best_visual_frame_idx") is not None:
+            refined_frame_idx = int(refinement["best_visual_frame_idx"])
+            refined_image = (
+                f"/api/video/decoded_frame/{pred.video_id}/{refined_frame_idx}"
+                f"?generation={state.generation}"
+            )
         return {
             "video_id": pred.video_id,
             "frame_id": pred.frame_id,
+            "submission_frame_id": pred.frame_id,
             "id": pred.keyframe_id,
             "generation": state.generation,
             "score": round(float(pred.score), 6),
@@ -311,6 +326,9 @@ def create_app(
             "image_source": visual["image_source"],
             "video_available": visual["video_available"],
             "video_url": video_url,
+            "refinement": refinement,
+            "refined_frame_id": refined_frame_idx,
+            "refined_image": refined_image,
         }
 
     def _frame_json(state: RuntimeDatasetState, keyframe_id: str, extra: dict | None = None):
@@ -376,6 +394,13 @@ def create_app(
             warning=None if encoder is None else encoder.get("warning"),
             config=_config_summary(state),
             cache=state.cache_status,
+            # Configuration plus scorer state. `initialize` is deliberately not passed:
+            # asking for health must never load the CLIP checkpoint.
+            refinement=(
+                dict(state.app_config.refinement.summary())
+                if engine is None
+                else engine.refinement_status()
+            ),
         )
 
     @app.get("/api/video/progress")
@@ -479,7 +504,11 @@ def create_app(
         if not query:
             return _error("Query is required.", "QUERY_REQUIRED", 400)
         topk = max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20))))
-        preds = engine.search_kis(query, top_k=topk)
+        # `refine: false` turns local refinement off for this query only, so the two
+        # pipelines can be compared without restarting or editing configuration.
+        refine = None if data.get("refine") is None else bool(data.get("refine"))
+        outcome = engine.search_kis_detailed(query, top_k=topk, refine=refine)
+        preds = outcome.predictions
         available = _available_videos(state)
         return jsonify(
             task="kis",
@@ -490,6 +519,18 @@ def create_app(
             results=[_prediction_json(state, p, available) for p in preds],
             predictions=[p.row() for p in preds],
             encoder=engine.encoder_status(),
+            refinement={
+                "enabled": engine.refinement_config.enabled,
+                "mode": engine.refinement_config.effective_mode,
+                "requested": refine,
+                "frame_output_policy": engine.refinement_config.frame_output_policy,
+                "decision": (
+                    None if outcome.refinement is None else outcome.refinement.decision.to_dict()
+                ),
+                "scorer": engine.local_refiner.scorer_status(),
+                "warnings": [] if outcome.refinement is None else list(outcome.refinement.warnings),
+            },
+            diagnostics=outcome.diagnostics(),
         )
 
     @app.post("/api/video/vqa")
@@ -687,6 +728,45 @@ def create_app(
         if not path.is_file():
             return _error("Original MP4 is unavailable.", "VIDEO_FILE_MISSING", 404)
         return send_file(path, mimetype="video/mp4", conditional=True)
+
+    @app.get("/api/video/decoded_frame/<video_id>/<int:frame_idx>")
+    def video_decoded_frame(video_id: str, frame_idx: int):
+        """Serve an arbitrary decoded frame of an in-scope video.
+
+        This is how a refined visual frame is displayed. It is NOT a submission frame:
+        the official frame stays with the coarse candidate under the default policy, and
+        the frontend labels the two differently. Access goes through the same scope and
+        traversal checks as the MP4 route.
+        """
+        state = snapshot()
+        try:
+            check_generation(state, request.args.get("generation"))
+            path = safe_video_path(state, video_id)
+        except RuntimeStateError as exc:
+            return _state_error_response(exc, status=404 if "not part of" in str(exc) else 409)
+        if not path.is_file():
+            return _error("Original MP4 is unavailable.", "VIDEO_FILE_MISSING", 404)
+        if frame_idx < 0:
+            return _error("frame_idx must be >= 0.", "FRAME_NOT_FOUND", 400)
+        result = state.frame_provider.get_video_frame(
+            video_id, frame_idx=frame_idx, source_video=path
+        )
+        if not result.available:
+            return (
+                jsonify(
+                    error="That frame could not be decoded from the original MP4.",
+                    error_code="FRAME_UNAVAILABLE",
+                    generation=state.generation,
+                    frame=result.to_dict(),
+                ),
+                422,
+            )
+        response = send_file(BytesIO(result.image_bytes), mimetype="image/jpeg")
+        response.headers["X-Frame-Source"] = result.source
+        response.headers["X-Frame-Id"] = str(frame_idx)
+        response.headers["X-Frame-Role"] = "refined_visual_frame"
+        response.headers["X-Runtime-Generation"] = str(state.generation)
+        return response
 
     @app.get("/api/video/frame/<path:frame_id>")
     def video_frame(frame_id: str):

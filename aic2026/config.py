@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -12,7 +13,13 @@ from typing import Any, Mapping
 import yaml
 
 from .fusion import FusionConfig
-from .local_refinement import RefinementConfig
+from .local_refinement import (
+    FRAME_OUTPUT_POLICIES,
+    REFINEMENT_MODES,
+    MODE_UNCERTAINTY,
+    MODE_ALWAYS,
+    RefinementConfig,
+)
 from .ranking import RankingConfig
 from .trake import AlignmentConfig as TrakeConfig
 
@@ -200,6 +207,30 @@ def _pattern_tuple(value: Any, name: str) -> tuple[str, ...]:
     return tuple(patterns)
 
 
+def _refinement_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Accept the nested Phase 5 shape and the older flat keys for refinement.
+
+    `scorer:` and `trigger:` read naturally in YAML, but `RefinementConfig` is a flat
+    frozen dataclass, so they are flattened here rather than mirrored as a second
+    settings structure. `uncertainty_only: true` from a pre-Phase-5 file means exactly
+    `mode: uncertainty`, so it is translated instead of being silently dropped.
+    """
+    source = dict(raw or {})
+    scorer = source.pop("scorer", None)
+    if isinstance(scorer, Mapping):
+        for key, value in scorer.items():
+            name = "scorer_type" if key == "type" else f"scorer_{key}"
+            source.setdefault(name, value)
+    trigger = source.pop("trigger", None)
+    if isinstance(trigger, Mapping):
+        for key, value in trigger.items():
+            source.setdefault(str(key), value)
+    legacy = source.pop("uncertainty_only", None)
+    if legacy is not None and "mode" not in source:
+        source["mode"] = MODE_UNCERTAINTY if bool(legacy) else MODE_ALWAYS
+    return source
+
+
 def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
     source = copy.deepcopy(dict(data))
     raw = source.get("aic2026", source)
@@ -228,7 +259,7 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         retrieval_channels=_construct(RetrievalChannelConfig, raw.get("retrieval_channels")),
         fusion=_construct(FusionConfig, raw.get("fusion")),
         ranking=_construct(RankingConfig, raw.get("ranking")),
-        refinement=_construct(RefinementConfig, raw.get("refinement")),
+        refinement=_construct(RefinementConfig, _refinement_raw(raw.get("refinement"))),
         trake=_construct(TrakeConfig, raw.get("trake")),
         qa=_construct(QAConfig, raw.get("qa")),
         submission=_construct(SubmissionConfig, raw.get("submission")),
@@ -414,13 +445,53 @@ def _validate_ranking(cfg: RankingConfig) -> None:
 
 
 def _validate_refinement(cfg: RefinementConfig) -> None:
+    _require(
+        str(cfg.mode) in REFINEMENT_MODES,
+        f"refinement.mode must be one of {', '.join(REFINEMENT_MODES)}",
+    )
     _require(float(cfg.window_before_s) >= 0, "refinement.window_before_s must be >= 0")
     _require(float(cfg.window_after_s) >= 0, "refinement.window_after_s must be >= 0")
     _require(float(cfg.fine_fps) > 0, "refinement.fine_fps must be > 0")
     _require(int(cfg.max_frames) > 0, "refinement.max_frames must be > 0")
     _require(int(cfg.batch_size) > 0, "refinement.batch_size must be > 0")
     _require(int(cfg.cache_size_mb) >= 0, "refinement.cache_size_mb must be >= 0")
-    _require(float(cfg.margin_threshold) >= 0, "refinement.margin_threshold must be >= 0")
+    _require(
+        math.isfinite(float(cfg.margin_threshold)) and float(cfg.margin_threshold) >= 0,
+        "refinement.margin_threshold must be finite and >= 0",
+    )
+    _require(int(cfg.candidate_budget) > 0, "refinement.candidate_budget must be > 0")
+    _require(int(cfg.top_hypotheses) > 0, "refinement.top_hypotheses must be > 0")
+    _require(
+        int(cfg.top_hypotheses) >= int(cfg.candidate_budget),
+        "refinement.top_hypotheses must be >= refinement.candidate_budget; the budget "
+        "is chosen from the considered candidates",
+    )
+    _require(float(cfg.region_merge_s) >= 0, "refinement.region_merge_s must be >= 0")
+    _require(
+        math.isfinite(float(cfg.rerank_alpha)) and float(cfg.rerank_alpha) >= 0,
+        "refinement.rerank_alpha must be finite and >= 0",
+    )
+    _require(
+        int(cfg.scorer_input_max_side) >= 32,
+        "refinement.scorer_input_max_side must be >= 32",
+    )
+    _require(
+        str(cfg.frame_output_policy) in FRAME_OUTPUT_POLICIES,
+        f"refinement.frame_output_policy must be one of {', '.join(FRAME_OUTPUT_POLICIES)}",
+    )
+    _require(
+        str(cfg.scorer_type).strip().lower() == "clip",
+        "refinement.scorer_type must be 'clip'; there is no production fake scorer",
+    )
+    _require(
+        bool(str(cfg.scorer_model_name).strip()),
+        "refinement.scorer_model_name must be non-empty",
+    )
+    _require(
+        cfg.scorer_device in {"auto", "cpu", "cuda"}
+        or bool(re.fullmatch(r"cuda:\d+", str(cfg.scorer_device))),
+        'refinement.scorer_device must be "auto", "cpu", "cuda", or cuda:N',
+    )
 
 
 def _validate_trake(cfg: TrakeConfig) -> None:

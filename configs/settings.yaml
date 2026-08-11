@@ -247,8 +247,9 @@ ranking:
 
 refinement:
   enabled: true
-  uncertainty_only: true
+  mode: uncertainty
   margin_threshold: 0.03
+  candidate_budget: 5
   window_before_s: 4.0
   window_after_s: 4.0
   fine_fps: 4.0
@@ -368,15 +369,37 @@ aic2026:
 
   refinement:
     enabled: true
-    uncertainty_only: true
+    # always | uncertainty | disabled.
+    mode: uncertainty
+    # Coarse candidates examined when forming local regions...
     top_hypotheses: 10
+    # ...and how many regions may actually be decoded and scored per query.
+    candidate_budget: 5
+    # Candidates of one video closer than this are one region, so the budget is not
+    # spent twice on overlapping windows.
+    region_merge_s: 1.0
     window_before_s: 4.0
     window_after_s: 4.0
     fine_fps: 4.0
     max_frames: 32
     batch_size: 16
-    margin_threshold: 0.03
     cache_size_mb: 256
+    scorer_input_max_side: 336
+    # refined = coarse_fusion_score + rerank_alpha * (best_visual - coarse_visual).
+    # NOT tuned against accuracy: this repository has no AIC ground truth.
+    rerank_alpha: 0.10
+    # preserve_coarse keeps the official mapped frame_idx as the submitted frame even
+    # when a different local frame scores higher. Do not change this until AIC confirms
+    # the frame-ID semantics of an arbitrary decoded frame.
+    frame_output_policy: preserve_coarse
+    trigger:
+      margin_threshold: 0.03
+    scorer:
+      type: clip
+      model_name: openai/clip-vit-base-patch32
+      device: auto
+      # true = fail loudly instead of silently skipping refinement.
+      required: false
 
   trake:
     alignment_method: beam_dp

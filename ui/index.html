@@ -147,6 +147,10 @@ a:hover { text-decoration: underline; }
           <label>Top K<input id="kis-topk" type="number" min="1" max="100" value="20"></label>
           <label>Rerank<select id="kis-rerank"><option value="0">Off</option><option value="1">On</option></select></label>
         </div>
+        <div class="two">
+          <label>Local refinement<select id="kis-refine"><option value="config">Follow config</option><option value="0">Off (compare)</option></select></label>
+          <span id="kis-refine-status" class="badge"></span>
+        </div>
         <button class="primary">Search</button>
       </form>
       <section class="panel">
@@ -247,12 +251,29 @@ function frameCard(it) {
   }
   const evidenceText = it.evidence ? [...(it.evidence.matched_objects || []), ...(it.evidence.metadata_terms || [])].filter(Boolean).join(", ") : "";
   const evidence = textEl("div", "evidence", evidenceText);
+  // A refined visual frame is EVIDENCE, not the submitted frame. Under the default
+  // preserve_coarse policy the two legitimately differ, so they are labelled apart.
+  const refine = it.refinement;
+  let refinedBlock = null;
+  if (refine && refine.applied) {
+    const offset = Number(refine.selected_offset_seconds || 0);
+    scoreLine.append(textEl("span", "score-chip", `visual+${Number(refine.score_gain || 0).toFixed(3)}`));
+    if (it.refined_image && refine.best_is_coarse_frame === false) {
+      refinedBlock = document.createElement("div"); refinedBlock.className = "refined-frame";
+      const refImg = document.createElement("img"); refImg.loading = "lazy"; refImg.src = it.refined_image;
+      refImg.alt = "visual refined frame " + refine.best_visual_frame_idx;
+      refinedBlock.append(
+        refImg,
+        textEl("div", "evidence", `Visual refined frame ${refine.best_visual_frame_idx} (${offset >= 0 ? "+" : ""}${offset.toFixed(2)}s) · Submission frame ${it.submission_frame_id}`)
+      );
+    }
+  }
   const editWrap = document.createElement("div"); editWrap.className = "frame-edit";
   const edit = document.createElement("input"); edit.type = "number"; edit.value = it.frame_id || ""; edit.title = "Manual frame adjustment";
   edit.onchange = (ev) => { ev.stopPropagation(); const old = String(it.frame_id); it.frame_id = edit.value; Object.keys(state.rows).forEach(task => state.rows[task] = state.rows[task].map(row => row.map((value, index) => index > 0 && String(value) === old ? edit.value : value))); };
   editWrap.append(edit);
   if (it.video_url) { const link = document.createElement("a"); link.href = it.video_url; link.target = "_blank"; link.textContent = "Open mp4"; editWrap.append(link); }
-  meta.append(top, where); if (scoreLine.childNodes.length) meta.append(scoreLine); if (evidenceText) meta.append(evidence); meta.append(editWrap);
+  meta.append(top, where); if (scoreLine.childNodes.length) meta.append(scoreLine); if (evidenceText) meta.append(evidence); if (refinedBlock) meta.append(refinedBlock); meta.append(editWrap);
   d.append(img, meta); d.onclick = () => loadNeighbors(it.id || it.frame_id);
   return d;
 }
@@ -289,6 +310,7 @@ function renderHealth(health) {
     badge(`${health.videos || 0} videos`, ""),
     badge(`${health.dataset_size || 0} frames`, ""),
     badge(`${health.mp4_available || 0} mp4`, "blue"),
+    badge(`refine ${(health.refinement || {}).mode || "?"}/${((health.refinement || {}).scorer || {}).state || "n/a"}`, ""),
     badge(enc.encoder_type || "encoder pending", enc.production_ready ? "ok" : "warn"),
     badge(enc.device || "device pending", "")
   ];
@@ -330,7 +352,19 @@ $("gv-load").onclick = async () => { const btn = $("gv-load"); setBusy(btn, true
 $("gv-dataset").onclick = async () => { const btn = $("gv-dataset"); setBusy(btn, true); try { await api("/api/video/index", jsonBody({ video: "__dataset__", ...opts() })); await refresh(); $("gv-select").value = "__dataset__"; } catch(e) { alert(e.message); } finally { setBusy(btn, false); } };
 $("gv-folder-btn").onclick = async () => { const btn = $("gv-folder-btn"); setBusy(btn, true); try { await api("/api/video/index_folder", jsonBody({ path: $("gv-folder").value, ...opts() })); await refresh(); $("gv-select").value = "__dataset__"; } catch(e) { alert(e.message); } finally { setBusy(btn, false); } };
 $("gv-save").onclick = async () => { try { await api("/api/video/save", jsonBody({})); await refresh(); } catch(e) { alert(e.message); } };
-$("kis-form").onsubmit = async (ev) => { ev.preventDefault(); const j = await api("/api/video/search", jsonBody({ video: currentVideo(), query: $("kis-query").value, topk: $("kis-topk").value, rerank: $("kis-rerank").value === "1" })); state.rows.kis = j.predictions || []; renderFrames("kis-results", j.results); renderOutput("kis-output", state.rows.kis); };
+$("kis-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const body = { video: currentVideo(), query: $("kis-query").value, topk: $("kis-topk").value, rerank: $("kis-rerank").value === "1" };
+  if ($("kis-refine").value === "0") body.refine = false;
+  const j = await api("/api/video/search", jsonBody(body));
+  state.rows.kis = j.predictions || [];
+  renderFrames("kis-results", j.results);
+  renderOutput("kis-output", state.rows.kis);
+  const r = j.refinement || {}, d = j.diagnostics || {};
+  const status = $("kis-refine-status");
+  status.className = "badge " + (d.refinement_triggered ? "ok" : "");
+  status.textContent = `refine ${r.mode || "?"} · ${d.refinement_triggered ? "triggered" : "skipped"} (${d.trigger_reason || "n/a"}) · ${d.candidates_refined || 0} refined · ${d.frames_decoded || 0} frames · ${Math.round(d.refinement_ms || 0)}ms`;
+};
 $("qa-form").onsubmit = async (ev) => { ev.preventDefault(); const j = await api("/api/video/vqa", jsonBody({ video: currentVideo(), event: $("qa-event").value, question: $("qa-question").value, expected_answer_type: $("qa-type").value, window: $("qa-window").value })); $("qa-answer").textContent = j.value || j.answer || ""; $("qa-answer").classList.toggle("empty", !(j.value || j.answer)); $("qa-correction").value = j.value || j.answer || ""; $("qa-confidence").textContent = "confidence " + Number(j.answer_confidence || 0).toFixed(3) + (j.warning ? " · " + j.warning : ""); state.rows.qa = j.predictions || []; renderFrames("qa-results", j.frames); renderOutput("qa-output", state.rows.qa); };
 $("trake-form").onsubmit = async (ev) => { ev.preventDefault(); $("trake-status").textContent = "Aligning ordered events..."; const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean); const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value })); state.rows.trake = j.predictions || []; renderChains(j.matches); $("trake-status").textContent = j.count + " joint alignments"; renderOutput("trake-output", state.rows.trake); };
 refresh().catch(e => $("health").textContent = e.message);
