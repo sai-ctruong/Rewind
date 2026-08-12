@@ -87,7 +87,10 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 | Vietnamese query handling | **Fixed in Phase 9**: `aic2026/query_normalization.py` keeps the original query for CLIP and supplies folded/expanded views to the lexical channels, with a versioned bilingual vocabulary. | Accented and unaccented forms of one query overlap 83% of their candidate pool. Negation and temporal markers are preserved and marked instead of being normalized away. | `aic2026/query_normalization.py`, `aic2026/retrieval_channels.py` | Complete in Phase 9. |
 | Metadata fields | Fixed in Phase 3: media title/description/tags/channel/duration are separate from `frame_caption`, OCR, ASR and objects; `llm_caption` is only a frame-caption compatibility alias. | Provenance is preserved in prefixed searchable text; independent metadata candidate generation remains pending Phase 9. | `aic2026/dataset.py`, `ingestion/schemas.py`, `ingestion/build_records.py` | Schema separation complete in Phase 3; channel generation remains Phase 9. |
 | Vietnamese normalization module | Delivered in Phase 9 as `aic2026/query_normalization.py`; see the row above. | `fusion.normalize_label` remains for label canonicalization and now shares the same folding rules. | `aic2026/query_normalization.py` | Complete in Phase 9. |
-| Submission export | `write_submission` chi ghi CSV va cap 100 rows, khong validate schema/task/rank/duplicate/TRAKE event count/Q&A answer empty. | File submission sai co the duoc ghi thanh cong. | `aic2026/metrics.py`, `ui/app.py`, `aic2026/cli.py` | Phase 11: `submission_validation.py`, CLI `validate-submission`, UI/CLI export gate. |
+| Submission export | **Fixed in Phase 10**: `aic2026/submission_validation.py` is the single validator for KIS/Q&A/TRAKE, used by the CLI export, the CLI `validate-submission` command, the UI preflight and the UI export. Writes are atomic and UTF-8 with a sidecar report. | The CLI previously validated nothing at all; the UI had only the Phase 7 TRAKE length check. Export now uses `submission_frame_idx` and refuses stale runtime generations. | `aic2026/submission_validation.py`, `aic2026/cli.py`, `ui/app.py` | Complete in Phase 10. |
+| Manual frame edit | **Fixed in Phase 10**: `aic2026/result_batch.py` addresses edits by `result_id + row_id` (plus `event_index` for TRAKE), never by value. | The old code rewrote every matching numeric value across every task, so editing a KIS frame corrupted Q&A and TRAKE rows. Verified on a real natural duplicate (frame 10950 in several rows). | `aic2026/result_batch.py`, `ui/index.html`, `ui/app.py` | Complete in Phase 10. |
+| Q&A manual answer edit | **Fixed in Phase 10**: row-local by default, with an explicit opt-in checkbox to apply an answer to a whole video hypothesis. | Phase 6 scoped it to the hypothesis, which still rewrote several rows at once. A human-typed answer is marked `manual`, which is what makes it exportable. | `ui/index.html`, `aic2026/result_batch.py` | Complete in Phase 10. |
+| UI unsupported-channel controls | **Fixed in Phase 10**: `gv-ocr` renamed to `gv-objects` so id, label and backend key agree, and Phase 9 channel availability disables any control whose source is empty, annotated "(No source data)". | No working-looking checkbox that does nothing. | `ui/index.html`, `ui/app.py` | Complete in Phase 10. |
 | Manual frame edit | JS input frame edit thay moi gia tri frame trung nhau trong moi task, va loop qua tat ca task rows. | Sua mot result co the sua nham row/task/video khac co cung frame_id. | `ui/index.html` | Phase 12: result-scoped edit model, backend validate, undo/reset, validator before export. |
 | UI checkbox semantics | UI checkbox `gv-ocr` label da doi thanh Objects nhung id van `gv-ocr`; backend chi doc `objects`, bo qua ASR/caption trong index endpoint. | Control ASR/Caption co the vo tac dung; id/ten gay nham. | `ui/index.html`, `ui/app.py` | Phase 12: bo control chua support hoac wire backend dung field. |
 | Video dropdown | UI co dropdown video/index nhung search backend hien search collection, khong ap dung selected video filter. | Control vo tac dung lam nguoi dung hieu sai pham vi search. | `ui/index.html`, `ui/app.py`, `aic2026/engine.py` | Phase 12: chon search full collection thi bo dropdown, hoac implement filter that. |
@@ -107,7 +110,7 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 8. New caches require schema-v1 manifests; legacy `entry.pkl`-only caches are rejected by default and stale/corrupt fields are reported.
 9. The `aic2026:` section in `settings.yaml` is the validated runtime source wired into engine, CLI, UI and benchmark snapshots.
 10. UI custom DATA_ROOT does not update all routes; health/list/video serving still use global `DATA_ROOT`.
-11. UI frame edit can affect multiple rows/tasks because it replaces matching frame values across `state.rows`.
+11. Fixed in Phase 10: manual edits address `result_id + row_id` (plus `event_index` for TRAKE), so a frame edit can no longer affect another row or another task by matching its value.
 12. Objects and metadata currently rerank/fuse dense/sparse candidates; they are not independent candidate generators.
 13. Loader rejects map/feature count mismatch with `DatasetAlignmentError`; `inspect-data` reports invalid videos without building an index.
 14. Q&A default answerer does not visually inspect images unless an API-backed answerer is selected; default no-key path is mock text reasoning.
@@ -344,3 +347,31 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
 - **No accuracy claim**: candidate coverage is a structural count, not recall.
 - The global submission validator, the Phase 12 manual-edit architecture and deployment
   packaging all remain pending.
+
+## Phase 10 Status Update
+
+- **Submission validator, export safety, the manual frame-edit cross-row bug, Q&A
+  row-local edits and UI channel truthfulness: all fixed in Phase 10**, commit
+  `fix: validate submissions and isolate result edits`; see
+  `docs/PHASE_10_SUBMISSION_AND_UI_SAFETY.md`.
+- `aic2026/submission_validation.py` is the one validator for all three official tasks and
+  is used by every export path. The CLI previously validated nothing.
+- `aic2026/result_batch.py` addresses manual edits by identity, not value. Verified on a
+  real natural duplicate: frame 10950 appeared in several KIS rows, and editing one left
+  all 99 others unchanged.
+- Export uses `submission_frame_idx`; a refined `best_visual_frame_idx` can never reach a
+  CSV, and official frames are never parsed out of internal `kf_` ids.
+- Stale runtime generations are refused with `409 STALE_RESULT_GENERATION` and no file is
+  written; verified on real data across a generation change.
+- Writes are atomic and UTF-8, with a `.validation.json` sidecar. Vietnamese answers
+  round-trip exactly and answers containing commas are quoted.
+- The real smoke caught a genuine hole: with media text loaded, the non-visual mock echoed
+  a whole YouTube description as an "answer" and it passed validation. Two rules were
+  added — `QA_ANSWER_TOO_LONG` and a `mock_backend` status that is not exportable — so a
+  non-visual backend's output can only be submitted after a deliberate human edit.
+- `gv-ocr` renamed to `gv-objects`; unavailable channels are disabled and labelled
+  "(No source data)".
+- **No accuracy claim**: validation is about FORMAT. Nothing here says an answer or a
+  frame is correct, and no AIC ground truth exists.
+- Phase 11 final integration, release packaging, a production visual Q&A backend and any
+  accuracy benchmark all remain pending.

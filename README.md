@@ -29,6 +29,11 @@ Competition system for Textual KIS, grounded Q&A and ordered-event TRAKE over th
   backend on a machine without a key or a local VLM is the **non-visual mock**, which
   reports itself as such; see `docs/PHASE_6_GROUNDED_QA.md`.
 - Official-style R-score/R@k/Final Score evaluation artifacts and competition UI.
+- **Submission validation** (Phase 10): one validator for KIS/Q&A/TRAKE used by every
+  export path, atomic UTF-8 CSV with a sidecar report, `validate-submission` CLI command,
+  preflight endpoint, row-scoped manual edits, and refusal to export results from a
+  superseded dataset generation. Validation checks the submission **format**; it makes no
+  claim about correctness. See `docs/PHASE_10_SUBMISSION_AND_UI_SAFETY.md`.
 
 See AUDIT.md and PHASE_REPORT.md for verified details and limitations.
 

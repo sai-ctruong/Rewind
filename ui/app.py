@@ -27,6 +27,22 @@ from aic2026.dataset_scope import DatasetScopeError, scope_payload
 from aic2026.dataset_validation import DatasetError, DatasetLayoutError, inspect_aic_dataset
 from aic2026.engine import AICCompetitionEngine, MAX_PREDICTIONS
 from aic2026.metrics import SubmissionStructureError, write_submission
+from aic2026.result_batch import (
+    ResultBatchStore,
+    ResultEditError,
+    apply_edit,
+    build_result_batch,
+    reset_batch,
+    reset_row,
+)
+from aic2026.submission_validation import (
+    SUBMISSION_TASKS,
+    SubmissionValidationError,
+    validate_submission,
+    validation_report_path,
+    write_submission_csv,
+    write_validation_report,
+)
 from aic2026.runtime_state import (
     ACTIVE_STATE_NOT_CHANGED,
     DATA_ROOT_INVALID,
@@ -44,6 +60,12 @@ from evaluation.official_eval import evaluate_labels, load_jsonl
 
 _UI_DIR = Path(__file__).resolve().parent
 _ROOT = _UI_DIR.parent
+
+
+def _iso_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 # Construction-time defaults only. Nothing below reads these while serving a request;
 # the active RuntimeDatasetState is the sole authority once the app is running.
@@ -98,6 +120,9 @@ def create_app(
         "progress": {"active": False, "count": 0, "fps": 0.0, "elapsed": 0.0, "label": ""},
         "evaluation": {"active": False, "summary": None, "run_dir": None, "error": None},
     }
+    # Editable result batches, addressed by id so an edit can name exactly one row.
+    batches = ResultBatchStore()
+    app.extensions["aic_result_batches"] = batches
 
     # ------------------------------------------------------------------ helpers
 
@@ -349,6 +374,35 @@ def create_app(
             out.update(extra)
         return out
 
+    def _new_batch(state: RuntimeDatasetState, task: str, query: str, predictions, **extra):
+        """Register an editable batch for a fresh result set."""
+        batch = build_result_batch(
+            task,
+            predictions,
+            query=query,
+            runtime_generation=state.generation,
+            config_hash=state.config_hash,
+            selected_video_ids_hash=state.selected_video_ids_hash,
+            **extra,
+        )
+        return batches.put(batch)
+
+    def _edit_error(exc: ResultEditError):
+        status = 404 if exc.error_code in {"UNKNOWN_ROW", "UNKNOWN_RESULT_BATCH"} else 400
+        return _error(str(exc), exc.error_code, status)
+
+    def _validate_batch(state: RuntimeDatasetState, batch, *, task: str | None = None):
+        """One validation call for preflight and export alike."""
+        return validate_submission(
+            task or batch.task,
+            batch.to_submission_rows(),
+            event_count=batch.event_count,
+            max_rows=state.app_config.submission.max_predictions,
+            active_generation=state.generation,
+            result_generation=batch.runtime_generation,
+            batch_task=batch.task,
+        )
+
     def _evidence_url(state: RuntimeDatasetState, evidence: dict) -> str | None:
         """A logical URL for one Q&A evidence frame; never a filesystem path.
 
@@ -533,11 +587,13 @@ def create_app(
         outcome = engine.search_kis_detailed(query, top_k=topk, refine=refine)
         preds = outcome.predictions
         available = _available_videos(state)
+        batch = _new_batch(state, "kis", query, preds)
         return jsonify(
             task="kis",
             video="__aic2026__",
             query=query,
             generation=state.generation,
+            result_batch=batch.to_dict(),
             count=len(preds),
             results=[_prediction_json(state, p, available) for p in preds],
             predictions=[p.row() for p in preds],
@@ -601,10 +657,12 @@ def create_app(
             }
             for item in info.get("hypotheses", [])
         ]
+        batch = _new_batch(state, "qa", question or event_text, preds)
         return jsonify(
             task="qa",
             video="__aic2026__",
             generation=state.generation,
+            result_batch=batch.to_dict(),
             question=question,
             event=event_text,
             answer=info.get("answer"),
@@ -699,10 +757,14 @@ def create_app(
                     "steps": steps,
                 }
             )
+        batch = _new_batch(
+            state, "trake", " ; ".join(events), preds, event_count=len(events)
+        )
         return jsonify(
             task="trake",
             video="__aic2026__",
             generation=state.generation,
+            result_batch=batch.to_dict(),
             events=events,
             event_count=len(events),
             count=len(out),
@@ -793,31 +855,137 @@ def create_app(
             saved=["__aic2026__"], dir=str(entry_dir), generation=state.generation
         )
 
+    @app.get("/api/results/<result_id>")
+    def result_batch_get(result_id: str):
+        try:
+            batch = batches.get(result_id)
+        except ResultEditError as exc:
+            return _edit_error(exc)
+        state = snapshot()
+        return jsonify(
+            result_batch=batch.to_dict(),
+            active_generation=state.generation,
+            stale=batch.runtime_generation != state.generation,
+        )
+
+    @app.post("/api/results/<result_id>/edit")
+    def result_batch_edit(result_id: str):
+        """Edit exactly ONE cell of ONE row.
+
+        Addressed by `row_id` (and `event_index` for TRAKE), never by matching a value,
+        so another row holding the same frame number cannot be touched.
+        """
+        data = request.json or {}
+        try:
+            batch = batches.get(result_id)
+            updated = apply_edit(
+                batch,
+                row_id=str(data.get("row_id") or ""),
+                field_name=str(data.get("field") or "frame"),
+                value=data.get("value"),
+                event_index=(
+                    None if data.get("event_index") is None else int(data["event_index"])
+                ),
+            )
+        except ResultEditError as exc:
+            return _edit_error(exc)
+        except (TypeError, ValueError) as exc:
+            return _error(str(exc), "INVALID_EDIT", 400)
+        batches.update(updated)
+        return jsonify(result_batch=updated.to_dict(), edited=True)
+
+    @app.post("/api/results/<result_id>/reset")
+    def result_batch_reset(result_id: str):
+        """Restore one row, or the whole batch when no `row_id` is given."""
+        data = request.json or {}
+        try:
+            batch = batches.get(result_id)
+            row_id = data.get("row_id")
+            updated = reset_batch(batch) if not row_id else reset_row(batch, str(row_id))
+        except ResultEditError as exc:
+            return _edit_error(exc)
+        batches.update(updated)
+        return jsonify(result_batch=updated.to_dict(), reset=True)
+
+    @app.post("/api/submission/preflight")
+    def submission_preflight():
+        """Everything the export does, except writing the file."""
+        state = snapshot()
+        data = request.json or {}
+        try:
+            batch = batches.get(str(data.get("result_id") or ""))
+        except ResultEditError as exc:
+            return _edit_error(exc)
+        result = _validate_batch(state, batch, task=data.get("task"))
+        payload = {
+            **result.to_dict(),
+            "result_id": batch.result_id,
+            "active_generation": state.generation,
+            "manual_edit_count": batch.manual_edit_count,
+        }
+        # A failed preflight is a normal, expected answer about the current rows: it is
+        # reported as 200 with valid=false, not as an error status.
+        return jsonify(payload)
+
     @app.post("/api/submission/save")
     def submission_save():
+        """Validate, then write the CSV and its sidecar report atomically.
+
+        The backend owns serialization: the frontend never builds the competition CSV,
+        so a UI bug cannot produce a malformed submission.
+        """
+        state = snapshot()
         data = request.json or {}
-        rows = data.get("rows") or []
-        task = str(data.get("task") or "submission")
-        if not rows:
-            return _error("No rows to save.", "NO_ROWS", 400)
-        if not task.replace("_", "").replace("-", "").isalnum():
-            return _error(f"Invalid submission name {task!r}.", "INVALID_SUBMISSION_NAME", 400)
-        # Local structural safety only; the full schema validator is Phase 11. A TRAKE
-        # export must never write a row with fewer frames than the query had events.
-        event_count = data.get("event_count")
-        required = None
-        if task.lower().startswith("trake") and event_count is not None:
-            try:
-                required = int(event_count) + 1
-            except (TypeError, ValueError):
-                return _error("event_count must be an integer.", "INVALID_EVENT_COUNT", 400)
+        name = str(data.get("name") or data.get("task") or "submission")
+        if not name.replace("_", "").replace("-", "").isalnum():
+            return _error(f"Invalid submission name {name!r}.", "INVALID_SUBMISSION_NAME", 400)
         try:
-            path = write_submission(
-                rows, submission_dir / f"{task}.csv", require_row_length=required
+            batch = batches.get(str(data.get("result_id") or ""))
+        except ResultEditError as exc:
+            return _edit_error(exc)
+
+        result = _validate_batch(state, batch, task=data.get("task"))
+        if not result.valid:
+            codes = {issue.code for issue in result.errors}
+            # A superseded dataset is a conflict; everything else is a bad request.
+            status = 409 if "STALE_RESULT_GENERATION" in codes else 422
+            return (
+                jsonify(
+                    error=result.summary_message(),
+                    error_code=sorted(codes)[0] if codes else "INVALID_SUBMISSION",
+                    validation=result.to_dict(),
+                ),
+                status,
             )
-        except SubmissionStructureError as exc:
-            return _error(str(exc), "MALFORMED_SUBMISSION_ROW", 422)
-        return jsonify(path=str(path), rows=min(len(rows), MAX_PREDICTIONS))
+        target = submission_dir / f"{name}.csv"
+        try:
+            path = write_submission_csv(result, target)
+            report = write_validation_report(
+                result,
+                validation_report_path(target),
+                metadata={
+                    **batch.metadata(),
+                    "active_generation": state.generation,
+                    "written_at": _iso_now(),
+                },
+            )
+        except SubmissionValidationError as exc:
+            return (
+                jsonify(
+                    error=str(exc),
+                    error_code="INVALID_SUBMISSION",
+                    validation=exc.result.to_dict(),
+                ),
+                422,
+            )
+        except OSError as exc:
+            return _error(f"Could not write the submission: {exc}", "SUBMISSION_IO_ERROR", 500)
+        return jsonify(
+            path=str(path),
+            report_path=str(report),
+            rows=result.row_count,
+            validation=result.to_dict(),
+        )
 
     @app.get("/api/video/neighbors/<path:frame_id>")
     def video_neighbors(frame_id: str):

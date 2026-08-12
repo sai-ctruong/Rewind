@@ -143,9 +143,12 @@ def test_index_html_wires_only_competition_apis() -> None:
 
 def test_global_index_controls_and_three_views_exist() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-    for gid in ("gv-bar", "gv-select", "gv-load", "gv-dataset", "gv-folder-btn", "gv-save", "gv-ocr", "gv-asr", "gv-caption"):
+    # `gv-ocr` was renamed to `gv-objects`: the id said OCR while the label said Objects
+    # and the backend key was `objects`. Ids and backend keys now match.
+    for gid in ("gv-bar", "gv-select", "gv-load", "gv-dataset", "gv-folder-btn", "gv-save", "gv-objects", "gv-asr", "gv-caption"):
         assert f'id="{gid}"' in html
-    for sid in ("kis-save", "qa-save", "trake-save"):
+    assert 'id="gv-ocr"' not in html
+    for sid in ("kis-save", "qa-save", "trake-save", "kis-preflight", "kis-reset"):
         assert f'id="{sid}"' in html
     for view in ("kis", "qa", "trake"):
         assert f'id="view-{view}"' in html

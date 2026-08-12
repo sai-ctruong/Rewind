@@ -27,6 +27,17 @@ from .dataset_validation import (
 )
 from .engine import AICCompetitionEngine
 from .metrics import write_submission
+from .submission_validation import (
+    MAX_SUBMISSION_ROWS,
+    SUBMISSION_TASKS,
+    TASK_TRAKE,
+    read_submission_csv,
+    submission_rows_for,
+    validate_submission,
+    validation_report_path,
+    write_submission_csv,
+    write_validation_report,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -92,6 +103,20 @@ def _build_parser() -> argparse.ArgumentParser:
     search.add_argument("--events", nargs="*")
     search.add_argument("--out")
     search.add_argument("--top-k", type=int, default=None)
+
+    validate = sub.add_parser(
+        "validate-submission",
+        help="Structurally validate a submission CSV. Format only, never correctness.",
+    )
+    validate.add_argument("--task", choices=list(SUBMISSION_TASKS), required=True)
+    validate.add_argument("--input", required=True)
+    validate.add_argument(
+        "--event-count",
+        type=int,
+        default=None,
+        help="Number of TRAKE events; required unless every row already agrees.",
+    )
+    validate.add_argument("--max-rows", type=int, default=MAX_SUBMISSION_ROWS)
     return p
 
 
@@ -151,6 +176,44 @@ def _print_cache_error(exc: Exception, code: str) -> None:
     print(json.dumps({"error": str(exc), "error_code": code}, ensure_ascii=False, indent=2), file=sys.stderr)
 
 
+def _validate_submission_command(args: argparse.Namespace) -> int:
+    """Structurally validate a submission CSV.
+
+    Exit codes are distinct so a script can tell the three failure kinds apart:
+    0 valid, 7 structurally invalid, 2 usage error, 8 I/O error.
+    """
+    path = Path(args.input)
+    try:
+        rows = read_submission_csv(path)
+    except FileNotFoundError:
+        _print_cache_error(FileNotFoundError(f"No such submission file: {path}"), "SUBMISSION_NOT_FOUND")
+        return 8
+    except OSError as exc:
+        _print_cache_error(exc, "SUBMISSION_IO_ERROR")
+        return 8
+    except UnicodeDecodeError as exc:
+        _print_cache_error(exc, "SUBMISSION_ENCODING_ERROR")
+        return 8
+
+    if args.task == TASK_TRAKE and args.event_count is None:
+        lengths = {len(row) - 1 for row in rows if row}
+        if len(lengths) > 1:
+            _print_cache_error(
+                ValueError(
+                    "TRAKE rows disagree on the number of events "
+                    f"({sorted(lengths)}); pass --event-count."
+                ),
+                "EVENT_COUNT_REQUIRED",
+            )
+            return 2
+
+    result = validate_submission(
+        args.task, rows, event_count=args.event_count, max_rows=args.max_rows
+    )
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if result.valid else 7
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -165,6 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "show-config":
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return 0
+
+    if args.cmd == "validate-submission":
+        return _validate_submission_command(args)
 
     if args.cmd == "inspect-data":
         try:
@@ -273,7 +339,35 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"encoder": encoder_status, "config_hash": status["config_hash"]}, ensure_ascii=False), file=sys.stderr)
     print("\n".join(", ".join(r) for r in rows))
     if args.out:
-        write_submission(rows, args.out, max_rows=app_config.submission.max_predictions)
+        # The CLI used to write whatever the engine produced with no validation at all.
+        # It now goes through the SAME validator as the UI, and writes atomically with a
+        # sidecar report.
+        event_count = len(events) if args.task == "trake" else None
+        submission_rows = submission_rows_for(args.task, preds)
+        validation = validate_submission(
+            args.task,
+            submission_rows,
+            event_count=event_count,
+            max_rows=app_config.submission.max_predictions,
+        )
+        if not validation.valid:
+            print(
+                json.dumps(validation.to_dict(), ensure_ascii=False, indent=2),
+                file=sys.stderr,
+            )
+            return 7
+        target = Path(args.out)
+        write_submission_csv(validation, target)
+        write_validation_report(
+            validation,
+            validation_report_path(target),
+            metadata={
+                "task": args.task,
+                "query": args.query,
+                "config_hash": status["config_hash"],
+                "source": "cli",
+            },
+        )
     logger = BenchmarkLogger(app_config.evaluation.output_dir)
     cache_meta = _cache_metadata(load)
     logger.write_run(

@@ -80,3 +80,16 @@ Port check: no Flask listener remained on port 5000 after verification
 1. Completed: real CLIP dependencies and model are installed/cached on CPU.
 2. Provide AIC JSONL ground truth, or annotate a development set from `evaluation/labels/template.jsonl` (suggested minimum: 50 KIS, 30 Q&A, 30 TRAKE).
 3. Rebuild a full multi-signal cache with `--load-objects --include-media-text` before running ablations.
+
+## AIC2026 Phase 10 - Submission Validation And UI Result Safety
+
+- Added: `aic2026/submission_validation.py`, `aic2026/result_batch.py`,
+  `docs/PHASE_10_SUBMISSION_AND_UI_SAFETY.md`, and four test modules.
+- Design: one validator for all three official tasks, used by the CLI export, the CLI
+  `validate-submission` command, the UI preflight and the UI export. Manual edits address
+  `result_id + row_id` (plus `event_index` for TRAKE) instead of matching values.
+- Verified on real L21: KIS 100 rows, TRAKE 34 sequences of 3 events, Q&A exported only
+  after deliberate manual answers, a stale generation refused with 409 and no file
+  written, and an edit to one row of a natural duplicate frame leaving 99 others intact.
+- Limitation: validation is structural. It says a submission has the right FORMAT and
+  says nothing about whether any answer or frame is correct; no AIC ground truth exists.

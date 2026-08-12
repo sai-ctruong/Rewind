@@ -8,10 +8,24 @@ def test_competition_ui_exposes_status_manual_controls_and_background_eval() -> 
     for token in (
         'id="qa-event"', 'id="qa-type"', 'id="qa-confidence"', 'id="qa-correction"',
         'id="trake-status"', 'id="view-evaluation"', 'id="evaluation-labels"',
-        "/api/evaluation/run", "/api/evaluation/status", "Manual frame adjustment",
+        "/api/evaluation/run", "/api/evaluation/status",
+        # The edit control is now explicitly row-scoped and names the SUBMISSION frame.
+        "Manual SUBMISSION frame edit (this row only)",
         "score_breakdown", "mp4", "encoder_type",
     ):
         assert token in html
+
+
+def test_ui_never_mutates_rows_by_matching_frame_values() -> None:
+    """The Phase 0 bug: an edit that rewrote every matching value across every task."""
+    html = (Path(appmod.__file__).parent / "index.html").read_text(encoding="utf-8")
+    # The old implementation looped over every task and replaced matching values.
+    assert "Object.keys(state.rows).forEach" not in html
+    assert 'String(value) === old' not in html
+    # Edits and export now address a backend result batch by id.
+    assert "/api/results/" in html
+    assert "/api/submission/preflight" in html
+    assert "row_id" in html
 
 
 def test_evaluation_requires_loaded_index(tmp_path, monkeypatch) -> None:

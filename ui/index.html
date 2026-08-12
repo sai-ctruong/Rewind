@@ -120,9 +120,11 @@ a:hover { text-decoration: underline; }
         <button id="gv-folder-btn" title="Activate a different AIC dataset root (DATA_ROOT). This replaces the whole runtime dataset state: engine, frames, videos and cache.">Dataset Root</button>
         <button id="gv-save" title="Save current index cache">Save</button>
         <div class="checks" aria-label="Index signals">
-          <label><input id="gv-ocr" type="checkbox"> Objects</label>
-          <label><input id="gv-asr" type="checkbox"> ASR</label>
-          <label><input id="gv-caption" type="checkbox"> Caption</label>
+          <!-- The id was `gv-ocr` while the label said Objects; the backend key is
+               `objects`, so the id now matches what it actually controls. -->
+          <label><input id="gv-objects" type="checkbox"> Objects</label>
+          <label id="gv-asr-label"><input id="gv-asr" type="checkbox"> ASR</label>
+          <label id="gv-caption-label"><input id="gv-caption" type="checkbox"> Caption</label>
         </div>
       </div>
       <div class="folder-row">
@@ -154,7 +156,11 @@ a:hover { text-decoration: underline; }
         <button class="primary">Search</button>
       </form>
       <section class="panel">
-        <div class="panel-header"><h2>Results</h2><button id="kis-save">Save CSV</button></div>
+        <div class="panel-header"><h2>Results</h2>
+          <span id="kis-edit-status" class="status"></span>
+          <button id="kis-preflight" type="button">Preflight</button>
+          <button id="kis-reset" type="button">Reset edits</button>
+          <button id="kis-save">Save CSV</button></div>
         <div id="kis-results" class="results"></div>
         <pre id="kis-output" class="output"></pre>
       </section>
@@ -172,11 +178,16 @@ a:hover { text-decoration: underline; }
         <button class="primary">Answer</button>
       </form>
       <section class="panel">
-        <div class="panel-header"><h2>Grounded Answer</h2><button id="qa-save">Save CSV</button></div>
+        <div class="panel-header"><h2>Grounded Answer</h2>
+          <span id="qa-edit-status" class="status"></span>
+          <button id="qa-preflight" type="button">Preflight</button>
+          <button id="qa-reset" type="button">Reset edits</button>
+          <button id="qa-save">Save CSV</button></div>
         <div id="qa-backend" class="status"></div>
         <div id="qa-answer" class="answer-box empty"></div>
         <div id="qa-confidence" class="status"></div>
-        <label>Manual answer correction (selected video only)<input id="qa-correction"></label>
+        <label>Manual answer correction (selected row only)<input id="qa-correction"></label>
+        <label class="inline"><input id="qa-apply-all" type="checkbox"> Apply to all rows in this video hypothesis</label>
         <div id="qa-hypotheses" class="results"></div>
         <div id="qa-results" class="results"></div>
         <pre id="qa-output" class="output"></pre>
@@ -194,7 +205,11 @@ a:hover { text-decoration: underline; }
         <button class="primary">Search Chain</button>
       </form>
       <section class="panel">
-        <div class="panel-header"><h2>Chains</h2><button id="trake-save">Save CSV</button></div>
+        <div class="panel-header"><h2>Chains</h2>
+          <span id="trake-edit-status" class="status"></span>
+          <button id="trake-preflight" type="button">Preflight</button>
+          <button id="trake-reset" type="button">Reset edits</button>
+          <button id="trake-save">Save CSV</button></div>
         <div id="trake-status" class="status"></div>
         <div id="trake-results"></div>
         <pre id="trake-output" class="output"></pre>
@@ -216,10 +231,49 @@ a:hover { text-decoration: underline; }
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { indexed: [], rows: { kis: [], qa: [], trake: [] }, qaHypotheses: [], qaSelectedVideo: null, trakeEventCount: null };
+const state = {
+  indexed: [], rows: { kis: [], qa: [], trake: [] },
+  // Backend result batches, one per task: the authority for editing and export.
+  batches: { kis: null, qa: null, trake: null },
+  activeTask: "kis", qaHypotheses: [], qaSelectedVideo: null, trakeEventCount: null,
+};
+// Attach the batch row identity to each rendered item, so an edit names one row.
+function withRowIds(task, items, batch) {
+  const rows = (batch && batch.rows) || [];
+  return (items || []).map((item, index) => ({
+    ...item, task,
+    row_id: (rows[index] || {}).row_id,
+    submission_frame_id: (rows[index] || {}).submission_frames?.[0] ?? item.frame_id,
+    edited: (rows[index] || {}).edited || false,
+  }));
+}
 
 function currentVideo() { return $("gv-select").value || "__dataset__"; }
-function opts() { return { objects: $("gv-ocr").checked, asr: $("gv-asr").checked, caption: $("gv-caption").checked }; }
+// Only `objects` is a real build-time switch. ASR and Caption are shown so their absence
+// is visible, and `applyChannelAvailability` disables them when there is no source data.
+function opts() { return { objects: $("gv-objects").checked, asr: $("gv-asr").checked, caption: $("gv-caption").checked }; }
+function applyChannelAvailability(channels) {
+  if (!channels) return;
+  const wire = (id, name) => {
+    const box = $(id), info = channels[name];
+    if (!box || !info) return;
+    const label = box.closest("label");
+    if (info.available) {
+      box.disabled = false;
+      if (label) label.title = `${info.records} records`;
+    } else {
+      // Never leave a working-looking control that cannot do anything.
+      box.disabled = true; box.checked = false;
+      if (label) {
+        label.title = info.reason || "no source data";
+        if (!/No source data/.test(label.textContent)) label.append(" (No source data)");
+      }
+    }
+  };
+  wire("gv-objects", "objects");
+  wire("gv-asr", "asr");
+  wire("gv-caption", "caption");
+}
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
@@ -231,14 +285,56 @@ function setBusy(btn, busy) { btn.disabled = busy; }
 function renderOutput(id, rows) { $(id).textContent = rows && rows.length ? rows.map(r => r.join(", ")).join("\n") : ""; }
 function textEl(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; el.textContent = value ?? ""; return el; }
 function badge(value, tone = "") { const el = textEl("span", "badge " + tone, value); return el; }
+// Manual edits and export both address a BACKEND result batch by id. The frontend never
+// builds the competition CSV and never mutates rows by matching values.
+const batchId = (task) => (state.batches[task] || {}).result_id;
+
+async function refreshBatch(task, batch) {
+  state.batches[task] = batch;
+  state.rows[task] = (batch.rows || []).map(row =>
+    row.answer ? [row.video_id, ...row.submission_frames, row.answer.current_value]
+               : [row.video_id, ...row.submission_frames]);
+  renderOutput(task + "-output", state.rows[task]);
+  const status = $(task + "-edit-status");
+  if (status) {
+    const edited = (batch.rows || []).filter(r => r.edited).length;
+    status.textContent = edited ? `${edited} manually edited row(s)` : "";
+  }
+}
+
+async function editRow(item, field, value, eventIndex) {
+  const id = batchId(item.task || state.activeTask);
+  if (!id) throw new Error("No result batch; re-run the query first.");
+  const body = { row_id: item.row_id, field, value };
+  if (eventIndex !== null && eventIndex !== undefined) body.event_index = eventIndex;
+  const j = await api(`/api/results/${id}/edit`, jsonBody(body));
+  await refreshBatch(item.task || state.activeTask, j.result_batch);
+  return j;
+}
+
+async function resetBatch(task, rowId) {
+  const id = batchId(task);
+  if (!id) { alert("No result batch"); return; }
+  const j = await api(`/api/results/${id}/reset`, jsonBody(rowId ? { row_id: rowId } : {}));
+  await refreshBatch(task, j.result_batch);
+}
+
+async function preflight(task) {
+  const id = batchId(task);
+  if (!id) { alert("No result batch; run a query first."); return null; }
+  return api("/api/submission/preflight", jsonBody({ result_id: id }));
+}
+
 async function saveRows(task) {
-  const rows = state.rows[task] || [];
-  if (!rows.length) { alert("No rows to save"); return; }
-  // TRAKE tells the backend how many events the query had, so an export with the wrong
-  // number of frames is refused rather than written.
-  const body = { task, rows };
-  if (task === "trake" && state.trakeEventCount) body.event_count = state.trakeEventCount;
-  const j = await api("/api/submission/save", jsonBody(body));
+  const id = batchId(task);
+  if (!id) { alert("No result batch; run a query first."); return; }
+  // Preflight first so an invalid batch never reaches the writer.
+  const check = await preflight(task);
+  if (check && !check.valid) {
+    alert("Not exportable:\n" + (check.errors || []).map(e => `${e.code}: ${e.message}`).join("\n"));
+    return;
+  }
+  const j = await api("/api/submission/save", jsonBody({ result_id: id, name: task }));
   alert(`Saved ${j.rows} rows to ${j.path}`);
 }
 function frameCard(it) {
@@ -246,7 +342,11 @@ function frameCard(it) {
   const img = document.createElement("img"); img.loading = "lazy"; img.src = it.image; img.alt = it.frame_id || it.id || "frame";
   const meta = document.createElement("div"); meta.className = "meta";
   const top = document.createElement("div"); top.className = "meta-top";
-  top.append(textEl("b", "", it.frame_id || it.id));
+  // The SUBMITTED frame is what leads. A refined visual frame is labelled separately
+  // below and can never become the submission by editing the preview.
+  const submitted = it.submission_frame_id ?? it.frame_id ?? it.id;
+  top.append(textEl("b", "", "Submitted " + submitted));
+  if (it.edited) top.append(badge("edited", "warn"));
   if (it.score !== undefined && it.score !== null) top.append(badge(Number(it.score).toFixed(3), "ok"));
   const where = textEl("span", "", `${it.video_id || ""} · ${it.timestamp ?? ""}s`);
   const scoreLine = document.createElement("div"); scoreLine.className = "score-line";
@@ -275,8 +375,18 @@ function frameCard(it) {
     }
   }
   const editWrap = document.createElement("div"); editWrap.className = "frame-edit";
-  const edit = document.createElement("input"); edit.type = "number"; edit.value = it.frame_id || ""; edit.title = "Manual frame adjustment";
-  edit.onchange = (ev) => { ev.stopPropagation(); const old = String(it.frame_id); it.frame_id = edit.value; Object.keys(state.rows).forEach(task => state.rows[task] = state.rows[task].map(row => row.map((value, index) => index > 0 && String(value) === old ? edit.value : value))); };
+  // Submission-frame edit, addressed by row_id. It NEVER matches on value, so another
+  // row holding the same frame number - in this task or any other - is untouched.
+  const edit = document.createElement("input"); edit.type = "number"; edit.min = "0";
+  edit.value = it.submission_frame_id ?? it.frame_id ?? "";
+  edit.title = "Manual SUBMISSION frame edit (this row only)";
+  edit.disabled = !it.row_id;
+  edit.onchange = (ev) => {
+    ev.stopPropagation();
+    editRow(it, "frame", edit.value, it.event_index ?? null).catch(e => {
+      alert(e.message); edit.value = it.submission_frame_id ?? it.frame_id ?? "";
+    });
+  };
   editWrap.append(edit);
   if (it.video_url) { const link = document.createElement("a"); link.href = it.video_url; link.target = "_blank"; link.textContent = "Open mp4"; editWrap.append(link); }
   meta.append(top, where); if (scoreLine.childNodes.length) meta.append(scoreLine); if (evidenceText) meta.append(evidence); if (refinedBlock) meta.append(refinedBlock); meta.append(editWrap);
@@ -288,10 +398,12 @@ function renderFrames(id, items) {
   if (!items || !items.length) { box.innerHTML = '<div class="empty">No results</div>'; return; }
   items.forEach(it => box.append(frameCard(it)));
 }
-function renderChains(chains, eventCount) {
+function renderChains(chains, eventCount, batch) {
   const box = $("trake-results"); box.innerHTML = "";
   if (!chains || !chains.length) { box.innerHTML = '<div class="empty">No complete event alignments</div>'; return; }
-  chains.forEach(ch => {
+  const batchRows = (batch && batch.rows) || [];
+  chains.forEach((ch, chainIndex) => {
+    const rowId = (batchRows[chainIndex] || {}).row_id;
     const chain = document.createElement("div"); chain.className = "chain";
     const times = ch.steps.map(step => Number(step.timestamp));
     const valid = times.every((time, i) => i === 0 || time >= times[i - 1]);
@@ -310,7 +422,13 @@ function renderChains(chains, eventCount) {
     if (ch.method) label.append(badge(ch.method, ""));
     chain.append(label);
     ch.steps.forEach((step, i) => {
-      const card = frameCard(step);
+      // A TRAKE edit targets row_id + event_index, so editing event 2 of sequence 4
+      // cannot reach event 2 of any other sequence.
+      const card = frameCard({
+        ...step, task: "trake", row_id: rowId, event_index: step.event_index ?? i,
+        submission_frame_id: (batchRows[chainIndex] || {}).submission_frames?.[step.event_index ?? i]
+          ?? step.submission_frame_id,
+      });
       const tag = document.createElement("div"); tag.className = "evidence";
       // Label from the step's OWN event_index, never from the loop position.
       const index = step.event_index ?? i;
@@ -338,11 +456,14 @@ function renderHealth(health) {
     badge(`${health.mp4_available || 0} mp4`, "blue"),
     badge(`refine ${(health.refinement || {}).mode || "?"}/${((health.refinement || {}).scorer || {}).state || "n/a"}`, ""),
     badge(`qa ${(health.qa || {}).backend_type || "n/a"}${(health.qa || {}).visual_capable ? " visual" : " non-visual"}`, (health.qa || {}).visual_capable ? "ok" : "warn"),
+    ...Object.entries(health.retrieval_channels || {}).map(([name, info]) =>
+      badge(`${name}${info.available ? " " + info.records : " n/a"}`, info.available ? (info.enabled ? "ok" : "") : "warn")),
     badge(enc.encoder_type || "encoder pending", enc.production_ready ? "ok" : "warn"),
     badge(enc.device || "device pending", "")
   ];
   if (health.warning) items.push(badge("warning", "warn"));
   const box = $("health"); box.innerHTML = ""; items.forEach(item => box.append(item));
+  applyChannelAvailability(health.retrieval_channels);
 }
 async function refresh() {
   const [health, list] = await Promise.all([api("/api/health"), api("/api/video/list")]);
@@ -384,9 +505,9 @@ $("kis-form").onsubmit = async (ev) => {
   const body = { video: currentVideo(), query: $("kis-query").value, topk: $("kis-topk").value, rerank: $("kis-rerank").value === "1" };
   if ($("kis-refine").value === "0") body.refine = false;
   const j = await api("/api/video/search", jsonBody(body));
-  state.rows.kis = j.predictions || [];
-  renderFrames("kis-results", j.results);
-  renderOutput("kis-output", state.rows.kis);
+  state.activeTask = "kis";
+  await refreshBatch("kis", j.result_batch);
+  renderFrames("kis-results", withRowIds("kis", j.results, j.result_batch));
   const r = j.refinement || {}, d = j.diagnostics || {};
   const status = $("kis-refine-status");
   status.className = "badge " + (d.refinement_triggered ? "ok" : "");
@@ -437,44 +558,69 @@ $("qa-form").onsubmit = async (ev) => {
     badge(`${Math.round((j.diagnostics || {}).total_ms || 0)}ms`, "")
   );
   $("qa-confidence").textContent = "answer_reliability_score " + Number(j.answer_reliability_score || 0).toFixed(3) + " · status " + (j.answer_status || "?") + (j.warning ? " · " + j.warning : "");
-  state.rows.qa = j.predictions || [];
+  state.activeTask = "qa";
+  await refreshBatch("qa", j.result_batch);
   state.qaHypotheses = j.hypotheses || [];
   state.qaSelectedVideo = j.video_id || null;
+  state.qaSelectedRow = ((j.result_batch || {}).rows || [])[0]?.row_id || null;
   renderQaHypotheses(state.qaHypotheses);
   renderFrames("qa-results", j.frames);
-  renderOutput("qa-output", state.rows.qa);
 };
 $("trake-form").onsubmit = async (ev) => {
   ev.preventDefault();
   $("trake-status").textContent = "Aligning ordered events...";
   const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean);
   const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value }));
-  state.rows.trake = j.predictions || [];
+  state.activeTask = "trake";
+  await refreshBatch("trake", j.result_batch);
   state.trakeEventCount = j.event_count || events.length;
-  renderChains(j.matches, j.event_count);
+  renderChains(j.matches, j.event_count, j.result_batch);
   const d = j.diagnostics || {};
   $("trake-status").textContent = `${j.count} complete alignments (${d.discarded_incomplete_alignments || 0} incomplete discarded, `
     + `${d.recovered_events || 0} events recovered) · ${d.alignment_method || "beam_dp"} · refinement ${(j.refinement || {}).status || "n/a"}`;
   renderOutput("trake-output", state.rows.trake);
 };
 refresh().catch(e => $("health").textContent = e.message);
-$("kis-save").onclick = () => saveRows("kis").catch(e => alert(e.message));
-$("qa-save").onclick = () => saveRows("qa").catch(e => alert(e.message));
-$("trake-save").onclick = () => saveRows("trake").catch(e => alert(e.message));
+["kis", "qa", "trake"].forEach(task => {
+  $(task + "-save").onclick = () => saveRows(task).catch(e => alert(e.message));
+  const reset = $(task + "-reset");
+  if (reset) reset.onclick = () => resetBatch(task).catch(e => alert(e.message));
+  const check = $(task + "-preflight");
+  if (check) check.onclick = async () => {
+    try {
+      const j = await preflight(task);
+      if (!j) return;
+      // "Valid format", never "correct": no ground truth exists.
+      alert(j.valid
+        ? `Valid FORMAT: ${j.row_count} rows` + (j.duplicates_removed ? `, ${j.duplicates_removed} duplicate(s) removed` : "")
+        : "Not exportable:\n" + (j.errors || []).map(e => `${e.code}: ${e.message}`).join("\n"));
+    } catch (e) { alert(e.message); }
+  };
+});
 setInterval(pollProgress, 1200);
-$("qa-correction").onchange = () => {
-  // Scoped fix: a correction applies to the SELECTED video hypothesis only. Rewriting
-  // every row would re-introduce exactly the cross-video answer copying Phase 6 removed.
-  // A per-row edit model is Phase 12; this keeps the current control honest until then.
+$("qa-correction").onchange = async () => {
+  // Row-local by default (Phase 10). Phase 6 scoped this to a video hypothesis, which
+  // still rewrote several rows at once; an edit now targets exactly one row unless the
+  // operator explicitly asks for the whole hypothesis.
   const answer = $("qa-correction").value;
-  const video = state.qaSelectedVideo;
-  if (!video) { alert("Select a video hypothesis first."); return; }
-  state.rows.qa = state.rows.qa.map(row => (row.length >= 3 && row[0] === video) ? [row[0], row[1], answer] : row);
-  state.qaHypotheses = (state.qaHypotheses || []).map(h => h.video_id === video ? { ...h, normalized_answer: answer } : h);
+  const rowId = state.qaSelectedRow;
+  if (!rowId) { alert("Select a Q&A result row first."); return; }
+  const applyAll = $("qa-apply-all") && $("qa-apply-all").checked;
+  const batch = state.batches.qa;
+  if (!batch) { alert("No Q&A result batch."); return; }
+  const targets = applyAll
+    ? batch.rows.filter(r => r.video_id === state.qaSelectedVideo).map(r => r.row_id)
+    : [rowId];
+  try {
+    for (const target of targets) {
+      await editRow({ task: "qa", row_id: target }, "answer", answer, null);
+    }
+  } catch (e) { alert(e.message); return; }
+  state.qaHypotheses = (state.qaHypotheses || []).map(h =>
+    (applyAll && h.video_id === state.qaSelectedVideo) ? { ...h, normalized_answer: answer } : h);
   renderQaHypotheses(state.qaHypotheses);
   $("qa-answer").textContent = answer;
   $("qa-answer").classList.toggle("empty", !answer);
-  renderOutput("qa-output", state.rows.qa);
 };
 $("evaluation-form").onsubmit = async (ev) => {
   ev.preventDefault();

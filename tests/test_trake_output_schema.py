@@ -283,18 +283,44 @@ def test_temporal_payload_carries_the_runtime_generation_and_no_paths(client, tm
     assert str(tmp_path) not in str(body)
 
 
-def test_submission_save_refuses_a_short_trake_row(client) -> None:
-    good = client.post(
-        "/api/submission/save",
-        json={"task": "trake", "event_count": 3, "rows": [["V", "1", "2", "3"]]},
+def test_submission_export_goes_through_the_shared_validator(client, tmp_path) -> None:
+    """Since Phase 10 the endpoint exports a REGISTERED result batch, not raw rows.
+
+    That is what stops a frontend bug from writing a malformed competition file: the
+    backend owns validation and serialization.
+    """
+    events = ["a person appears", "the person moves", "the person leaves"]
+    body = client.post("/api/video/temporal", json={"events": events}).get_json()
+    result_id = body["result_batch"]["result_id"]
+    assert body["result_batch"]["event_count"] == 3
+
+    preflight = client.post(
+        "/api/submission/preflight", json={"result_id": result_id}
+    ).get_json()
+    assert preflight["valid"] is True
+    assert preflight["task"] == "trake"
+    assert preflight["event_count"] == 3
+
+    saved = client.post(
+        "/api/submission/save", json={"result_id": result_id, "name": "trake"}
     )
-    assert good.status_code == 200
-    bad = client.post(
-        "/api/submission/save",
-        json={"task": "trake", "event_count": 3, "rows": [["V", "1", "2"]]},
-    )
-    assert bad.status_code == 422
-    assert bad.get_json()["error_code"] == "MALFORMED_SUBMISSION_ROW"
+    assert saved.status_code == 200
+    assert saved.get_json()["validation"]["valid"] is True
+
+    # An unknown batch cannot be exported at all.
+    unknown = client.post("/api/submission/save", json={"result_id": "rb_missing"})
+    assert unknown.status_code == 404
+    assert unknown.get_json()["error_code"] == "UNKNOWN_RESULT_BATCH"
+
+
+def test_a_short_trake_row_is_refused_by_the_validator() -> None:
+    from aic2026.submission_validation import TRAKE_EVENT_COUNT_MISMATCH, validate_submission
+
+    good = validate_submission("trake", [["V", "1", "2", "3"]], event_count=3)
+    assert good.valid is True
+    bad = validate_submission("trake", [["V", "1", "2"]], event_count=3)
+    assert bad.valid is False
+    assert [issue.code for issue in bad.errors] == [TRAKE_EVENT_COUNT_MISMATCH]
 
 
 def test_trake_alignment_method_config_rejects_exact_dp() -> None:
