@@ -1621,10 +1621,9 @@ class AICCompetitionEngine:
     ) -> tuple[list[AICPrediction], list[TemporalMatch]]:
         """Align ordered events across one video.
 
-        `refine_window_s` is accepted for interface compatibility and is **not used**:
-        TRAKE local refinement is a Phase 6 task, and Phase 5 integrates the refiner
-        into KIS only. It is kept rather than removed so the UI/CLI call signature does
-        not churn twice, but it changes nothing today.
+        `refine_window_s` selects the local sampling window used by TRAKE's event-local
+        refinement (Phase 8). It has no effect when refinement is off, which is the
+        default; the response reports `refinement.status` either way.
         """
         outcome = self.search_trake_detailed(
             events,

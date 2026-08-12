@@ -27,6 +27,8 @@ from .dataset_validation import (
 )
 from .engine import AICCompetitionEngine
 from .metrics import write_submission
+from .system_profile import build_system_profile, evaluate_readiness
+from .version import PROJECT_VERSION
 from .submission_validation import (
     MAX_SUBMISSION_ROWS,
     SUBMISSION_TASKS,
@@ -42,6 +44,7 @@ from .submission_validation import (
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="AIC 2026 Rewind competition CLI")
+    p.add_argument("--version", action="version", version=f"rewind-aic2026 {PROJECT_VERSION}")
     p.add_argument("--config", default="configs/settings.yaml", help="Runtime config YAML")
     p.add_argument("--data-root", default=None, help="Override AIC DATA_ROOT")
     p.add_argument("--cache-dir", default=None, help="Override cache directory")
@@ -117,6 +120,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of TRAKE events; required unless every row already agrees.",
     )
     validate.add_argument("--max-rows", type=int, default=MAX_SUBMISSION_ROWS)
+
+    check = sub.add_parser(
+        "competition-check",
+        help="Structural readiness preflight. PASS/WARN/FAIL per check, never a quality claim.",
+    )
+    check.add_argument("--load-engine", action=argparse.BooleanOptionalAction, default=True,
+                       help="Load the index so channel and Q&A capability are measured for real.")
+    check.add_argument("--output", help="Write the readiness report as JSON.")
+
+    profile = sub.add_parser(
+        "system-profile", help="Print the reproducibility identity of this runtime."
+    )
+    profile.add_argument("--load-engine", action=argparse.BooleanOptionalAction, default=False)
+    profile.add_argument("--output")
+
+    serve = sub.add_parser("serve", help="Start the competition UI/API.")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=5000)
+    serve.add_argument("--activate", action=argparse.BooleanOptionalAction, default=True,
+                       help="Load the index at startup instead of waiting for a UI click.")
     return p
 
 
@@ -176,6 +199,106 @@ def _print_cache_error(exc: Exception, code: str) -> None:
     print(json.dumps({"error": str(exc), "error_code": code}, ensure_ascii=False, indent=2), file=sys.stderr)
 
 
+def _load_engine_quietly(app_config, rebuild: bool = False):
+    """Load the index for a preflight, returning (engine, error) rather than raising."""
+    try:
+        engine, _ = AICCompetitionEngine.from_data_root(app_config=app_config, rebuild=rebuild)
+        return engine, None
+    except Exception as exc:  # noqa: BLE001 - reported as a FAIL check, not a traceback
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _competition_check_command(args: argparse.Namespace, app_config, config_path: str) -> int:
+    """Structural readiness preflight.
+
+    Exit codes: 0 READY, 1 READY_WITH_WARNINGS, 2 NOT_READY. A warning is not a failure:
+    a missing optional capability (no visual Q&A backend, CPU-only refinement, an empty
+    OCR source) still leaves a system that can produce valid submissions.
+    """
+    engine = None
+    load_error = None
+    if args.load_engine:
+        engine, load_error = _load_engine_quietly(app_config)
+    report = evaluate_readiness(app_config, config_path=config_path, engine=engine)
+    payload = report.to_dict()
+    if load_error:
+        payload["engine_load_error"] = load_error
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    for check in report.checks:
+        print(f"{check.status:<4} {check.name}: {check.message}", file=sys.stderr)
+    print(f"\n{report.status}", file=sys.stderr)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return report.exit_code()
+
+
+def _system_profile_command(args: argparse.Namespace, app_config, config_path: str) -> int:
+    engine = None
+    if args.load_engine:
+        engine, _ = _load_engine_quietly(app_config)
+    profile = build_system_profile(app_config, config_path=config_path, engine=engine)
+    payload = profile.to_dict()
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return 0
+
+
+def _serve_command(args: argparse.Namespace, app_config, config_path: str) -> int:
+    """The one canonical way to start the competition system."""
+    from ui.app import create_app
+
+    report = evaluate_readiness(app_config, config_path=config_path)
+    for check in report.checks:
+        if check.status != "PASS":
+            print(f"{check.status} {check.name}: {check.message}", file=sys.stderr)
+    if report.status == "NOT_READY":
+        print(
+            json.dumps(
+                {"error": "System is NOT_READY; refusing to serve.", "readiness": report.to_dict()},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+    app = create_app(config_path=config_path, app_config=app_config)
+    if args.activate:
+        # Load the index up front so the first query does not pay for it, and so a
+        # broken dataset fails here rather than on a user's first search.
+        client = app.test_client()
+        response = client.post(
+            "/api/video/index_folder",
+            json={"path": str(app_config.dataset.root), "cache_dir": str(app_config.dataset.cache_dir)},
+        )
+        if response.status_code != 200:
+            print(
+                json.dumps({"error": "Startup activation failed", "detail": response.get_json()},
+                           ensure_ascii=False, indent=2),
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"Activated {app_config.dataset.root} (generation "
+            f"{response.get_json()['runtime']['generation']})",
+            file=sys.stderr,
+        )
+    print(
+        f"rewind-aic2026 {PROJECT_VERSION} serving on http://{args.host}:{args.port} "
+        f"(health: /api/health)",
+        file=sys.stderr,
+    )
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    return 0
+
+
 def _validate_submission_command(args: argparse.Namespace) -> int:
     """Structurally validate a submission CSV.
 
@@ -231,6 +354,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "validate-submission":
         return _validate_submission_command(args)
+
+    if args.cmd == "competition-check":
+        return _competition_check_command(args, app_config, str(args.config))
+
+    if args.cmd == "system-profile":
+        return _system_profile_command(args, app_config, str(args.config))
+
+    if args.cmd == "serve":
+        return _serve_command(args, app_config, str(args.config))
 
     if args.cmd == "inspect-data":
         try:

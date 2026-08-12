@@ -1,0 +1,21 @@
+{
+  "description": "Fixed integration-stability fixture for the final smoke runner. These queries exist to prove the pipeline runs end to end and produces well-formed submissions. They carry NO expected results and NO correctness labels: this repository has no AIC ground truth, so nothing here can be graded.",
+  "kis": [
+    "a person walking",
+    "motorcycle on the road",
+    "people sitting indoors",
+    "a car near a building",
+    "một người đang đi bộ",
+    "xe máy trên đường"
+  ],
+  "qa": [
+    {"event": "a vehicle on the road", "question": "What color is the vehicle?", "expected_answer_type": "color"},
+    {"event": "people in a scene", "question": "How many people are visible?", "expected_answer_type": "number"},
+    {"event": "a person", "question": "Is the person standing?", "expected_answer_type": "yes/no"}
+  ],
+  "trake": [
+    ["a person approaches a vehicle", "the person enters the vehicle", "the vehicle moves away"],
+    ["a person walks into a room", "the person sits down", "the person stands up"],
+    ["a vehicle approaches an intersection", "the vehicle stops", "the vehicle continues"]
+  ]
+}

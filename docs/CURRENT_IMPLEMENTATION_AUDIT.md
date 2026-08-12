@@ -375,3 +375,87 @@ pytest: passed; 1 legacy lazy-import test skipped because torch is installed
   frame is correct, and no AIC ground truth exists.
 - Phase 11 final integration, release packaging, a production visual Q&A backend and any
   accuracy benchmark all remain pending.
+
+## Phase 11 Status Update — FINAL AUDIT CLASSIFICATION
+
+Date: 2026-08-12 · Version `0.11.0-aic2026`
+
+This section supersedes the status columns of the audit table above, which is kept as the
+historical record. Every item originally raised in Phase 0 is classified here as
+**FIXED**, **PARTIAL**, **OPEN** or **BLOCKED_EXTERNAL**. Nothing is marked fixed on the
+strength of a plan; each FIXED row names the phase that closed it.
+
+### FIXED
+
+| Item | Closed in | Evidence |
+|---|---|---|
+| Runtime configuration is the single source of truth | Phase 1 | Validated `AppConfig` + deterministic `config_hash` drive engine, CLI, UI, benchmark. |
+| Cache compatibility | Phase 2 | Manifest, fingerprint, data signature; legacy/stale/corrupt rejected; `allow_stale_cache: false` is a readiness FAIL if enabled. |
+| Dataset alignment and validation | Phase 3 | Exact map/feature equality enforced; `valid_for_index_build` gates builds. Final pass: 7,800 map rows == 7,800 vectors, 0 invalid videos. |
+| Dataset scope | Phase 3.1/3.2 | `existing_videos` resolves 29 of 873 videos from disk; ids and their hash recorded in manifest and profile. |
+| Keyframe identity collision | Phase 3.1 | `{video_id}/kf_{ordinal:06d}`; final pass shows 0 duplicate internal ids against 10 duplicate official `frame_idx` values. |
+| Visual source fallback | Phase 3.2 | JPEG → MP4 decode → unavailable; official `frame_idx` never rewritten; 0 videos with no visual source. |
+| DATA_ROOT runtime state | Phase 4 | One frozen state per activation, atomic replacement, generation-stamped results. |
+| `LocalFrameRefiner` actually used (KIS) | Phase 5 | Called by `search_kis` under an explicit trigger policy with a bounded budget. |
+| Frame-ID separation under refinement | Phase 5 | Three distinct identities; `preserve_coarse` default; only `submission_frame_idx` reaches a CSV. |
+| Q&A answers copied across videos | Phase 6 | Per-hypothesis answering; `cross_video_answer_copy_count: 0` on every real run since. |
+| Expected answer type reaching normalization | Phase 6 | UI → request → engine → prompt → `normalize_answer`; unsupported types are `400`. |
+| Q&A evidence selection | Phase 6 | Strongest-first with temporal diversity, relaxing the gap instead of under-filling. |
+| TRAKE output length | Phase 7 | N events → exactly N frames, always; incomplete alignments discarded, never shortened. |
+| TRAKE event labelling | Phase 7 | Each step carries its own `event_index` / `event_label`. |
+| TRAKE metric truncation | Phase 7 | Length checked before scoring; a mismatch is 0, not partial credit. |
+| Honest algorithm naming | Phase 7 | `beam_dp` everywhere; `exact_dp` rejected by config; a test scans sources for false claims. |
+| TRAKE alignments per video | Phase 8 | k-best enumeration + diversity filter. |
+| TRAKE candidate depth | Phase 8 | Adaptive expansion of under-covered events only, hard-bounded. |
+| TRAKE `refine_window_s` dead parameter | Phase 8 | Now selects the refinement window; a test asserts a wider value samples more frames. |
+| Objects/metadata as independent generators | Phase 9 | `retrieval_channels.py`; real smoke showed 508 object-exclusive and 347 metadata-exclusive candidates. |
+| Vietnamese query handling | Phase 9 | `query_normalization.py`; final pass confirms accent-folded equivalence, negation marking, safe degenerate input. |
+| Submission export validation | Phase 10 | One validator on every export path; atomic UTF-8 CSV plus sidecar report. |
+| Manual frame edit corrupting other rows | Phase 10 | Edits addressed by `result_id + row_id`; verified live — editing one row of 100 left the other 99 untouched. |
+| Q&A manual answer edit scope | Phase 10 | Row-local by default, with an explicit opt-in to apply to a whole hypothesis. |
+| UI unsupported-channel controls | Phase 10 | `gv-objects` renamed to match its backend key; unavailable channels disabled and labelled. |
+| Stale-generation exports | Phase 10 | `409 STALE_RESULT_GENERATION`; verified live in Phase 11 after a dataset re-activation, with no file written. |
+| Single documented way to start the system | Phase 11 | `aic2026.cli serve`, gated by the readiness preflight. |
+| Reproducibility identity | Phase 11 | `SystemProfile` + `identity()` + generated release manifest. |
+| Diagnostics without labels | Phase 11 | `competition-check`, `run_competition_smoke.py`, `run_ablation.py` — all structural, none requiring ground truth. |
+| Human inspection export | Phase 11 | `artifacts/final_release_smoke/results.html` per run, with no correct/incorrect column. |
+| Documentation truthfulness | Phase 11 | README rewritten, `KNOWN_LIMITATIONS.md` added, this classification written, GT guard enforced in code. |
+
+### PARTIAL
+
+| Item | State | What is missing |
+|---|---|---|
+| Local visual refinement | Implemented and wired for KIS and TRAKE, **disabled by default** | Enabled only under a CUDA device or a larger time budget; whether it *helps* is unknown without ground truth. |
+| Q&A end-to-end | Retrieval, grounding and evidence selection complete and verified | The answering step has no visual backend here; engine answers are non-submittable by design. |
+| TRAKE optimality | Complete, deterministic, k-best beam search | Beam-pruned, so not provably optimal. Exact DP exists as a bounded test oracle only. |
+| Optional text channels | Constructed, enabled and honestly reporting `available: false` | The OCR/ASR/caption sources genuinely do not exist in this data. |
+| Dataset coverage | 29 videos / 7,800 frames, fully validated | The other 844 discovered videos have no local MP4; scaling behaviour is unmeasured. |
+
+### OPEN
+
+| Item | Why it is still open |
+|---|---|
+| UI video dropdown does not filter search | The control implies a scope it does not apply. Either filter or remove it. Cosmetic-to-misleading, not a correctness bug. |
+| `evaluation/run_eval.py` legacy harness | Operates on synthetic mock data with self-generated labels. Kept for history; its numbers must never be quoted as system quality. |
+| Development server | `serve` uses Flask's development server — fine for one operator on localhost, not a deployment. |
+| Browser-level UI verification | No browser backend in this environment; API behaviour is verified, visual/mobile rendering is not. |
+
+### BLOCKED_EXTERNAL
+
+| Item | Blocker | Consequence |
+|---|---|---|
+| Any accuracy, recall or Final Score for this system | **No official AIC ground truth exists in this repository.** | Semantic metrics refuse to run (`GroundTruthRequired`). Ablation variants are described, never ranked. No parameter has been tuned against quality. |
+| Production visual Q&A | No API key, no local VLM checkpoint, no SDK; none may be downloaded automatically. | Engine Q&A answers are non-submittable; a human answer is required and is marked `manual`. |
+| Official frame-ID semantics for an arbitrary decoded frame | Unanswered by the organisers. | `frame_output_policy` stays `preserve_coarse`; a refined frame remains evidence only. |
+| Full-collection behaviour | The remaining 844 videos' MP4s are not present locally, and downloading more AIC data is out of scope. | Latency, memory and candidate counts are known for 29 videos only. |
+
+### Superseded verification answers
+
+Answers 7, 10, 11, 12, 14 and 15 in "Direct Answers To Required Verification Questions"
+above are superseded: a shared submission validator now exists (Phase 10), UI DATA_ROOT
+changes propagate to every route (Phase 4), manual edits are identity-addressed
+(Phase 10), objects and metadata are independent generators (Phase 9), and the mock Q&A
+answerer is labelled as non-visual in health, search payloads, the system profile,
+readiness and the UI (Phases 6 and 11). Answers 1–6, 8, 9 and 13 stand, with the Phase 8
+update that `refine_window_s` is no longer inert.
+

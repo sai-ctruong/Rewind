@@ -1,6 +1,6 @@
 [project]
 name = "aic2026-system"
-version = "0.2.0"
+version = "0.11.0"
 description = "AIC 2026 preliminary-round retrieval system for KIS, Q&A, and TRAKE"
 requires-python = ">=3.10"
 

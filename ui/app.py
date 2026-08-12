@@ -35,6 +35,11 @@ from aic2026.result_batch import (
     reset_batch,
     reset_row,
 )
+from aic2026.system_profile import (
+    SUBMISSION_VALIDATION_VERSION,
+    build_system_profile,
+    evaluate_readiness,
+)
 from aic2026.submission_validation import (
     SUBMISSION_TASKS,
     SubmissionValidationError,
@@ -478,7 +483,36 @@ def create_app(
             qa=None if engine is None else engine.qa_status(),
             # Which independent candidate generators exist, and which have real data.
             retrieval_channels=None if engine is None else engine.channel_status(),
+            # Reproducibility identity and structural readiness. Neither loads a model:
+            # opening /health must never pay for the CLIP checkpoint.
+            system=build_system_profile(
+                state.app_config,
+                config_path=state.config_path,
+                engine=engine,
+                runtime_generation=state.generation,
+                cache_dir=state.cache_dir,
+            ).to_dict(),
+            submission={
+                "validation_version": SUBMISSION_VALIDATION_VERSION,
+                "tasks": list(SUBMISSION_TASKS),
+                "max_rows": MAX_PREDICTIONS,
+                "frame_policy": "submission_frame_idx",
+                "active_batches": len(batches._batches),
+            },
         )
+
+    @app.get("/api/readiness")
+    def readiness():
+        """Structural competition readiness. Never a statement about answer quality."""
+        state = snapshot()
+        report = evaluate_readiness(
+            state.app_config,
+            config_path=state.config_path,
+            engine=state.engine,
+            runtime_generation=state.generation,
+            cache_dir=state.cache_dir,
+        )
+        return jsonify(report.to_dict()), 200 if report.ready else 503
 
     @app.get("/api/video/progress")
     def video_progress():

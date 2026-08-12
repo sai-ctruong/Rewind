@@ -1,0 +1,229 @@
+# AIC 2026 competition configuration.
+#
+# This is the reproducible release config. `configs/settings.yaml` remains the general
+# development file; this one exists so a competition run is identified by a single fixed
+# artifact rather than by whatever settings.yaml happened to contain that day.
+#
+# Both files are parsed by the SAME validated loader (aic2026.config.load_app_config).
+# There is no second parser and no release-only field.
+#
+# Nothing here was tuned for accuracy. This repository has no AIC ground truth, so every
+# weight and threshold is the documented default carried over from the phase that
+# introduced it.
+#
+# Start with:
+#   .venv\Scripts\python.exe -m aic2026.cli serve --config configs/competition.yaml
+# Check first with:
+#   .venv\Scripts\python.exe -m aic2026.cli competition-check --config configs/competition.yaml
+
+aic2026:
+  runtime:
+    # Production mode refuses the hashing fallback encoder, so a run cannot silently
+    # retrieve with meaningless vectors.
+    production_mode: true
+    seed: 42
+    device: auto
+    time_budget_seconds: 20
+
+  dataset:
+    root: data
+    # The multi-channel cache: built with objects and media text, so the object and
+    # metadata channels have real data. Rebuild with `build-index --load-objects
+    # --include-media-text` if it is missing.
+    cache_dir: artifacts/aic2026_index_channels
+    frame_cache_dir: artifacts/video_frame_cache
+    # REQUIRED for the object and metadata retrieval channels. Without these the cache
+    # contains no object labels or media text and those channels report unavailable.
+    load_objects: true
+    include_media_text: true
+    verify_keyframes: false
+    index_kind: flat
+    scope:
+      # Only videos whose MP4 is present AND which have map + CLIP support. Resolved
+      # from disk at run time, so the selected-ID hash identifies the real dataset.
+      mode: existing_videos
+      include_patterns: ["*"]
+      exclude_patterns: []
+    validation:
+      strict_alignment: true
+      # BTC keyframe JPEGs are supporting data; the original MP4 supplies pixels when
+      # one is missing, so their absence must not block a build.
+      require_visual_source: false
+      strict_objects: false
+      verify_feature_finite: true
+      verify_feature_norms: true
+      verify_image_decode: false
+      max_image_decode_checks_per_video: null
+      supported_feature_dtypes: [float16, float32]
+      expected_feature_dim: 512
+
+  cache:
+    # A competition run must never load a cache that does not match its data.
+    allow_stale_cache: false
+    validate_data_signature: true
+    code_version_policy: warn
+
+  encoder:
+    type: auto_clip
+    model_name: openai/clip-vit-base-patch32
+    feature_dim: 512
+    normalize: true
+    batch_size: 32
+    # production_mode already forbids the fallback; this states the intent explicitly.
+    allow_hashing_fallback: false
+
+  retrieval_channels:
+    normalization: rank
+    channels:
+      clip:
+        enabled: true
+        top_k: 1200
+      bm25:
+        enabled: true
+        top_k: 800
+      objects:
+        enabled: true
+        top_k: 800
+        confidence_threshold: 0.25
+      metadata:
+        enabled: true
+        top_k: 300
+        frames_per_video: 8
+      # Left ENABLED on purpose: the channels measure their own source data and report
+      # `available: false` when it is empty. Disabling them here would hide that fact
+      # instead of stating it.
+      ocr:
+        enabled: true
+        top_k: 300
+      asr:
+        enabled: true
+        top_k: 300
+      caption:
+        enabled: true
+        top_k: 300
+
+  fusion:
+    method: adaptive
+    clip_weight: 1.0
+    object_weight: 0.20
+    metadata_weight: 0.10
+    sparse_weight: 0.25
+    rrf_k: 60
+    adaptive: true
+
+  ranking:
+    final_top_k: 100
+    max_frames_per_video: 12
+    min_frame_gap: 30
+    neighbor_offsets: [-2, -1, 1, 2]
+    diversity_lambda: 0.25
+    precision_head_size: 5
+    recall_tail_size: 50
+
+  refinement:
+    # KIS local refinement costs ~14 s per query on CPU. It is OFF for the competition
+    # default because that latency is not affordable per query on this hardware; enable
+    # it deliberately (or on CUDA) when the time budget allows.
+    enabled: false
+    mode: disabled
+    top_hypotheses: 10
+    candidate_budget: 5
+    region_merge_s: 1.0
+    window_before_s: 4.0
+    window_after_s: 4.0
+    fine_fps: 4.0
+    max_frames: 32
+    batch_size: 16
+    cache_size_mb: 256
+    scorer_input_max_side: 336
+    rerank_alpha: 0.10
+    # The submitted frame stays the official mapped frame_idx. Do not change this until
+    # AIC confirms the frame-ID semantics of an arbitrary decoded frame.
+    frame_output_policy: preserve_coarse
+    trigger:
+      margin_threshold: 0.03
+    scorer:
+      type: clip
+      model_name: openai/clip-vit-base-patch32
+      device: auto
+      required: false
+
+  trake:
+    alignment_method: beam_dp
+    recover_missing_events: true
+    recovery_respect_gap: true
+    per_event_top_k: 40
+    candidate_depth_expansion: [120, 300]
+    candidate_depth_max: 400
+    target_complete_video_hypotheses: 12
+    top_video_hypotheses: 20
+    k_best_per_video: 4
+    max_alignments_per_video: 3
+    alignments_per_video: 1
+    beam_width: 8
+    min_gap_s: 0.001
+    max_gap_s: null
+    coverage_bonus: 0.20
+    missing_event_penalty: 0.35
+    transition_penalty: 0.02
+    gap_penalty: 0.001
+    sequence_overlap_threshold: 0.8
+    final_top_k: 100
+    sequence_diversity:
+      difference_events: 1
+      time_distance_s: 1.0
+    refinement:
+      # Same reasoning as KIS: bounded, but ~10 s per query on CPU.
+      enabled: false
+      top_alignment_budget: 3
+      max_events_per_alignment: 4
+      frames_per_event: 8
+      fine_fps: 2.0
+      window_s: 2.0
+      batch_size: 8
+      rerank_alpha: 0.10
+      max_frames_per_query: 96
+
+  qa:
+    enabled: true
+    top_video_hypotheses: 8
+    frame_hypotheses_per_video: 3
+    evidence_frame_count: 8
+    evidence_temporal_diversity_s: 1.5
+    video_support_bonus: 0.05
+    answer_reliability_weight: 0.2
+    max_answers: 100
+    retrieval_query_mode: event_only
+    abstain_enabled: true
+    abstain_threshold: 0.35
+    default_answer_type: auto
+    max_answer_tokens: 64
+    answer_temperature: 0.0
+    use_local_refinement: false
+    refinement_candidate_budget: 1
+    refinement_max_frames: 12
+    backend:
+      # `auto` uses a hosted backend only when its key is already present, then an
+      # explicitly supplied local model, and otherwise the NON-VISUAL mock. The mock
+      # reports visual_capable=false and its answers are NOT exportable, so a missing
+      # backend degrades to "Q&A retrieval works, answers are not submittable" rather
+      # than to a fabricated submission.
+      type: auto
+      model_name: ""
+      device: auto
+      # Left false so a missing visual backend is a warning, not a hard startup failure:
+      # KIS and TRAKE remain fully usable without it.
+      required: false
+
+  submission:
+    max_predictions: 100
+    max_answers: 100
+
+  evaluation:
+    ks: [1, 5, 20, 50, 100]
+    output_dir: evaluation/benchmarks/aic2026
+    save_predictions: true
+    save_errors: true
+
+  ui:
+    enabled: true

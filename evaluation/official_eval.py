@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from aic2026.benchmark import BenchmarkLogger, QueryLog, environment_snapshot, time_call
-from aic2026.metrics import RankedAnswer, evaluate_query, mean_report, parse_ground_truth_row
+from aic2026.metrics import (
+    GroundTruthRequired,
+    RankedAnswer,
+    evaluate_query,
+    mean_report,
+    parse_ground_truth_row,
+)
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -18,6 +24,12 @@ def evaluate_labels(
     labels: Sequence[dict], predictor: Callable[[dict], Sequence[Sequence[object]]], *, run_name: str = "baseline",
     out_dir: str | Path = "evaluation/benchmarks/aic2026", environment: dict | None = None,
 ) -> tuple[dict, Path]:
+    # An empty label set used to produce a full report of zeros, which reads like a
+    # measured result rather than "nothing was measured". Refuse instead.
+    if not labels:
+        raise GroundTruthRequired(
+            detail="No labelled queries were supplied, so there is nothing to score."
+        )
     reports, logs, predictions, errors = [], [], [], []
     extra = {"video_correct": [], "frame_correct": [], "answer_correct": [], "end_to_end_correct": []}
     for index, label in enumerate(labels):

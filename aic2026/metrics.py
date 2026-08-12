@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from evaluation.metrics import normalize_answer, token_f1
 
@@ -146,7 +146,43 @@ def final_score_from_r_scores(r_scores: Sequence[float], top_ks: Sequence[int] =
     return vals
 
 
+class GroundTruthRequired(RuntimeError):
+    """Raised when a semantic metric is requested without official ground truth.
+
+    Structural diagnostics (candidate counts, complete-sequence yield, latency, malformed
+    rows) need no labels and are reported freely. R@k and Final Score are *semantic*
+    metrics: without official AIC labels there is nothing to compare against, and
+    substituting synthetic or self-generated labels would manufacture a result. This
+    refuses instead.
+    """
+
+    def __init__(self, task: str = "", detail: str = "") -> None:
+        super().__init__(
+            "GROUND_TRUTH_REQUIRED: official AIC ground truth is needed to compute "
+            f"semantic metrics{f' for {task}' if task else ''}. "
+            "Structural diagnostics are available without it. "
+            + detail
+        )
+        self.task = task
+        self.error_code = "GROUND_TRUTH_REQUIRED"
+
+
+def require_ground_truth(gt: Any, task: str = "") -> Any:
+    """Refuse to score without real labels rather than degrading to a fake baseline."""
+    if gt is None:
+        raise GroundTruthRequired(task)
+    ranges = getattr(gt, "ranges", None)
+    event_ranges = getattr(gt, "event_ranges", None)
+    if not ranges and not event_ranges:
+        raise GroundTruthRequired(
+            task, "The supplied ground truth carries no frame ranges."
+        )
+    return gt
+
+
 def evaluate_query(task: str, predictions: Sequence[RankedAnswer], gt) -> dict[str, float]:
+    """Official R@k and Final Score. Requires real ground truth; see `require_ground_truth`."""
+    require_ground_truth(gt, task)
     return final_score_from_r_scores(ranked_r_scores(task, predictions, gt))
 
 
