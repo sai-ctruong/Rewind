@@ -1,5 +1,10 @@
 # AIC 2026 Repository Audit
 
+> **HISTORICAL.** The Phase-0 audit that started the AIC 2026 work. Its findings are a
+> record of that moment; current status lives in
+> `docs/CURRENT_IMPLEMENTATION_AUDIT.md`. See `docs/DOCUMENTATION_MAP.md`.
+
+
 Audit date: 2026-08-04
 Branch: `feat/aic2026-competition-research`
 Baseline commit: `b692f5c`

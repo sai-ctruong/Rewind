@@ -60,6 +60,9 @@ ANSWER_STATUS_ANSWERED = "answered"
 ANSWER_STATUS_ABSTAINED = "abstained"
 ANSWER_STATUS_BACKEND_FAILED = "backend_failed"
 ANSWER_STATUS_VISUAL_UNAVAILABLE = "visual_unavailable"
+# The per-query VLM budget ran out before this hypothesis was reached. It is NOT an
+# answer and never becomes one: a budget is a spending limit, not a reason to guess.
+ANSWER_STATUS_BUDGET_EXHAUSTED = "budget_exhausted"
 
 BACKEND_STATE_READY = "ready"
 BACKEND_STATE_NOT_LOADED = "not_loaded"
@@ -1200,6 +1203,7 @@ __all__ = [
     "ANSWER_STATUS_ABSTAINED",
     "ANSWER_STATUS_ANSWERED",
     "ANSWER_STATUS_BACKEND_FAILED",
+    "ANSWER_STATUS_BUDGET_EXHAUSTED",
     "ANSWER_STATUS_VISUAL_UNAVAILABLE",
     "ANSWER_TYPES",
     "ANSWER_TYPE_AUTO",

@@ -1,0 +1,40 @@
+{
+  "label_source": "private_dev",
+  "dataset": "AIC 2026 local subset",
+  "split": "dev",
+  "annotated_by": "REPLACE WITH A HUMAN NAME — 'system'/'model'/'auto' is refused",
+  "created_at": "YYYY-MM-DD",
+  "notes": "Private development labels. Any report built from these MUST carry 'PRIVATE DEVELOPMENT GT — NOT OFFICIAL AIC SCORE'. Never fill these in from the system's own predictions.",
+  "entries": [
+    {
+      "query_id": "kis_0001",
+      "task": "kis",
+      "query": "a person walking a bicycle across a street",
+      "video_id": "L21_V001",
+      "frame_ranges": [[1200, 1400]],
+      "notes": "One or more official frame_idx intervals that a correct answer falls in."
+    },
+    {
+      "query_id": "qa_0001",
+      "task": "qa",
+      "event_text": "a vehicle stops at an intersection",
+      "question": "What colour is the vehicle?",
+      "video_id": "L21_V002",
+      "frame_ranges": [[300, 480]],
+      "answers": ["red", "đỏ"],
+      "notes": "List every acceptable surface form; matching is normalized, not exact."
+    },
+    {
+      "query_id": "trake_0001",
+      "task": "trake",
+      "events": [
+        "a person approaches a vehicle",
+        "the person enters the vehicle",
+        "the vehicle moves away"
+      ],
+      "video_id": "L21_V003",
+      "event_frame_ranges": [[100, 180], [200, 260], [300, 420]],
+      "notes": "Exactly one frame range per event, in event order."
+    }
+  ]
+}

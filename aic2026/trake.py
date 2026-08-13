@@ -87,7 +87,6 @@ class AlignmentConfig:
     alignment_method: str = METHOD_BEAM_DP
     per_event_top_k: int = 40
     top_video_hypotheses: int = 20
-    alignments_per_video: int = 1
     beam_width: int = 8
     min_gap_s: float = 0.001
     max_gap_s: float | None = None
@@ -95,7 +94,6 @@ class AlignmentConfig:
     missing_event_penalty: float = 0.35
     transition_penalty: float = 0.02
     gap_penalty: float = 0.001
-    sequence_overlap_threshold: float = 0.8
     final_top_k: int = 100
     # Phase 7: try to fill an event the beam search skipped, using that event's own
     # candidates from the same video.

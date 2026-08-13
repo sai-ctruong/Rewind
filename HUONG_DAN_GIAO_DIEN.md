@@ -1,5 +1,10 @@
 # 🖥️ Hướng dẫn sử dụng giao diện Rewind
 
+> **HISTORICAL — NOT THE CURRENT SYSTEM.** UI guide for the earlier multi-tab product
+> (agent/dialogue/sketch tabs). The competition UI has three tabs: Textual KIS, Q&A and
+> TRAKE. See `README.md`.
+
+
 Tài liệu này hướng dẫn dùng **trang web** của Rewind — không cần viết code, chỉ gõ và
 bấm chuột. (Muốn dùng bằng lệnh/Python xem [`HUONG_DAN.md`](HUONG_DAN.md).)
 

@@ -99,16 +99,24 @@ def test_cache_fingerprint_is_stable_across_loads() -> None:
 # ------------------------------------------------------------------- capabilities
 
 
-def test_optional_text_channels_stay_enabled_so_they_report_honestly(config) -> None:
-    """Disabling OCR/ASR/caption would hide that their source data is empty.
+def test_channels_with_real_source_data_are_enabled(config) -> None:
+    channels = config.retrieval_channels
+    for name in ("clip", "bm25", "objects", "metadata"):
+        assert getattr(channels, f"{name}_enabled") is True
 
-    Enabled-but-unavailable is the truthful state: the channel measures its own source
-    and reports `available: false`. Disabling it would make the same absence look like a
-    deliberate configuration choice.
+
+def test_source_empty_channels_are_disabled_in_r0(config) -> None:
+    """OCR/ASR/caption have no populated source in this collection.
+
+    Phase 11 left them enabled so their absence was *reported*. R0 disables them: the
+    channel object is still constructed and still measures its own source, so health and
+    the system profile keep saying `available: false, no_populated_source_data`. What
+    changes is that readiness classifies a deliberately disabled empty source as INFO
+    instead of WARN — a warning nobody can act on teaches readers to ignore warnings.
     """
     channels = config.retrieval_channels
-    for name in ("clip", "bm25", "objects", "metadata", "ocr", "asr", "caption"):
-        assert getattr(channels, f"{name}_enabled") is True
+    for name in ("ocr", "asr", "caption"):
+        assert getattr(channels, f"{name}_enabled") is False
 
 
 def test_expensive_refinement_is_off_by_default(config) -> None:

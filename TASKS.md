@@ -1,21 +1,67 @@
 # AIC 2026 Current Work
 
-The active implementation is documented in AUDIT.md and PHASE_REPORT.md.
+**Status: CURRENT.** Everything above the horizontal rule describes the system that
+exists today. Everything below it is HISTORICAL and describes a different, superseded
+system — see the banner there before quoting any of it.
+
+## What the competition runtime supports
+
+Exactly three official tasks, and nothing else:
+
+1. **Textual KIS**
+2. **Q&A**
+3. **TRAKE**
+
+There is no agent, no KISC dialogue, no sketch search, no image-query search, no
+user-feedback search, no generic AVS mode and no unrelated dashboard in the competition
+runtime. Where the historical notes below describe those, they describe code that is not
+part of this system.
+
+## Frozen release
+
+`0.11.0-aic2026`, commit `7dfe06e`, tag `aic2026-competition-ready`. That release is the
+immutable baseline **B0**; the research branch does not modify it.
 
 - [x] Repository/data audit
 - [x] Production CLIP safeguards and encoder health
-- [x] Multi-signal fusion and ablation registry
+- [x] Multi-signal fusion and independent retrieval channels
 - [x] Video-aware Top-100 ranking
 - [x] Bounded local refinement and missing-MP4 fallback
-- [x] Joint monotonic TRAKE DP
-- [x] Grounded multi-frame Q&A and answer normalization
-- [x] Official evaluation artifact contract and annotation template
-- [x] Competition UI status, corrections and background evaluation
-- [x] Install requirements-full.txt and cache the real CLIP model
-- [ ] Supply AIC-format labels and run the first fixed-split baseline
-- [ ] Run paper related-work review only after that baseline
+- [x] Joint monotonic beam-pruned TRAKE alignment with k-best sequences
+- [x] Grounded per-video-hypothesis Q&A and answer normalization
+- [x] Shared submission validator and result-edit safety
+- [x] Readiness preflight, system profile, release smoke
 
-The content below is retained as historical engineering notes for the pre-AIC refactor. It is not the active competition task list.
+## Research branch (`research/aic2026-metric-budget`)
+
+R0 — engineering cleanup and instrumentation, complete:
+
+- [x] Remove the dead KIS rerank control and its engine shim
+- [x] Remove six config knobs no code read (each now rejected with an explanation)
+- [x] Disable OCR/ASR/caption in the competition config; report them as INFO, not WARN
+- [x] Separate UI display count from the competition result pool
+- [x] Add scope mode `retrieval_ready` (map + CLIP), separate from MP4 availability
+- [x] Bounded query-embedding cache, TRAKE work reuse, optional startup prewarm
+- [x] Per-query cost accounting and three-axis (quality/efficiency/cost) reporting
+- [x] Private-development ground-truth schema with a provenance guard
+
+R1 — metric-aware budgeted retrieval, experimental and disabled by default:
+
+- [ ] Measure anything semantic. Blocked: no AIC ground truth exists.
+- [ ] Compare variants on quality. Blocked by the same thing.
+
+Open, and blocked on data rather than code:
+
+- [ ] Supply AIC-format labels and run the first fixed-split baseline
+- [ ] Run the full novelty/related-work review only after that baseline
+
+---
+
+> **HISTORICAL — NOT THE CURRENT SYSTEM.**
+> Everything below is retained as engineering notes from the pre-AIC refactor. It
+> describes a SigLIP-based multi-tab product with agent, dialogue, sketch and image-query
+> features that the competition runtime does not contain. It is kept for provenance, not
+> as a description of current capability, and must not be quoted as one.
 
 ---
 # 📋 TASKS.md — Kế hoạch đầy đủ (Hệ thống tìm kiếm video AIC 2026)

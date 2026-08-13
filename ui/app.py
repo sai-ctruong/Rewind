@@ -11,6 +11,7 @@ from dataclasses import replace as dataclass_replace
 from io import BytesIO
 from pathlib import Path
 from threading import Thread
+from typing import Any, Mapping
 
 from flask import Flask, jsonify, request, send_file
 
@@ -433,6 +434,34 @@ def create_app(
             return set()
         return {path.stem for path in video_dir.glob("*.mp4")}
 
+    def _pool_size(engine, requested: Any = None) -> int:
+        """How many rows the COMPETITION pool holds.
+
+        Defaults to the configured competition depth (normally 100) rather than to
+        whatever the UI happens to be displaying. `pool_k` exists so an operator can
+        deliberately retrieve a shorter pool; it cannot exceed the official 100.
+        """
+        configured = int(engine.ranking_config.final_top_k)
+        if requested is None:
+            return max(1, min(MAX_PREDICTIONS, configured))
+        return max(1, min(MAX_PREDICTIONS, int(requested)))
+
+    def _display_limit(data: Mapping[str, Any], pool_k: int) -> int:
+        """How many rows the frontend should DRAW. Never truncates the batch.
+
+        `topk` is accepted as the historical name of this field. It used to size the
+        pool, which is why a 20-row view produced a 20-row submission; it is now a
+        display hint like `display_limit`.
+        """
+        raw = data.get("display_limit", data.get("topk"))
+        if raw is None:
+            return pool_k
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return pool_k
+        return max(1, min(pool_k, value))
+
     # ------------------------------------------------------------------- routes
 
     @app.get("/")
@@ -614,11 +643,17 @@ def create_app(
         query = (data.get("query") or "").strip()
         if not query:
             return _error("Query is required.", "QUERY_REQUIRED", 400)
-        topk = max(1, min(MAX_PREDICTIONS, int(data.get("topk", 20))))
+        # Display count and competition pool are DIFFERENT quantities. The organizer
+        # evaluates at 1/5/20/50/100, so the pool is always the configured competition
+        # depth; `display_limit` only tells the frontend how many cards to draw. Before
+        # this split, a UI showing 20 rows also exported a 20-row submission and silently
+        # threw away 80 legal ranks.
+        pool_k = _pool_size(engine, data.get("pool_k"))
+        display_limit = _display_limit(data, pool_k)
         # `refine: false` turns local refinement off for this query only, so the two
         # pipelines can be compared without restarting or editing configuration.
         refine = None if data.get("refine") is None else bool(data.get("refine"))
-        outcome = engine.search_kis_detailed(query, top_k=topk, refine=refine)
+        outcome = engine.search_kis_detailed(query, top_k=pool_k, refine=refine)
         preds = outcome.predictions
         available = _available_videos(state)
         batch = _new_batch(state, "kis", query, preds)
@@ -629,6 +664,8 @@ def create_app(
             generation=state.generation,
             result_batch=batch.to_dict(),
             count=len(preds),
+            pool_k=pool_k,
+            display_limit=display_limit,
             results=[_prediction_json(state, p, available) for p in preds],
             predictions=[p.row() for p in preds],
             encoder=engine.encoder_status(),
@@ -733,11 +770,15 @@ def create_app(
         events = [e.strip() for e in (data.get("events") or []) if e and e.strip()]
         if len(events) < 2:
             return _error("At least two ordered events are required.", "QUERY_REQUIRED", 400)
+        # Same split as KIS: the pool holds every structurally complete sequence the
+        # aligner produced, up to the official cap. Nothing is padded when fewer exist.
+        pool_k = _pool_size(engine, data.get("max_results"))
+        display_limit = _display_limit(data, pool_k)
         try:
             outcome = engine.search_trake_detailed(
                 events,
                 per_event_k=int(data.get("per_event_k", 40)),
-                max_results=max(1, min(MAX_PREDICTIONS, int(data.get("max_results", 20)))),
+                max_results=pool_k,
                 refine_window_s=(
                     None if data.get("refine_window") is None else float(data["refine_window"])
                 ),
@@ -802,6 +843,8 @@ def create_app(
             events=events,
             event_count=len(events),
             count=len(out),
+            pool_k=pool_k,
+            display_limit=display_limit,
             matches=out,
             predictions=[p.row() for p in preds],
             diagnostics=outcome.diagnostics,

@@ -1,28 +1,22 @@
-# AIC 2026 competition configuration — VISUAL DEVELOPMENT SCOPE.
+# AIC 2026 competition configuration — GLOBAL RETRIEVAL SCOPE.
 #
-# This is the reproducible release config. `configs/settings.yaml` remains the general
-# development file; this one exists so a competition run is identified by a single fixed
-# artifact rather than by whatever settings.yaml happened to contain that day.
-#
-# SCOPE WARNING: this file uses `existing_videos`, which requires an MP4 on disk and
-# therefore searches only the locally video-backed subset (29 of 873 videos here). That
-# is a VISUAL development scope: it exists so refinement, preview and visual Q&A have
-# pixels. It is NOT the correct definition of global retrieval coverage — every video
-# with map + CLIP is searchable whether or not its MP4 was downloaded.
-# For global coverage use `configs/competition_full_retrieval.yaml`, which needs its own
-# index build (see that file's header). Building it is a deliberate step, never automatic.
+# Identical to `configs/competition.yaml` except for two lines: the dataset scope and the
+# cache directory. It searches every video with map-keyframes plus CLIP features, whether
+# or not its MP4 was downloaded, which is what global coarse KIS/TRAKE retrieval actually
+# needs. On the current data root that is 873 videos instead of 29.
 #
 # Both files are parsed by the SAME validated loader (aic2026.config.load_app_config).
-# There is no second parser and no release-only field.
 #
 # Nothing here was tuned for accuracy. This repository has no AIC ground truth, so every
 # weight and threshold is the documented default carried over from the phase that
 # introduced it.
 #
-# Start with:
-#   .venv\Scripts\python.exe -m aic2026.cli serve --config configs/competition.yaml
-# Check first with:
-#   .venv\Scripts\python.exe -m aic2026.cli competition-check --config configs/competition.yaml
+# THIS CONFIG NEEDS ITS OWN INDEX. Build it deliberately — it is a large, long build and
+# nothing does it automatically:
+#   .venv\Scripts\python.exe -m aic2026.cli --config configs/competition_full_retrieval.yaml #       --rebuild build-index --load-objects --include-media-text
+#
+# What an absent MP4 costs, and only this: frame preview, local visual refinement, and
+# visual Q&A. Readiness reports those capabilities separately from retrieval coverage.
 
 aic2026:
   runtime:
@@ -35,10 +29,9 @@ aic2026:
 
   dataset:
     root: data
-    # The multi-channel cache: built with objects and media text, so the object and
-    # metadata channels have real data. Rebuild with `build-index --load-objects
-    # --include-media-text` if it is missing.
-    cache_dir: artifacts/aic2026_index_channels
+    # A SEPARATE cache: a different scope selects different videos, so it has a
+    # different fingerprint and must not share a directory with the 29-video cache.
+    cache_dir: artifacts/aic2026_index_retrieval_ready
     frame_cache_dir: artifacts/video_frame_cache
     # REQUIRED for the object and metadata retrieval channels. Without these the cache
     # contains no object labels or media text and those channels report unavailable.
@@ -47,9 +40,10 @@ aic2026:
     verify_keyframes: false
     index_kind: flat
     scope:
-      # Only videos whose MP4 is present AND which have map + CLIP support. Resolved
-      # from disk at run time, so the selected-ID hash identifies the real dataset.
-      mode: existing_videos
+      # Every video with a valid map AND a valid CLIP feature file. Resolved from disk
+      # at run time, so the selected-ID hash identifies the real dataset. An absent MP4
+      # does not remove a video from retrieval.
+      mode: retrieval_ready
       include_patterns: ["*"]
       exclude_patterns: []
     validation:

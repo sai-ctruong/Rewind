@@ -158,6 +158,15 @@ class FakeEngine:
     def qa_status(self) -> dict:
         return self._qa
 
+    def query_cache_status(self) -> dict:
+        return {
+            "query_embeddings": {"max_entries": 256, "entries": 0, "hits": 0, "misses": 0},
+            "persisted": False,
+        }
+
+    def encoder_status(self, *, initialize: bool = False) -> dict:
+        return {"state": "ready", "ready": True, "backend": "fake"}
+
 
 def kis_prediction(video_id: str, frame_id: int) -> SimpleNamespace:
     return SimpleNamespace(

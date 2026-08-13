@@ -1,4 +1,10 @@
-"""Video-aware allocation of retrieval candidates to the official Top-100."""
+"""Video-aware allocation of retrieval candidates to the official Top-100.
+
+Diversity here is structural, not a weighted objective: `min_frame_gap` suppresses
+near-duplicate frames of one video and `max_frames_per_video` caps how much of the list
+one video may own. `diversity_lambda` and `recall_tail_size` were removed in R0 because
+nothing ever read them — the recall tail is a fill loop with no size of its own.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,9 +20,7 @@ class RankingConfig:
     max_frames_per_video: int = 12
     min_frame_gap: int = 30
     neighbor_offsets: tuple[int, ...] = (-2, -1, 1, 2)
-    diversity_lambda: float = 0.25
     precision_head_size: int = 5
-    recall_tail_size: int = 50
     top_k: int | None = None
 
     def __post_init__(self) -> None:

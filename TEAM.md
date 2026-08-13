@@ -1,5 +1,11 @@
 # 👥 TEAM.md — Tài liệu phối hợp & tiến độ dự án AIC 2026
 
+> **HISTORICAL — NOT THE CURRENT SYSTEM.** This document describes the pre-AIC
+> SigLIP-based product, including agent, dialogue, sketch and image-query features that
+> the AIC 2026 competition runtime does not contain. The competition runtime supports
+> Textual KIS, Q&A and TRAKE only. See `docs/DOCUMENTATION_MAP.md`.
+
+
 > Đọc file này trước khi bắt tay vào code. Mục tiêu: người mới nắm được **dự án làm
 > gì · đang tới đâu · file nào làm gì · setup thế nào · làm gì tiếp theo**. Đặc tả kỹ
 > thuật đầy đủ nằm ở `CLAUDE.md` (blueprint, chỉ có trên máy — không đẩy lên GitHub).

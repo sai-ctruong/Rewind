@@ -146,8 +146,10 @@ a:hover { text-decoration: underline; }
         <div class="panel-header"><h2>Textual KIS</h2><span class="badge blue">Top 100 cap</span></div>
         <label>Query<textarea id="kis-query" required></textarea></label>
         <div class="two">
-          <label>Top K<input id="kis-topk" type="number" min="1" max="100" value="20"></label>
-          <label>Rerank<select id="kis-rerank"><option value="0">Off</option><option value="1">On</option></select></label>
+          <!-- Display only. The result batch always holds the full competition pool
+               (up to 100 rows); this controls how many cards are drawn. -->
+          <label>Show top<input id="kis-display" type="number" min="1" max="100" value="20"></label>
+          <span id="kis-pool-status" class="badge"></span>
         </div>
         <div class="two">
           <label>Local refinement<select id="kis-refine"><option value="config">Follow config</option><option value="0">Off (compare)</option></select></label>
@@ -200,7 +202,8 @@ a:hover { text-decoration: underline; }
         <label>Ordered events<textarea id="trake-events" required placeholder="event 1&#10;event 2"></textarea></label>
         <div class="two">
           <label>Per event K<input id="trake-perk" type="number" min="1" max="100" value="20"></label>
-          <label>Max chains<input id="trake-max" type="number" min="1" max="100" value="20"></label>
+          <!-- Display only; the batch keeps every complete sequence up to the 100 cap. -->
+          <label>Show top<input id="trake-display" type="number" min="1" max="100" value="20"></label>
         </div>
         <button class="primary">Search Chain</button>
       </form>
@@ -502,12 +505,19 @@ $("gv-folder-btn").onclick = async () => { const btn = $("gv-folder-btn"); setBu
 $("gv-save").onclick = async () => { try { await api("/api/video/save", jsonBody({})); await refresh(); } catch(e) { alert(e.message); } };
 $("kis-form").onsubmit = async (ev) => {
   ev.preventDefault();
-  const body = { video: currentVideo(), query: $("kis-query").value, topk: $("kis-topk").value, rerank: $("kis-rerank").value === "1" };
+  // `display_limit` controls RENDERING only. The engine always retrieves the full
+  // competition pool and the result batch keeps every row, so exporting after looking
+  // at 20 cards still submits the full validated Top-100.
+  const body = { video: currentVideo(), query: $("kis-query").value, display_limit: $("kis-display").value };
   if ($("kis-refine").value === "0") body.refine = false;
   const j = await api("/api/video/search", jsonBody(body));
   state.activeTask = "kis";
   await refreshBatch("kis", j.result_batch);
-  renderFrames("kis-results", withRowIds("kis", j.results, j.result_batch));
+  const shown = Math.max(1, Math.min(Number(j.display_limit || j.count), j.count));
+  renderFrames("kis-results", withRowIds("kis", j.results, j.result_batch).slice(0, shown));
+  const pool = $("kis-pool-status");
+  pool.className = "badge blue";
+  pool.textContent = `showing ${shown} of ${j.count} · batch keeps ${(j.result_batch || {}).row_count || j.count} for export`;
   const r = j.refinement || {}, d = j.diagnostics || {};
   const status = $("kis-refine-status");
   status.className = "badge " + (d.refinement_triggered ? "ok" : "");
@@ -570,13 +580,15 @@ $("trake-form").onsubmit = async (ev) => {
   ev.preventDefault();
   $("trake-status").textContent = "Aligning ordered events...";
   const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean);
-  const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, max_results: $("trake-max").value }));
+  const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, display_limit: $("trake-display").value }));
   state.activeTask = "trake";
   await refreshBatch("trake", j.result_batch);
   state.trakeEventCount = j.event_count || events.length;
-  renderChains(j.matches, j.event_count, j.result_batch);
+  const shownChains = Math.max(1, Math.min(Number(j.display_limit || j.count), j.count));
+  renderChains((j.matches || []).slice(0, shownChains), j.event_count, j.result_batch);
   const d = j.diagnostics || {};
-  $("trake-status").textContent = `${j.count} complete alignments (${d.discarded_incomplete_alignments || 0} incomplete discarded, `
+  $("trake-status").textContent = `showing ${shownChains} of ${j.count} · `
+    + `${j.count} complete alignments (${d.discarded_incomplete_alignments || 0} incomplete discarded, `
     + `${d.recovered_events || 0} events recovered) · ${d.alignment_method || "beam_dp"} · refinement ${(j.refinement || {}).status || "n/a"}`;
   renderOutput("trake-output", state.rows.trake);
 };

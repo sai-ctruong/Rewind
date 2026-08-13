@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .config import DATASET_SCOPE_MODES, DatasetScopeConfig
-from .video_inventory import existing_video_ids_with_retrieval_support
+from .video_inventory import (
+    existing_video_ids_with_retrieval_support,
+    retrieval_ready_video_ids,
+)
 
 FULL_DATASET_SCOPE = DatasetScopeConfig(include_patterns=("*",), exclude_patterns=())
 
@@ -86,15 +89,27 @@ def resolve_dataset_scope(
 ) -> ResolvedDatasetScope:
     """Turn a configured scope into one whose data-dependent parts are already read.
 
-    Mode `existing_videos` is resolved here, by intersecting the MP4s present under
-    `DATA_ROOT` with the videos that have map + CLIP support. Resolution happens once
-    per run so that inspection, index build, and cache identity all see the same IDs.
+    Two data-dependent modes, deliberately separate:
+
+    `retrieval_ready`
+        canonical ID INTERSECT valid map INTERSECT valid CLIP feature. This is global
+        retrieval coverage: what the coarse index can search at all.
+
+    `existing_videos`
+        the above INTERSECT an MP4 on disk. This is *visual* coverage: preview, local
+        refinement and visual Q&A. Using it as the retrieval scope discards searchable
+        videos for a reason retrieval does not care about.
+
+    Resolution happens once per run so that inspection, index build, and cache identity
+    all see the same IDs.
     """
     if isinstance(scope, ResolvedDatasetScope):
         return scope
     normalized = normalize_scope(scope)
     source_video_ids: tuple[str, ...] | None = None
-    if normalized.mode == "existing_videos":
+    if normalized.mode == "retrieval_ready":
+        source_video_ids = tuple(retrieval_ready_video_ids(data_root))
+    elif normalized.mode == "existing_videos":
         source_video_ids = tuple(existing_video_ids_with_retrieval_support(data_root))
     return ResolvedDatasetScope(
         mode=normalized.mode,

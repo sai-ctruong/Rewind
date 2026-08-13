@@ -239,6 +239,21 @@ def summarize_coverage(coverage: Iterable[VideoSupport]) -> dict[str, int]:
     }
 
 
+def retrieval_ready_video_ids(data_root: str | Path) -> tuple[str, ...]:
+    """Every canonical video ID with map + CLIP support, MP4 present or not.
+
+    This is the resolution behind scope mode `retrieval_ready`, and it is the honest
+    definition of what the global coarse index can search: the official CLIP features
+    and the keyframe map are what retrieval consumes. Requiring an MP4 as well — which
+    is what `existing_videos` does — silently deletes retrieval coverage for videos
+    whose supporting data is complete, in exchange for a preview capability that
+    retrieval never uses.
+    """
+    return tuple(
+        item.video_id for item in support_coverage(data_root) if item.retrieval_supported
+    )
+
+
 def existing_video_ids_with_retrieval_support(data_root: str | Path) -> tuple[str, ...]:
     """The video-backed development set: MP4s present INTERSECT map + CLIP present.
 
@@ -260,6 +275,7 @@ __all__ = [
     "collection_of",
     "discover_videos",
     "existing_video_ids_with_retrieval_support",
+    "retrieval_ready_video_ids",
     "summarize_coverage",
     "support_coverage",
     "video_path_for",

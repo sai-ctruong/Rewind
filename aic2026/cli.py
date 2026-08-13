@@ -69,8 +69,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scope-existing-videos",
         action="store_true",
         help=(
-            "Restrict the dataset to videos whose original MP4 is on disk AND that have "
-            "map-keyframes plus CLIP features. Resolved from DATA_ROOT at run time, and "
+            "VISUAL development scope: videos whose original MP4 is on disk AND that "
+            "have map-keyframes plus CLIP features. Smaller than the searchable "
+            "collection; use --scope-retrieval-ready for global retrieval coverage."
+        ),
+    )
+    p.add_argument(
+        "--scope-retrieval-ready",
+        action="store_true",
+        help=(
+            "GLOBAL retrieval scope: every video with map-keyframes plus CLIP features, "
+            "whether or not its MP4 is present. Resolved from DATA_ROOT at run time, and "
             "combinable with --video-include/--video-exclude."
         ),
     )
@@ -140,6 +149,9 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=5000)
     serve.add_argument("--activate", action=argparse.BooleanOptionalAction, default=True,
                        help="Load the index at startup instead of waiting for a UI click.")
+    serve.add_argument("--prewarm", action=argparse.BooleanOptionalAction, default=None,
+                       help="Load the text encoder at startup. Moves the one-off model "
+                            "load out of the first query; changes no result.")
     return p
 
 
@@ -160,6 +172,8 @@ def cli_overrides(args: argparse.Namespace) -> dict[str, Any]:
     # leaves the YAML scope untouched; settings.yaml is never rewritten.
     _set_nested(overrides, ("dataset", "scope", "include_patterns"), args.video_include)
     _set_nested(overrides, ("dataset", "scope", "exclude_patterns"), args.video_exclude)
+    if getattr(args, "scope_retrieval_ready", False):
+        _set_nested(overrides, ("dataset", "scope", "mode"), "retrieval_ready")
     if getattr(args, "scope_existing_videos", False):
         _set_nested(overrides, ("dataset", "scope", "mode"), "existing_videos")
     _set_nested(overrides, ("runtime", "production_mode"), args.production_mode)
@@ -290,6 +304,17 @@ def _serve_command(args: argparse.Namespace, app_config, config_path: str) -> in
             f"{response.get_json()['runtime']['generation']})",
             file=sys.stderr,
         )
+        # Optional prewarm: moves the one-off text-encoder load out of the first query.
+        # It changes when the model loads, never what it produces.
+        if args.prewarm or app_config.runtime.prewarm_enabled:
+            engine = app.extensions["aic_runtime_state"].get_state().engine
+            if engine is not None:
+                state = engine.prewarm(force=bool(args.prewarm))
+                print(
+                    f"Prewarm: {state['model_state']} in {state['prewarm_ms']}ms"
+                    + (f" ({state['error']})" if state.get("error") else ""),
+                    file=sys.stderr,
+                )
     print(
         f"rewind-aic2026 {PROJECT_VERSION} serving on http://{args.host}:{args.port} "
         f"(health: /api/health)",

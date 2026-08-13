@@ -1,5 +1,10 @@
 # Huong Dan Chay AIC 2026 Rewind
 
+> **HISTORICAL — NOT THE CURRENT SYSTEM.** User guide for the earlier multi-tab UI.
+> For the competition system see `README.md` and
+> `docs/COMPETITION_RELEASE_CHECKLIST.md`.
+
+
 ## 1. Chay test
 
 ```powershell

@@ -241,9 +241,7 @@ ranking:
   max_frames_per_video: 12
   min_frame_gap: 30
   neighbor_offsets: [-2, -1, 1, 2]
-  diversity_lambda: 0.25
   precision_head_size: 5
-  recall_tail_size: 50
 
 refinement:
   enabled: true
@@ -275,8 +273,6 @@ qa:
 evaluation:
   ks: [1, 5, 20, 50, 100]
   output_dir: "evaluation/benchmarks/aic2026"
-  save_predictions: true
-  save_errors: true
 # -----------------------------------------------------------------------------
 # AIC 2026 runtime config used by aic2026.config.AppConfig.
 # Legacy top-level sections above are retained for older modules/tests.
@@ -387,9 +383,7 @@ aic2026:
     max_frames_per_video: 12
     min_frame_gap: 30
     neighbor_offsets: [-2, -1, 1, 2]
-    diversity_lambda: 0.25
     precision_head_size: 5
-    recall_tail_size: 50
 
   refinement:
     enabled: true
@@ -463,7 +457,6 @@ aic2026:
       # Hard ceiling on frames decoded for one TRAKE query.
       max_frames_per_query: 96
     top_video_hypotheses: 20
-    alignments_per_video: 1
     beam_width: 8
     min_gap_s: 0.001
     max_gap_s: null
@@ -471,7 +464,6 @@ aic2026:
     missing_event_penalty: 0.35
     transition_penalty: 0.02
     gap_penalty: 0.001
-    sequence_overlap_threshold: 0.8
     final_top_k: 100
 
   qa:
@@ -513,8 +505,6 @@ aic2026:
   evaluation:
     ks: [1, 5, 20, 50, 100]
     output_dir: evaluation/benchmarks/aic2026
-    save_predictions: true
-    save_errors: true
 
   ui:
     enabled: true

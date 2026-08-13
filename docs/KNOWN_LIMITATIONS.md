@@ -90,19 +90,29 @@ row is not a partial answer, it is a malformed one.
 
 ## 6. OCR, ASR and frame captions do not exist in this data
 
-Three channels are constructed, enabled, and report `available: false` with
+Three channels are constructed and report `available: false` with
 `no_populated_source_data`. The sources are genuinely empty in the BTC data available
-here.
+here. Nothing is substituted for them: object labels are not OCR, and media metadata is
+not a frame caption.
 
-They are left **enabled on purpose**. Disabling them would make a data absence look like
-a configuration choice. Nothing is substituted for them: object labels are not OCR, and
-media metadata is not a frame caption.
+**R0 update:** they are now **disabled** in `configs/competition.yaml`. Disabling does not
+hide the absence — each channel still measures its own source and still reports
+`available: false, no_populated_source_data`, and readiness lists them as `INFO` rather
+than `WARN`. Re-enable them the moment a source is populated.
 
 ## 7. Dataset scope is 29 videos, not the full collection
 
 `scope.mode: existing_videos` selects videos that have an MP4 **and** map + CLIP support:
 29 of 873 discovered videos on this machine. The other 844 are excluded because their
 MP4s were not downloaded, not because they are broken.
+
+**R0 update — this is a configuration choice, not a capability limit.** All 873 videos are
+retrieval-ready (map + CLIP + objects + media-info all present); only 29 have MP4s. Scope
+mode `retrieval_ready` searches all 873 and `configs/competition_full_retrieval.yaml`
+uses it. That config has **no index built** in this checkout: building it is a large,
+deliberate step, and until it is built the shipped competition config still searches 29
+videos. What an absent MP4 actually costs is preview, local refinement and visual Q&A —
+never retrieval.
 
 Everything measured in this repository was measured on those 29 videos (7,800 frames).
 Latency, memory and candidate counts will change on the full collection; the structural

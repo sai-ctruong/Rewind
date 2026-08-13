@@ -7,6 +7,7 @@ refusal rather than a quiet zero, while leaving every structural diagnostic avai
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -127,11 +128,34 @@ def test_ranked_r_scores_still_requires_a_gt_object() -> None:
 # ------------------------------------------------------- no AIC labels are shipped
 
 
-def test_repository_ships_no_aic_ground_truth() -> None:
-    """If this ever fails, real labels arrived and the guard's premise changed."""
+def test_repository_ships_only_label_templates() -> None:
+    """If this ever fails, real labels arrived and the guard's premise changed.
+
+    Templates are allowed and are not ground truth: they carry placeholder ids and
+    instructions, and R0's schema guard refuses any file that does not declare a human
+    annotator anyway.
+    """
     labels_dir = ROOT / "evaluation" / "labels"
-    shipped = [p.name for p in labels_dir.glob("*") if p.is_file()]
-    assert shipped == ["template.jsonl"], shipped
+    shipped = sorted(p.name for p in labels_dir.glob("*") if p.is_file())
+    assert shipped == ["private_dev_template.json", "template.jsonl"], shipped
+    for name in shipped:
+        assert "template" in name, f"{name} is not a template"
+        # Placeholder rows only: a template must not name a video from the real
+        # collection, because that is how a template becomes a "label set".
+        text = (labels_dir / name).read_text(encoding="utf-8")
+        for video_id in re.findall(r"L\d{2}_V\d{3}", text):
+            assert video_id.startswith("L00_") or "REPLACE" in text, video_id
+
+
+def test_shipped_private_template_is_not_usable_as_official_gt() -> None:
+    from evaluation.ground_truth import parse_ground_truth
+
+    payload = json.loads(
+        (ROOT / "evaluation" / "labels" / "private_dev_template.json").read_text(encoding="utf-8")
+    )
+    gt = parse_ground_truth(payload)
+    assert gt.is_official is False
+    assert "NOT OFFICIAL" in gt.banner
 
 
 def test_local_demo_labels_are_not_aic_videos() -> None:
@@ -140,8 +164,6 @@ def test_local_demo_labels_are_not_aic_videos() -> None:
     AIC video ids look like `L21_V001`. Anything in this file matching that shape would
     be a self-authored label masquerading as official ground truth.
     """
-    import re
-
     rows = json.loads((ROOT / "evaluation" / "labels.json").read_text(encoding="utf-8"))
     for row in rows:
         assert not re.fullmatch(r"L\d{2}_V\d{3}", str(row.get("video_id", "")))

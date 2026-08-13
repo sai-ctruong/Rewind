@@ -45,6 +45,10 @@ SUBMISSION_VALIDATION_VERSION = 1
 STATUS_PASS = "PASS"
 STATUS_WARN = "WARN"
 STATUS_FAIL = "FAIL"
+# Reported, never counted. A capability the operator deliberately switched off is a fact
+# about the configuration, not a defect: warning about an intentionally disabled empty
+# source trains the reader to ignore warnings.
+STATUS_INFO = "INFO"
 
 READY = "READY"
 READY_WITH_WARNINGS = "READY_WITH_WARNINGS"
@@ -93,6 +97,7 @@ class SystemProfile:
     channel_schema_version: int
     submission_validation_version: int
     retrieval_channels: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
     kis: dict[str, Any] = field(default_factory=dict)
     qa: dict[str, Any] = field(default_factory=dict)
     trake: dict[str, Any] = field(default_factory=dict)
@@ -130,6 +135,10 @@ class ReadinessReport:
         return tuple(item for item in self.checks if item.status == STATUS_WARN)
 
     @property
+    def informational(self) -> tuple[CheckResult, ...]:
+        return tuple(item for item in self.checks if item.status == STATUS_INFO)
+
+    @property
     def ready(self) -> bool:
         return self.status in {READY, READY_WITH_WARNINGS}
 
@@ -144,6 +153,7 @@ class ReadinessReport:
             "checks": [item.to_dict() for item in self.checks],
             "failures": [item.name for item in self.failures],
             "warnings": [item.name for item in self.warnings],
+            "informational": [item.name for item in self.informational],
             "profile": None if self.profile is None else self.profile.to_dict(),
             "note": (
                 "Readiness is STRUCTURAL: it reports whether the system can run and "
@@ -234,6 +244,18 @@ def build_system_profile(
         channel_schema_version=CHANNEL_SCHEMA_VERSION,
         submission_validation_version=SUBMISSION_VALIDATION_VERSION,
         retrieval_channels=channels,
+        runtime={
+            "device": str(config.runtime.device),
+            "production_mode": bool(config.runtime.production_mode),
+            "prewarm_enabled": bool(config.runtime.prewarm_enabled),
+            "query_embedding_cache_size": int(config.runtime.query_embedding_cache_size),
+            "query_cache": None if engine is None else engine.query_cache_status(),
+            "model_state": (
+                None
+                if engine is None
+                else str((engine.encoder_status() or {}).get("state") or "unknown")
+            ),
+        },
         kis={
             "refinement_mode": refinement.effective_mode,
             "candidate_budget": int(refinement.candidate_budget),
@@ -428,12 +450,25 @@ def evaluate_readiness(
                         f"Channel {name} is available ({info.get('records')} records).",
                     )
                 )
+            elif not info.get("enabled", True):
+                # Disabled on purpose. The absence of its source data is still reported,
+                # so "off because empty" stays distinguishable from "off for no reason".
+                checks.append(
+                    CheckResult(
+                        f"channel_{name}",
+                        STATUS_INFO,
+                        f"Channel {name} is disabled by configuration "
+                        f"({info.get('reason') or 'no reason recorded'}).",
+                        {"enabled": False, "available": info.get("available")},
+                    )
+                )
             else:
                 checks.append(
                     CheckResult(
                         f"channel_{name}",
                         STATUS_WARN,
-                        f"Channel {name} is not contributing: {info.get('reason')}.",
+                        f"Channel {name} is enabled but not contributing: "
+                        f"{info.get('reason')}.",
                     )
                 )
         # Visual access is what makes local refinement and visual evidence possible.
@@ -536,6 +571,7 @@ __all__ = [
     "READY_WITH_WARNINGS",
     "REQUIRED_CHANNELS",
     "STATUS_FAIL",
+    "STATUS_INFO",
     "STATUS_PASS",
     "STATUS_WARN",
     "SUBMISSION_VALIDATION_VERSION",

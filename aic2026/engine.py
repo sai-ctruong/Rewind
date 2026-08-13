@@ -45,6 +45,13 @@ from .local_refinement import (
     LocalRefinementResult,
     RefinementCandidate,
 )
+from .cost import QueryCost
+from .query_cache import (
+    QueryEmbeddingCache,
+    QueryEmbeddingKey,
+    QueryExecutionContext,
+    template_signature,
+)
 from .query_normalization import QueryRepresentation, normalize_query
 from .retrieval_channels import (
     CHANNEL_BM25,
@@ -61,6 +68,7 @@ from .qa import (
     ANSWER_STATUS_ABSTAINED,
     ANSWER_STATUS_ANSWERED,
     ANSWER_STATUS_BACKEND_FAILED,
+    ANSWER_STATUS_BUDGET_EXHAUSTED,
     ANSWER_STATUS_VISUAL_UNAVAILABLE,
     ANSWER_TYPE_AUTO,
     UNKNOWN_ANSWER,
@@ -153,6 +161,7 @@ class KISSearchResult:
     refinement_ms: float = 0.0
     total_search_ms: float = 0.0
     coarse: Optional["CoarseSearchResult"] = None
+    cost: Optional[QueryCost] = None
 
     def diagnostics(self) -> dict:
         """Structural counters and timings. Never an accuracy measurement."""
@@ -170,6 +179,8 @@ class KISSearchResult:
             base["channels"] = self.coarse.diagnostics
         base["coarse_search_ms"] = round(self.coarse_search_ms, 3)
         base["total_search_ms"] = round(self.total_search_ms, 3)
+        if self.cost is not None:
+            base["cost"] = self.cost.to_dict()
         return base
 
 
@@ -334,6 +345,18 @@ class AICCompetitionEngine:
         self._raws_by_video: Optional[dict[str, list]] = None
         # Channel indices are built once, on first use, and reused for every query.
         self._channels: Optional[RetrievalChannelRegistry] = None
+        # Bounded, in-process, never persisted. The encoder is deterministic, so a hit
+        # returns the identical vector; the key carries model, dimension and template
+        # identity so it cannot survive a change to any of them.
+        self._query_embeddings = QueryEmbeddingCache(
+            self.app_config.runtime.query_embedding_cache_size
+        )
+        self._encoder_model_name = str(effective_model)
+        self._template_signature = template_signature(self.query_templates)
+        # Process-lifetime counters; per-query cost is their delta across one search.
+        self._encode_calls = 0
+        self._encode_vectors = 0
+        self._encode_cache_hits = 0
 
     def _build_frame_scorer(self) -> Optional[FrameScorer]:
         """Construct the configured visual scorer without loading its weights.
@@ -698,6 +721,35 @@ class AICCompetitionEngine:
         }
 
     def encode_query(self, query: str) -> np.ndarray:
+        """Prompt-ensembled, L2-normalized query embedding, cached per engine.
+
+        The cache is an exact-recomputation saver, not an approximation: the same key
+        can only produce the vector the encoder would have produced. A TRAKE query alone
+        re-asks one event text at several candidate depths, so the saved work is real.
+        """
+        key = QueryEmbeddingKey(
+            query=str(query),
+            model_name=self._encoder_model_name,
+            feature_dim=int(self.feature_dim),
+            template_signature=self._template_signature,
+        )
+        if self._query_embeddings.peek(key) is not None:
+            self._encode_cache_hits += 1
+        else:
+            self._encode_calls += 1
+            self._encode_vectors += len(self.query_templates)
+        return self._query_embeddings.get_or_compute(key, lambda: self._encode_query_uncached(query))
+
+    def _cost_snapshot(self) -> tuple[int, int, int]:
+        return (self._encode_calls, self._encode_vectors, self._encode_cache_hits)
+
+    def _record_encoder_cost(self, cost: QueryCost, before: tuple[int, int, int]) -> None:
+        """Attribute encoder work done since `before` to this query."""
+        cost.text_encoder_calls += self._encode_calls - before[0]
+        cost.text_vectors_computed += self._encode_vectors - before[1]
+        cost.text_encoder_cache_hits += self._encode_cache_hits - before[2]
+
+    def _encode_query_uncached(self, query: str) -> np.ndarray:
         variants = encode_many(
             self.text_encoder,
             [tpl.format(q=query) for tpl in self.query_templates],
@@ -705,6 +757,44 @@ class AICCompetitionEngine:
         )
         mean = np.mean(variants, axis=0).astype(np.float32)
         return l2_normalize(mean.reshape(1, -1))[0]
+
+    def prewarm(self, *, force: bool = False) -> dict:
+        """Load the text encoder now instead of inside the first query.
+
+        This moves a one-off cost and nothing else: the model, its weights, the produced
+        vectors and every ranking are identical either way. Off unless configured, so a
+        unit test never pays for it. Failure is reported, never raised — a system that
+        cannot prewarm can still serve, it just pays on the first query as before.
+        """
+        state = {
+            "prewarm_enabled": bool(self.app_config.runtime.prewarm_enabled),
+            "requested": bool(force or self.app_config.runtime.prewarm_enabled),
+            "performed": False,
+            "prewarm_ms": 0.0,
+            "model_state": "not_loaded",
+            "error": None,
+        }
+        if not state["requested"]:
+            return state
+        started = time.perf_counter()
+        try:
+            status = self.encoder_status(initialize=True)
+            state["model_state"] = str(status.get("state") or ("ready" if status.get("ready") else "unknown"))
+            state["performed"] = True
+        except Exception as exc:  # noqa: BLE001 - a failed prewarm must not block serving
+            state["model_state"] = "failed"
+            state["error"] = f"{type(exc).__name__}: {exc}"
+        state["prewarm_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+        return state
+
+    def query_cache_status(self) -> dict:
+        """Bounded-cache diagnostics. Structural counters only."""
+        return {
+            "query_embeddings": self._query_embeddings.to_dict(),
+            "model_name": self._encoder_model_name,
+            "template_signature": self._template_signature,
+            "persisted": False,
+        }
 
     def encoder_status(self, *, initialize: bool = False) -> dict:
         status_fn = getattr(self.text_encoder, "status", None)
@@ -716,15 +806,6 @@ class AICCompetitionEngine:
         else:
             status = encoder_status(self.text_encoder, self.feature_dim)
         return status.to_dict()
-
-    def search(
-        self,
-        entry: VideoIndexEntry,
-        query: str,
-        top_k: int = 20,
-        rerank: bool = False,
-    ) -> list[Candidate]:
-        return self.search_candidates(query, top_k=top_k)
 
     @property
     def channels(self) -> RetrievalChannelRegistry:
@@ -746,10 +827,15 @@ class AICCompetitionEngine:
         top_k: int = 20,
         filters: Optional[dict] = None,
         depth_scale: float = 1.0,
+        context: Optional[QueryExecutionContext] = None,
+        cost: Optional[QueryCost] = None,
     ) -> list[Candidate]:
-        return self.search_candidates_detailed(
-            query, top_k=top_k, filters=filters, depth_scale=depth_scale
-        ).candidates
+        coarse = self.search_candidates_detailed(
+            query, top_k=top_k, filters=filters, depth_scale=depth_scale, context=context
+        )
+        if cost is not None:
+            self._record_channel_cost(cost, coarse)
+        return coarse.candidates
 
     def search_candidates_detailed(
         self,
@@ -758,6 +844,7 @@ class AICCompetitionEngine:
         top_k: int = 20,
         filters: Optional[dict] = None,
         depth_scale: float = 1.0,
+        context: Optional[QueryExecutionContext] = None,
     ) -> "CoarseSearchResult":
         """Coarse retrieval over the union of every enabled, available channel.
 
@@ -768,7 +855,13 @@ class AICCompetitionEngine:
         """
         started = time.perf_counter()
         top_k = max(1, min(self.fusion_depth, int(top_k)))
-        representation = normalize_query(query)
+        # Normalization is deterministic, so within one request the same query text can
+        # reuse its representation instead of re-folding accents and re-expanding terms.
+        representation = (
+            normalize_query(query)
+            if context is None
+            else context.representation(query, lambda: normalize_query(query))
+        )
         union = self.channels.search(
             representation,
             depths=channel_depths(self.app_config.retrieval_channels, scale=depth_scale),
@@ -887,12 +980,15 @@ class AICCompetitionEngine:
         configured mode.
         """
         started = time.perf_counter()
+        cost = QueryCost(task="kis", query=str(query))
+        encoder_before = self._cost_snapshot()
         requested = max(1, min(MAX_PREDICTIONS, int(top_k if top_k is not None else self.ranking_config.final_top_k)))
         coarse = self.search_candidates_detailed(
             query, top_k=min(self.fusion_depth, max(requested * 3, 100))
         )
         pool = coarse.candidates
         coarse_ms = (time.perf_counter() - started) * 1000.0
+        self._record_channel_cost(cost, coarse)
 
         refinement: Optional[LocalRefinementResult] = None
         refinement_ms = 0.0
@@ -900,6 +996,7 @@ class AICCompetitionEngine:
             refine_started = time.perf_counter()
             refinement = self._refine_candidates(query, pool)
             refinement_ms = (time.perf_counter() - refine_started) * 1000.0
+            self._record_refinement_cost(cost, refinement, refinement_ms)
         by_keyframe = {} if refinement is None else refinement.by_keyframe()
 
         def nearby(anchor: Candidate, offsets: Sequence[int]) -> list[Candidate]:
@@ -937,6 +1034,8 @@ class AICCompetitionEngine:
         predictions = [
             self._from_candidate(c, refinement=by_keyframe.get(c.keyframe_id)) for c in ranked
         ]
+        self._record_encoder_cost(cost, encoder_before)
+        cost.total_wall_ms = (time.perf_counter() - started) * 1000.0
         return KISSearchResult(
             predictions=predictions,
             refinement=refinement,
@@ -944,7 +1043,32 @@ class AICCompetitionEngine:
             refinement_ms=refinement_ms,
             total_search_ms=(time.perf_counter() - started) * 1000.0,
             coarse=coarse,
+            cost=cost,
         )
+
+    def _record_channel_cost(self, cost: QueryCost, coarse: "CoarseSearchResult") -> None:
+        """Attribute one coarse retrieval's per-channel work to this query."""
+        channels = (coarse.union.diagnostics.get("channels") or {}) if coarse.union else {}
+        for name, info in channels.items():
+            if not info.get("searched", True):
+                continue
+            cost.add_channel_search(
+                name,
+                candidates=int(info.get("candidates_returned") or 0),
+                ms=float(info.get("search_ms") or 0.0),
+            )
+
+    def _record_refinement_cost(
+        self, cost: QueryCost, refinement: Optional[LocalRefinementResult], ms: float
+    ) -> None:
+        """Decoded frames and image embeddings are the expensive part of refinement."""
+        if refinement is None:
+            return
+        diagnostics = dict(getattr(refinement, "diagnostics", {}) or {})
+        decoded = int(diagnostics.get("frames_decoded", 0) or 0)
+        cost.add_decode(requested=decoded, decoded=decoded, ms=ms)
+        # Every decoded frame that was scored required one image embedding.
+        cost.add_image_embeddings(int(diagnostics.get("frames_scored", decoded) or 0))
 
     def _refine_candidates(
         self, query: str, pool: Sequence[Candidate]
@@ -1151,6 +1275,8 @@ class AICCompetitionEngine:
         answer can no longer reach another video because it never leaves its hypothesis.
         """
         started = time.perf_counter()
+        cost = QueryCost(task="qa", query=f"{event_text} | {question}")
+        encoder_before = self._cost_snapshot()
         qa_config = self.qa_config
         retrieval_query_mode = retrieval_query_mode or qa_config.retrieval_query_mode
         answer_type = canonical_answer_type(
@@ -1233,8 +1359,39 @@ class AICCompetitionEngine:
         refinement_calls = 0
         decode_failures = 0
         answered: list[tuple[QAVideoHypothesis, QAEvidenceBundle, QAAnswerResult, float]] = []
+        # A VLM call is the most expensive action in the system, so the number of calls
+        # is capped per query rather than following the hypothesis count. The cap applies
+        # to a backend that really looks at images; a non-visual mock costs nothing and
+        # is recorded as zero VLM calls, which is what the cost trace must show.
+        vlm_budget = max(1, int(qa_config.max_vlm_calls_per_query))
+        vlm_calls_used = 0
+        budget_skipped = 0
 
         for hypothesis in hypotheses:
+            if backend_status.visual_capable and vlm_calls_used >= vlm_budget:
+                # Out of budget. No call, no answer, and explicitly not submittable —
+                # a spending limit is never a reason to guess.
+                budget_skipped += 1
+                bundle = QAEvidenceBundle(
+                    video_id=hypothesis.video_id,
+                    question=question or ground_query,
+                    expected_answer_type=answer_type,
+                    frames=(),
+                )
+                result = QAAnswerResult(
+                    video_id=hypothesis.video_id,
+                    answer="",
+                    normalized_answer=UNKNOWN_ANSWER,
+                    status=ANSWER_STATUS_BUDGET_EXHAUSTED,
+                    backend_type=backend_status.backend_type,
+                    visual=False,
+                    warning=(
+                        f"Per-query VLM budget of {vlm_budget} call(s) was already spent; "
+                        f"video {hypothesis.video_id!r} was not answered."
+                    ),
+                )
+                answered.append((hypothesis, bundle, result, 0.0))
+                continue
             refinement_payload: Optional[dict] = None
             refined_evidence: Optional[QAEvidenceFrame] = None
             if refiner is not None:
@@ -1253,9 +1410,11 @@ class AICCompetitionEngine:
             pool = self._qa_evidence_pool(hypothesis, window_s, scores_by_keyframe)
             if refined_evidence is not None:
                 pool.append(refined_evidence)
+            # Two independent ceilings: how many frames evidence selection may choose,
+            # and how many of them a single backend call is allowed to carry.
             selected = select_evidence_frames(
                 pool,
-                count=evidence_budget,
+                count=min(evidence_budget, int(qa_config.max_visual_frames_per_call)),
                 diversity_s=float(qa_config.evidence_temporal_diversity_s),
             )
             # Pixels are read ONLY for the selected frames, and only when the backend can
@@ -1283,7 +1442,12 @@ class AICCompetitionEngine:
             result = self._answer_one_hypothesis(
                 backend, question or ground_query, bundle, answer_type
             )
-            vqa_ms += (time.perf_counter() - vqa_started) * 1000.0
+            call_ms = (time.perf_counter() - vqa_started) * 1000.0
+            vqa_ms += call_ms
+            # Only a backend that actually looked at images spends VLM budget.
+            if backend_status.visual_capable and result.status != ANSWER_STATUS_VISUAL_UNAVAILABLE:
+                vlm_calls_used += 1
+                cost.add_vlm_call(images=len(bundle.visual_frames), ms=call_ms)
 
             reliability = answer_reliability_score(
                 backend=backend_status,
@@ -1328,6 +1492,16 @@ class AICCompetitionEngine:
             refinement_calls=refinement_calls,
             decode_failures=decode_failures,
         )
+        self._record_encoder_cost(cost, encoder_before)
+        cost.total_wall_ms = (time.perf_counter() - started) * 1000.0
+        info["diagnostics"]["vlm_budget"] = {
+            "max_vlm_calls_per_query": vlm_budget,
+            "vlm_calls_used": vlm_calls_used,
+            "max_visual_frames_per_call": int(qa_config.max_visual_frames_per_call),
+            "hypotheses_skipped_for_budget": budget_skipped,
+            "backend_visual_capable": bool(backend_status.visual_capable),
+        }
+        info["diagnostics"]["cost"] = cost.to_dict()
         return predictions, info
 
     def _qa_image_bytes(self, frame: QAEvidenceFrame) -> Optional[bytes]:
@@ -1652,6 +1826,8 @@ class AICCompetitionEngine:
         event, and anything still incomplete is discarded instead of exported.
         """
         started = time.perf_counter()
+        cost = QueryCost(task="trake", query=" ; ".join(str(item) for item in events))
+        encoder_before = self._cost_snapshot()
         config = self.trake_config
         clean = [event.strip() for event in events if event and event.strip()]
         if len(clean) < 2:
@@ -1661,9 +1837,17 @@ class AICCompetitionEngine:
         refine = config.refinement_enabled if refine is None else bool(refine)
 
         retrieval_started = time.perf_counter()
+        # One execution context per TRAKE request. Event texts are retrieved several
+        # times as the depth expands, and the deterministic parts of that work — query
+        # normalization, the text embedding, an identical (text, depth) retrieval — are
+        # computed once. Request-local on purpose: a dataset change between requests must
+        # never be able to serve a stale candidate list.
+        context = QueryExecutionContext(label="trake")
         depth = {index: per_event_k for index in range(len(clean))}
         by_event: dict[int, list[EventCandidate]] = {
-            index: self._trake_candidates(index, text, per_event_k)
+            index: self._trake_candidates(
+                index, text, per_event_k, context=context, cost=cost
+            )
             for index, text in enumerate(clean)
         }
         initial_counts = {index: len(rows) for index, rows in by_event.items()}
@@ -1674,7 +1858,7 @@ class AICCompetitionEngine:
         # re-retrieved deeper, and only until enough videos can cover every event. A
         # blanket deep retrieval for every event would cost far more for no reason.
         expansion = self._expand_trake_candidates(
-            clean, by_event, depth, report, config, max_results
+            clean, by_event, depth, report, config, max_results, context=context, cost=cost
         )
         report, expansion_info = expansion
         retrieval_ms = (time.perf_counter() - retrieval_started) * 1000.0
@@ -1710,6 +1894,17 @@ class AICCompetitionEngine:
         )
         diagnostics.update(expansion_info)
         diagnostics.update(refinement_stats)
+        diagnostics["query_execution"] = context.to_dict()
+        diagnostics["query_embedding_cache"] = self._query_embeddings.to_dict()
+        self._record_encoder_cost(cost, encoder_before)
+        cost.add_decode(
+            requested=int(refinement_stats.get("frames_decoded", 0) or 0),
+            decoded=int(refinement_stats.get("frames_decoded", 0) or 0),
+            ms=float(refinement_stats.get("refinement_ms", 0.0) or 0.0),
+        )
+        cost.add_image_embeddings(int(refinement_stats.get("frames_scored", 0) or 0))
+        cost.total_wall_ms = (time.perf_counter() - started) * 1000.0
+        diagnostics["cost"] = cost.to_dict()
         # `refine_window_s` now genuinely selects the local sampling window.
         diagnostics["refine_window_s_requested"] = (
             None if refine_window_s is None else float(refine_window_s)
@@ -1729,17 +1924,39 @@ class AICCompetitionEngine:
             diagnostics=diagnostics,
         )
 
-    def _trake_candidates(self, event_index: int, text: str, depth: int) -> list[EventCandidate]:
+    def _trake_candidates(
+        self,
+        event_index: int,
+        text: str,
+        depth: int,
+        context: Optional[QueryExecutionContext] = None,
+        cost: Optional[QueryCost] = None,
+    ) -> list[EventCandidate]:
         """Retrieve one event's candidates through the EXISTING retrieval path.
 
         Phase 8 deliberately does not add object/OCR/ASR generators; deeper coverage comes
         from asking the same CLIP+BM25 fusion for more rows.
+
+        R0 reuses an identical `(text, depth)` result within one request — two events
+        that share wording, or a stage that asks for a depth already retrieved. It does
+        NOT slice a deeper result to answer a shallower request: channel scores are
+        rank-normalized over the pool each channel returned, so a top-40 slice of a
+        depth-300 retrieval is not the same list as a depth-40 retrieval. Reuse is only
+        allowed where the result is provably identical.
         """
+        key = (str(text), int(depth))
+        if context is not None:
+            cached = context.channel_results.get(key)
+            if cached is not None:
+                context.reused_channel_results += 1
+                return [replace(row, event_index=event_index) for row in cached]
         rows: list[EventCandidate] = []
         # Expansion must deepen the CHANNELS, not just widen the fused slice; otherwise a
         # deeper request would silently fall back to the original channel depths.
         scale = max(1.0, float(depth) / max(1.0, float(self.trake_config.per_event_top_k)))
-        for candidate in self.search_candidates(text, top_k=int(depth), depth_scale=scale):
+        for candidate in self.search_candidates(
+            text, top_k=int(depth), depth_scale=scale, context=context, cost=cost
+        ):
             raw = self.entry.raws.get(candidate.keyframe_id)
             if raw is None or raw.frame_idx is None:
                 # An unmapped keyframe has no official frame to submit, so it cannot
@@ -1755,6 +1972,8 @@ class AICCompetitionEngine:
                     score=float(candidate.score),
                 )
             )
+        if context is not None:
+            context.channel_results[key] = tuple(rows)
         return rows
 
     def _expand_trake_candidates(
@@ -1765,6 +1984,8 @@ class AICCompetitionEngine:
         report,
         config,
         max_results: int,
+        context: Optional[QueryExecutionContext] = None,
+        cost: Optional[QueryCost] = None,
     ):
         """Re-retrieve only the events that are blocking completeness, and only deeper.
 
@@ -1804,7 +2025,9 @@ class AICCompetitionEngine:
                 if wanted <= depth[index]:
                     continue
                 before = len(by_event[index])
-                by_event[index] = self._trake_candidates(index, events[index], wanted)
+                by_event[index] = self._trake_candidates(
+                    index, events[index], wanted, context=context, cost=cost
+                )
                 depth[index] = wanted
                 info["new_candidates_added"] += max(0, len(by_event[index]) - before)
                 if index not in info["events_expanded"]:

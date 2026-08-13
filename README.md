@@ -3,7 +3,14 @@
 Competition system for **Textual KIS**, grounded **Q&A** and ordered-event **TRAKE** over
 the AIC keyframe collection.
 
-Version `0.11.0-aic2026`.
+Those three tasks are the entire supported surface. There is no agent, no dialogue
+module, no sketch or image query, no user-feedback search and no generic AVS mode; older
+documents that describe them are labelled HISTORICAL in
+[docs/DOCUMENTATION_MAP.md](docs/DOCUMENTATION_MAP.md).
+
+Version `0.11.0-aic2026` (frozen release, tag `aic2026-competition-ready`).
+Research continues on `research/aic2026-metric-budget` — see
+[docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md](docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md).
 
 > **No AIC ground truth exists in this repository.** Nothing here reports accuracy,
 > recall or a Final Score for this system, and no parameter has been tuned against
@@ -49,9 +56,17 @@ Full procedure: [docs/COMPETITION_RELEASE_CHECKLIST.md](docs/COMPETITION_RELEASE
 BM25 over searchable text, detected object labels, and media metadata. Each generates its
 own candidates and the pool is their union with per-channel provenance, so an
 object-only or metadata-only frame can enter the results. OCR, ASR and frame-caption
-channels exist and honestly report `available: false` — those sources are empty in this
-data. Results are fused (rank-normalized, adaptive), then diversified into a video-aware
+channels exist but are **disabled** in the competition config because their source data
+is empty here; they still measure and report that emptiness rather than hiding it.
+Results are fused (rank-normalized, adaptive), then diversified into a video-aware
 Top-100.
+
+**Two scopes, deliberately different** — `retrieval_ready` (map + CLIP) is what the
+global index can search; `existing_videos` additionally requires an MP4 and is a *visual*
+development scope for preview, refinement and visual Q&A. On this data root that is 873
+videos versus 29. `configs/competition.yaml` uses the visual scope (it matches the built
+index); `configs/competition_full_retrieval.yaml` uses the global one and needs its own
+deliberate index build.
 
 **Vietnamese queries** — the original query goes to CLIP unchanged; accent-folded and
 lightly expanded views go to the lexical channels. Negation and temporal markers are
@@ -77,6 +92,10 @@ export results produced before the current dataset activation.
 
 **Reproducibility** — `system-profile` records the version, commit, config hash, cache
 fingerprint, dataset hash, schema versions and capability state of a run (Phase 11).
+
+**Cost accounting** — every query records what it spent: encoder calls, per-channel
+searches, decoded frames, image embeddings, VLM calls, wall time (R0). These are work
+counters, never quality signals.
 
 ## CLI
 
@@ -130,7 +149,9 @@ scope.
 
 | Document | Contents |
 |---|---|
+| [docs/DOCUMENTATION_MAP.md](docs/DOCUMENTATION_MAP.md) | Every document classified CURRENT / HISTORICAL / SUPERSEDED. |
 | [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) | What this system cannot do or has not proven. Read this first. |
+| [docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md](docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md) | The R0/R1 research programme and its evaluation protocol. |
 | [docs/COMPETITION_RELEASE_CHECKLIST.md](docs/COMPETITION_RELEASE_CHECKLIST.md) | Pre-session, per-query and pre-submission procedure. |
 | [PHASE_REPORT.md](PHASE_REPORT.md) | Chronological history of every phase. |
 | [docs/CURRENT_IMPLEMENTATION_AUDIT.md](docs/CURRENT_IMPLEMENTATION_AUDIT.md) | Item-by-item audit with final FIXED / PARTIAL / OPEN status. |

@@ -1,5 +1,10 @@
 # KISC_module / Rewind - AIC 2026 Competition Context
 
+> **HISTORICAL — NOT THE CURRENT SYSTEM.** A context brief for the pre-AIC product.
+> The competition runtime supports Textual KIS, Q&A and TRAKE only, and contains no
+> agent, dialogue, sketch or image-query search. See `docs/DOCUMENTATION_MAP.md`.
+
+
 ## Goal
 This repository is now oriented to the AIC 2026 preliminary round, with only three official tasks:
 

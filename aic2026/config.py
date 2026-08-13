@@ -43,9 +43,23 @@ class RuntimeConfig:
     seed: int = 42
     device: str = "auto"
     time_budget_seconds: float = 20.0
+    # Bounded, in-process, never persisted. A cached embedding is the identical vector
+    # the encoder would have produced, so this changes cost and nothing else. The size
+    # is a plain default, not a tuned value.
+    query_embedding_cache_size: int = 256
+    # Load the text encoder at startup instead of inside the first query. It moves the
+    # one-off model load; it cannot change the model, the weights or any result. Off by
+    # default so unit tests never pay for it.
+    prewarm_enabled: bool = False
 
 
-DATASET_SCOPE_MODES = ("patterns", "existing_videos")
+# `retrieval_ready`  : canonical ID with a valid map AND a valid CLIP feature file.
+#                      This is what GLOBAL coarse retrieval actually needs. An absent
+#                      MP4 costs preview, local refinement and visual Q&A — it does not
+#                      make a video unsearchable.
+# `existing_videos`  : the above INTERSECT an MP4 present on disk. A visual-development
+#                      scope, not a definition of retrieval capability.
+DATASET_SCOPE_MODES = ("patterns", "retrieval_ready", "existing_videos")
 
 
 @dataclass(frozen=True)
@@ -192,6 +206,11 @@ class QAConfig:
     answer_temperature: float = 0.0
     # Q&A gets its OWN refinement budget. Phase 5's KIS budget (5 regions x 32 frames)
     # would cost minutes per question across several video hypotheses.
+    # Hard per-query ceilings on visual-backend spending. A VLM call is the single most
+    # expensive action in this system, so the number of calls and the number of images
+    # per call are both capped rather than left to follow the hypothesis count.
+    max_vlm_calls_per_query: int = 8
+    max_visual_frames_per_call: int = 8
     use_local_refinement: bool = False
     refinement_candidate_budget: int = 1
     refinement_max_frames: int = 12
@@ -212,8 +231,9 @@ class SubmissionConfig:
 class EvaluationConfig:
     ks: tuple[int, ...] = (1, 5, 20, 50, 100)
     output_dir: str = "evaluation/benchmarks/aic2026"
-    save_predictions: bool = True
-    save_errors: bool = True
+    # `save_predictions` / `save_errors` were removed in R0: `BenchmarkLogger.write_run`
+    # always writes both files and never consulted them, so setting either to false
+    # promised a behaviour that did not exist.
 
 
 @dataclass(frozen=True)
@@ -268,6 +288,48 @@ def _pattern_tuple(value: Any, name: str) -> tuple[str, ...]:
             raise ConfigError(f"{name} entries must be non-empty strings, got {item!r}")
         patterns.append(item.strip())
     return tuple(patterns)
+
+
+# Keys removed in R0 because a source audit proved nothing read them. They are rejected
+# rather than ignored: `_construct` drops unknown keys silently, and a dropped key in a
+# config that looks tuned is worse than an error that says so. Same policy as
+# `qa.answerer_batch_size` and `dataset.validation.require_keyframe_images`.
+REMOVED_CONFIG_KEYS: dict[str, str] = {
+    "ranking.diversity_lambda": (
+        "ranking.diversity_lambda was removed in R0 because no code ever read it. "
+        "Top-100 diversity is structural: use ranking.min_frame_gap and "
+        "ranking.max_frames_per_video."
+    ),
+    "ranking.recall_tail_size": (
+        "ranking.recall_tail_size was removed in R0 because no code ever read it. "
+        "The recall tail fills every remaining legal slot up to ranking.final_top_k."
+    ),
+    "trake.alignments_per_video": (
+        "trake.alignments_per_video was removed in R0 because no code ever read it; "
+        "Phase 8 replaced it with trake.k_best_per_video (how many sequences are "
+        "enumerated) and trake.max_alignments_per_video (how many survive)."
+    ),
+    "trake.sequence_overlap_threshold": (
+        "trake.sequence_overlap_threshold was removed in R0 because no code ever read "
+        "it; Phase 8 replaced it with trake.sequence_diversity.difference_events and "
+        "trake.sequence_diversity.time_distance_s."
+    ),
+    "evaluation.save_predictions": (
+        "evaluation.save_predictions was removed in R0 because no code ever read it. "
+        "BenchmarkLogger.write_run always writes predictions.jsonl."
+    ),
+    "evaluation.save_errors": (
+        "evaluation.save_errors was removed in R0 because no code ever read it. "
+        "BenchmarkLogger.write_run always writes errors.jsonl."
+    ),
+}
+
+
+def _reject_removed_keys(section: str, raw: Mapping[str, Any] | None) -> None:
+    for key in raw or {}:
+        message = REMOVED_CONFIG_KEYS.get(f"{section}.{key}")
+        if message:
+            raise ConfigError(message)
 
 
 def _refinement_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -378,6 +440,8 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         if key in scope_raw:
             scope_raw[key] = _pattern_tuple(scope_raw[key], f"dataset.scope.{key}")
     dataset_raw["scope"] = _construct(DatasetScopeConfig, scope_raw)
+    for section in ("ranking", "trake", "evaluation"):
+        _reject_removed_keys(section, raw.get(section))
     cfg = AppConfig(
         runtime=_construct(RuntimeConfig, raw.get("runtime")),
         dataset=_construct(DatasetConfig, dataset_raw),
@@ -472,6 +536,12 @@ def _validate_runtime(cfg: RuntimeConfig) -> None:
     _require(
         cfg.device in {"auto", "cpu", "cuda"} or bool(re.fullmatch(r"cuda:\d+", str(cfg.device))),
         'runtime.device must be "auto", "cpu", "cuda", or cuda:N',
+    )
+    # An unbounded cache is refused outright rather than accepted as 0/negative meaning
+    # "no limit": this process must not grow without a ceiling.
+    _require(
+        int(cfg.query_embedding_cache_size) > 0,
+        "runtime.query_embedding_cache_size must be > 0; the cache is always bounded",
     )
 
 
@@ -599,10 +669,8 @@ def _validate_ranking(cfg: RankingConfig) -> None:
     final_top_k = int(cfg.final_top_k)
     _require(1 <= final_top_k <= 100, "ranking.final_top_k must be in [1, 100]")
     _require(int(cfg.precision_head_size) >= 0, "ranking.precision_head_size must be >= 0")
-    _require(int(cfg.recall_tail_size) >= 0, "ranking.recall_tail_size must be >= 0")
     _require(int(cfg.min_frame_gap) >= 0, "ranking.min_frame_gap must be >= 0")
     _require(int(cfg.max_frames_per_video) > 0, "ranking.max_frames_per_video must be > 0")
-    _require(0 <= float(cfg.diversity_lambda) <= 1, "ranking.diversity_lambda must be in [0, 1]")
 
 
 def _validate_refinement(cfg: RefinementConfig) -> None:
@@ -757,6 +825,14 @@ def _validate_qa(cfg: QAConfig) -> None:
         "must stay bounded",
     )
     _require(1 <= int(cfg.max_answers) <= 100, "qa.max_answers must be in [1, 100]")
+    _require(
+        int(cfg.max_vlm_calls_per_query) > 0,
+        "qa.max_vlm_calls_per_query must be > 0; an unbounded VLM budget is not allowed",
+    )
+    _require(
+        0 < int(cfg.max_visual_frames_per_call) <= QA_MAX_EVIDENCE_FRAMES,
+        f"qa.max_visual_frames_per_call must be in [1, {QA_MAX_EVIDENCE_FRAMES}]",
+    )
     try:
         canonical_answer_type(cfg.default_answer_type)
     except ValueError as exc:

@@ -64,7 +64,9 @@ VISUAL_FRAME_NOT_SUBMISSION_FRAME = "VISUAL_FRAME_NOT_SUBMISSION_FRAME"
 # them would fabricate a submission. A deliberate human edit becomes `manual`, which is.
 SUBMITTABLE_QA_STATUSES = frozenset({"answered", "manual"})
 NON_SUBMITTABLE_QA_STATUSES = frozenset(
-    {"abstained", "backend_failed", "visual_unavailable", "mock_backend"}
+    # `budget_exhausted`: the per-query VLM call budget ran out before this hypothesis
+    # was answered. No answer was produced, so there is nothing to submit.
+    {"abstained", "backend_failed", "visual_unavailable", "mock_backend", "budget_exhausted"}
 )
 
 # An official Q&A answer is a short value: a number, a yes/no, a colour, a noun phrase.
