@@ -237,6 +237,52 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class AdaptiveBudgetConfig:
+    """R1: experimental metric-aware compute allocation. OFF by default.
+
+    With `enabled: false` the system reproduces B0_CLEAN exactly — every code path this
+    config gates is skipped, not merely given a neutral parameter.
+
+    The knobs are few and each is a hard budget rather than a tuning dial. Nothing here
+    was fitted to results: no ground truth exists, so a fitted value would be fitted to
+    nothing.
+    """
+
+    enabled: bool = False
+    # Hard ceiling on optional work for one query, in the same arbitrary units as
+    # `QueryCost.cost_proxy`. The controller stops when it cannot afford the next action.
+    max_cost_units: float = 240.0
+
+    # --- uncertainty components (all cheap, all structural) -----------------------
+    uncertainty_margin: bool = True
+    uncertainty_channel_disagreement: bool = True
+    uncertainty_temporal_ambiguity: bool = True
+
+    # --- stages -------------------------------------------------------------------
+    # Rescore neighbouring OFFICIAL mapped keyframes using vectors already in the index.
+    # No decode, no image encoder: it reads what the BTC features already contain.
+    official_grid_enabled: bool = True
+    official_grid_neighbors: int = 4
+    official_grid_max_candidates: int = 20
+    # Staged MP4 sampling under the SAME hard frame budget as the fixed sampler.
+    progressive_video_enabled: bool = True
+    progressive_stage_frames: tuple[int, ...] = (8, 8, 16)
+    progressive_stop_margin: float = 0.15
+    # Metric-aware Top-100 allocation: relevance-dominated head, diverse tail.
+    cutoff_aware_enabled: bool = True
+    cutoff_tail_min_videos: int = 2
+    # Give TRAKE's optional budget to the structurally weakest event first. The cap is
+    # half the per-query ceiling (96 -> 48): high enough that a weak event can actually
+    # be favoured, low enough that no single event can take the whole budget. A cap of
+    # 24 was tried first and was wrong — with three events it binds on every one of them
+    # and silently forces a uniform split, i.e. exactly the behaviour this replaces.
+    trake_weakest_event_enabled: bool = True
+    trake_event_frame_cap: int = 48
+    # Query-conditioned channel depth. CLIP is never skipped.
+    channel_policy_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class UIConfig:
     enabled: bool = True
 
@@ -255,6 +301,7 @@ class AppConfig:
     qa: QAConfig = field(default_factory=QAConfig)
     submission: SubmissionConfig = field(default_factory=SubmissionConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    adaptive_budget: AdaptiveBudgetConfig = field(default_factory=AdaptiveBudgetConfig)
     ui: UIConfig = field(default_factory=UIConfig)
 
 
@@ -399,6 +446,33 @@ def _trake_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return source
 
 
+def _adaptive_budget_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Accept the nested R1 blocks; `AdaptiveBudgetConfig` is a flat frozen dataclass."""
+    source = dict(raw or {})
+    # (block, prefix for `enabled`, prefix for every other key). The two differ where
+    # the flat field names were chosen for readability: `trake_weakest_event_enabled`
+    # but `trake_event_frame_cap`. Mapping both through one prefix silently produced a
+    # `trake_enabled` key that no field matched, so the toggle did nothing.
+    for block, enabled_prefix, key_prefix in (
+        ("uncertainty", "uncertainty_", "uncertainty_"),
+        ("official_grid", "official_grid_", "official_grid_"),
+        ("progressive_video", "progressive_video_", "progressive_"),
+        ("cutoff_aware", "cutoff_aware_", "cutoff_"),
+        ("trake_weakest_event", "trake_weakest_event_", "trake_"),
+        ("channel_policy", "channel_policy_", "channel_policy_"),
+    ):
+        nested = source.pop(block, None)
+        if isinstance(nested, Mapping):
+            for key, value in nested.items():
+                name = f"{enabled_prefix}enabled" if key == "enabled" else f"{key_prefix}{key}"
+                source.setdefault(name, value)
+    if "progressive_stage_frames" in source:
+        value = source["progressive_stage_frames"]
+        if isinstance(value, (list, tuple)):
+            source["progressive_stage_frames"] = tuple(int(item) for item in value)
+    return source
+
+
 def _qa_raw(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Accept the nested Phase 6 `backend:` block and the older flat Q&A keys."""
     source = dict(raw or {})
@@ -457,6 +531,9 @@ def app_config_from_dict(data: Mapping[str, Any]) -> AppConfig:
         qa=_construct(QAConfig, _qa_raw(raw.get("qa"))),
         submission=_construct(SubmissionConfig, raw.get("submission")),
         evaluation=_construct(EvaluationConfig, raw.get("evaluation")),
+        adaptive_budget=_construct(
+            AdaptiveBudgetConfig, _adaptive_budget_raw(raw.get("adaptive_budget"))
+        ),
         ui=_construct(UIConfig, raw.get("ui")),
     )
     validate_app_config(cfg)
@@ -524,6 +601,7 @@ def validate_app_config(config: AppConfig) -> None:
     _validate_qa(config.qa)
     _validate_submission(config.submission)
     _validate_evaluation(config.evaluation)
+    _validate_adaptive_budget(config.adaptive_budget)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -894,7 +972,43 @@ def _validate_evaluation(cfg: EvaluationConfig) -> None:
         _require(1 <= int(k) <= 100, "evaluation.ks values must be in [1, 100]")
 
 
+def _validate_adaptive_budget(cfg: AdaptiveBudgetConfig) -> None:
+    """Every R1 knob is consumed by code and bounded. No dead knobs, no unbounded ones."""
+    _require(
+        math.isfinite(float(cfg.max_cost_units)) and float(cfg.max_cost_units) > 0,
+        "adaptive_budget.max_cost_units must be finite and > 0; the budget is always hard",
+    )
+    _require(
+        int(cfg.official_grid_neighbors) > 0,
+        "adaptive_budget.official_grid.neighbors must be > 0",
+    )
+    _require(
+        int(cfg.official_grid_max_candidates) > 0,
+        "adaptive_budget.official_grid.max_candidates must be > 0",
+    )
+    stages = [int(value) for value in cfg.progressive_stage_frames]
+    _require(
+        bool(stages) and all(value > 0 for value in stages),
+        "adaptive_budget.progressive_video.stage_frames must be a non-empty list of "
+        "positive frame counts",
+    )
+    _require(
+        0.0 <= float(cfg.progressive_stop_margin) <= 1.0,
+        "adaptive_budget.progressive_video.stop_margin must be in [0, 1]",
+    )
+    _require(
+        int(cfg.cutoff_tail_min_videos) >= 1,
+        "adaptive_budget.cutoff_aware.tail_min_videos must be >= 1",
+    )
+    _require(
+        int(cfg.trake_event_frame_cap) > 0,
+        "adaptive_budget.trake_weakest_event.event_frame_cap must be > 0; no single "
+        "event may consume an unbounded share",
+    )
+
+
 __all__ = [
+    "AdaptiveBudgetConfig",
     "AppConfig",
     "CacheConfig",
     "ConfigError",

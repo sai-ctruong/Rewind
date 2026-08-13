@@ -196,12 +196,168 @@ claimed as one. The encoder-call counts are exact and are the honest measurement
 
 ## 7. R1 — method (experimental, disabled by default)
 
-R1 is gated behind `adaptive_budget.enabled: false`. With it off, the system reproduces
-B0_CLEAN exactly.
+R1 is gated behind `adaptive_budget.enabled: false`. With it off, every gated path is
+skipped — not given a neutral parameter — and the system reproduces B0_CLEAN exactly.
+Two tests assert that the diagnostics carry `{"enabled": false}` and nothing else.
 
-*(Populated by the R1 commit: uncertainty signals, budget actions, official-grid
-refinement, progressive video refinement, cutoff-aware allocation, weakest-event
-allocation, channel budget.)*
+### 7.1 Rank-cutoff utility (`aic2026/rank_utility.py`)
+
+`rank_cutoff_utility(r)` returns the fraction of the Final Score a query can still earn
+if its first correct row lands at rank `r`. It reads the cutoffs from the scorer's own
+`TOP_KS`, so it cannot drift from the metric, and a test grounds it against
+`final_score_from_r_scores` for real rank positions.
+
+Its most useful property is what it is *not*: a smooth decay. `marginal_utility(20 → 6)`
+is exactly 0 — promoting a row inside a bucket crosses no cutoff and changes no score —
+while `marginal_utility(21 → 20)` is 0.2. An allocator using a smooth rank prior would
+spend compute on moves worth nothing.
+
+It is an allocation prior. It never claims a row is correct.
+
+### 7.2 Uncertainty signals (`aic2026/budget.py`)
+
+Four training-free views, each in [0, 1], each logged:
+
+| Signal | 0 means | 1 means |
+|---|---|---|
+| `score_margin` | the top candidate is a runaway | a photo finish |
+| `channel_disagreement` | active channels return the same head | heads are disjoint |
+| `support_concentration` | the head is one video | every row a different video |
+| `temporal_ambiguity` | one tight temporal cluster | every candidate its own region |
+
+The reported `uncertainty` is the mean of the **enabled** components; a disabled one is
+excluded rather than counted as zero, which would quietly make every query look settled.
+None of them is a probability, none is calibrated, and the payload says so.
+
+For TRAKE, `EventUncertainty` combines coverage scarcity, score margin, feasible
+candidate count and whether the event needed expansion. One deliberate asymmetry: an
+event with a **single** candidate contributes the maximum margin term, not zero. For a
+KIS head one candidate means nothing is competing; for a TRAKE event it means there is no
+alternative at all — the thinnest possible support, and exactly where a budget belongs.
+(The first implementation got this backwards and a test caught it.)
+
+### 7.3 Budget actions and the ledger
+
+Five named actions — `DEEPEN_CHANNEL`, `OFFICIAL_GRID_REFINE`, `SPARSE_VIDEO_SAMPLE`,
+`DENSE_TEMPORAL_ZOOM`, `QA_VLM_CALL` — each with an order-of-magnitude unit cost in the
+same units as `QueryCost.cost_proxy` (reading an indexed vector 0.05, decoding a frame
+4.0, a VLM call 200.0). Priority is transparent:
+
+```text
+priority = rank_cutoff_utility(rank) × uncertainty × expected_gain_proxy / max(cost, ε)
+```
+
+`expected_gain_proxy` is named a proxy in the code, in the payload and here. It is not
+expected accuracy and will not be until it is calibrated against held-out labels.
+
+`BudgetLedger.try_spend` is the only way to buy anything. It refuses rather than
+overshooting, and a refusal is recorded with its reason, so "the controller wanted more
+budget" stays visible instead of looking like a decision not to act. Allocation is greedy
+in priority order — a knapsack solver would buy precision the cost weights do not have.
+
+### 7.4 Stage 1: official-grid refinement (`aic2026/official_grid.py`)
+
+Before any MP4 is opened, the controller rescores a candidate's **official mapped
+neighbours** using vectors already inside the index: `index.neighbor_rows` →
+`index.vectors_for_rows` → one dot product each. No decode, no JPEG read, no image
+encoder. It produces a local score curve with a best neighbour, a peak margin, a temporal
+stability and a slope.
+
+Two reasons this is the right first stage:
+
+* it costs ~0.05 cost-units per vector against ~4.0 for a decoded frame;
+* every point it can surface carries an official `frame_idx`, so anything it suggests is
+  submission-safe by construction. An arbitrary decoded frame is not.
+
+A boundary bug is worth recording: `neighbor_rows` originally returned bare rows, and the
+refiner zipped them against the requested offsets. At the first or last frame of a video
+some offsets do not exist, so every surviving neighbour was mislabelled. The API now
+returns `(offset, row)` pairs and a test pins the boundary case.
+
+### 7.5 Stage 2/3: progressive video refinement (`aic2026/progressive_refinement.py`)
+
+The same hard frame budget as the fixed sampler, spent in stages: a sparse sweep, then a
+zoom on the strongest peak, then whatever remains near the unresolved peak. It stops as
+soon as the peak is separated by `stop_margin`.
+
+Invariants, all tested: the coarse frame is always in stage A; the budget is never
+exceeded; no frame is scored twice; indices stay inside the real video using that video's
+own fps; a decode or scorer failure falls back to coarse behaviour instead of raising.
+
+**Verified on real MP4s** (competition data, refinement enabled, budget 32 frames,
+stages 8/8/16): 3 stages entered, 26 frames scored, 6 saved, best index 1–2 frames from
+the coarse frame, `applied_to_submission: false` throughout.
+
+### 7.6 KIS cutoff-aware allocation (`ranking.cutoff_aware_top100`)
+
+Ranks 1 and 2–5 stay dominated by relevance evidence: promoting a weaker-but-different
+row into rank 1 trades the most valuable slot in the metric for variety. Ranks 6–20 keep
+the baseline rule including neighbour expansion, because official ground truth is an
+interval. Ranks 21–50 and 51–100 require each bucket to reach `tail_min_videos` distinct
+videos before one video may take a second slot there — a near-duplicate at rank 60
+consumes a legal slot worth 0.2 for no additional coverage.
+
+Bucket survival is logged (`1`, `2-5`, `6-20`, `21-50`, `51-100`).
+
+### 7.7 TRAKE weakest-event allocation
+
+Finding a complete video hypothesis is untouched — the organizer awards zero for the
+wrong video. What R1 changes is the *optional* budget afterwards:
+`split_budget_by_uncertainty` divides the per-query frame cap in proportion to event
+uncertainty, subject to a per-event ceiling, and the parts sum exactly to what the caps
+allow. Both numbers are reported: `frame_budget_requested` and the achievable
+`frame_budget_total`.
+
+The default ceiling is half the per-query budget (48 of 96). A first attempt used 24,
+which with three events binds on all of them and silently produces a uniform split — the
+exact behaviour the stage exists to replace. The real smoke exposed that, not a test.
+
+With the corrected ceiling, the three fixture queries allocate `37/22/37`, `32/32/32` and
+`37/37/22` frames: the structurally weaker events get more, and a query whose events are
+equally uncertain still splits evenly, which is the right answer for that query.
+
+All Phase 7/8 invariants survive: N events → N frames, ordering intact, one video per
+sequence, and enabling the budget does not change the returned sequences.
+
+### 7.8 Q&A compute escalation
+
+`qa.max_vlm_calls_per_query` and `qa.max_visual_frames_per_call` are hard caps. A
+hypothesis reached after the budget is spent gets status `budget_exhausted`, which is
+non-submittable — a spending limit is never a reason to guess. Only a backend that really
+looks at images spends budget; the non-visual mock costs nothing and is recorded as zero
+VLM calls, which is what the cost trace shows today.
+
+No VLM is downloaded. The existing `LocalVlmQAAnswerer` contract is unchanged and would
+still require an explicit local path with `local_files_only=true`.
+
+### 7.9 Channel budget (off even within R1)
+
+`channel_policy` maps each usable channel to `full` / `shallow` / `skip` from signals the
+query representation already carries. CLIP is never reduced. It is disabled by default
+inside R1 because its whole purpose is to ask whether equivalent quality survives less
+work — a question that needs labels. Every decision is logged.
+
+### 7.10 What R1 measurably does today
+
+Real 12-query smoke, `B0_CLEAN` vs `ADAPTIVE_BUDGET`, same data and cache:
+
+* **rankings identical** on all 6 KIS, 3 TRAKE and 3 Q&A queries — the shipped stages are
+  evidence-producing, not re-ranking;
+* official-grid stage read 180 indexed vectors per query and decoded **0** frames;
+* uncertainty ranged 0.60–0.72 across the fixture, so the signal is not constant;
+* the ledger spent 136 of 400 cost units and reported the remainder;
+* TRAKE event allocation differentiated (`37/22/37`, `32/32/32`, `37/37/22`) with every
+  structural counter still 0 and the returned sequences unchanged;
+* with refinement enabled, the progressive sampler entered 3 stages and used 26 of 32
+  frames on real MP4s;
+* Q&A VLM calls: 0, because no visual backend exists here.
+
+Warm latency on that single run: KIS 179.5 → 142.2 ms, TRAKE 893.6 → 930.2 ms. Six and
+three queries respectively is not a latency measurement, and the direction is not claimed
+in either case — the official-grid stage does real extra work, so a TRAKE query getting
+slower is expected, not a regression to explain away.
+
+**Mechanism verified. Quality unmeasured, and not claimed.**
 
 ## 8. Evaluation protocol
 

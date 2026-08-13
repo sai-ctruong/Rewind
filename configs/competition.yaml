@@ -230,5 +230,42 @@ aic2026:
     ks: [1, 5, 20, 50, 100]
     output_dir: evaluation/benchmarks/aic2026
 
+  # R1 research controller: metric-aware budgeted retrieval. EXPERIMENTAL.
+  # OFF for competition use. With `enabled: false` every gated path is skipped, not
+  # merely given a neutral parameter, so the system behaves exactly as it does without
+  # this block. Nothing here was tuned: no AIC ground truth exists to tune against.
+  # See docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md.
+  adaptive_budget:
+    enabled: false
+    # Hard ceiling on optional work per query, in QueryCost.cost_proxy units.
+    max_cost_units: 240.0
+    uncertainty:
+      margin: true
+      channel_disagreement: true
+      temporal_ambiguity: true
+    official_grid:
+      # Rescore neighbouring OFFICIAL keyframes from vectors already in the index.
+      # No decode, no image encoder, and every point keeps an official frame_idx.
+      enabled: true
+      neighbors: 4
+      max_candidates: 20
+    progressive_video:
+      # Staged MP4 sampling under the SAME hard frame budget as the fixed sampler.
+      enabled: true
+      stage_frames: [8, 8, 16]
+      stop_margin: 0.15
+    cutoff_aware:
+      # Relevance-dominated head, diversity-oriented tail, split on the official cutoffs.
+      enabled: true
+      tail_min_videos: 2
+    trake_weakest_event:
+      # Optional per-event budget goes to the structurally weakest event first.
+      enabled: true
+      event_frame_cap: 48
+    channel_policy:
+      # Query-conditioned channel depth. CLIP is never reduced. Off even inside R1: its
+      # purpose is to ask whether equivalent quality survives less work, which needs GT.
+      enabled: false
+
   ui:
     enabled: true

@@ -163,6 +163,53 @@ class KeyframeIndex:
     def has_encoder(self, encoder: EncoderName) -> bool:
         return self._index(encoder) is not None
 
+    # ------------------------------------------------- public row/vector accessors
+    # Added in R1 so a caller can rescore already-indexed neighbours without reaching
+    # into `_id_to_row` or the Faiss object. Reading a stored vector is nearly free;
+    # re-embedding a keyframe whose vector is already in the index would not be.
+    def row_of(self, keyframe_id: str) -> Optional[int]:
+        """Row of one keyframe id, or None when it is not in this index."""
+        return self._id_to_row.get(str(keyframe_id))
+
+    def rows_for_video(self, video_id: str) -> list[int]:
+        """Every row belonging to one video, in index (chronological) order."""
+        target = str(video_id)
+        return [row for row, video in enumerate(self.video_ids) if video == target]
+
+    def neighbor_rows(
+        self, keyframe_id: str, offsets: "Sequence[int]"
+    ) -> list[tuple[int, int]]:
+        """`(offset, row)` for the same video's mapped keyframes at those offsets.
+
+        The official keyframe grid is the neighbour set: these frames already have BTC
+        CLIP features AND an official `frame_idx`, which is what makes them safe to
+        promote into a submission. An arbitrary decoded frame has neither.
+
+        Offsets are returned alongside their rows rather than assumed positionally,
+        because near a video boundary some requested offsets do not exist and a caller
+        zipping the two lists would mislabel every surviving neighbour.
+        """
+        row = self.row_of(keyframe_id)
+        if row is None:
+            return []
+        rows = self.rows_for_video(self.video_ids[row])
+        try:
+            position = rows.index(row)
+        except ValueError:
+            return []
+        out: list[tuple[int, int]] = []
+        for offset in offsets:
+            target = position + int(offset)
+            if 0 <= target < len(rows) and rows[target] != row:
+                out.append((int(offset), rows[target]))
+        return out
+
+    def vectors_for_rows(self, rows: "Sequence[int]", encoder: EncoderName = "clip") -> np.ndarray:
+        """L2-normalized stored vectors for the given rows. No re-embedding."""
+        if not len(rows):
+            return np.zeros((0, 0), dtype=np.float32)
+        return self._vectors(encoder, rows)
+
     def mean_embedding(
         self, ids: "Sequence[str]", encoder: EncoderName
     ) -> Optional[np.ndarray]:

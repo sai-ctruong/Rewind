@@ -160,7 +160,31 @@ Nothing here predicts behaviour on competition hardware or on the full collectio
   uncommitted changes. That is information, not an error — but a submission run should be
   made from a clean tree so the commit identifies the code.
 
-## 11. What would change these answers
+## 11. The R1 research controller is unvalidated by construction
+
+`adaptive_budget` (branch `research/aic2026-metric-budget`) is **off by default** and
+must stay off for a competition run until it has been measured against labels.
+
+What is verified: the mechanism. The budget cap is never exceeded, the progressive
+sampler stops early on a separated peak and never scores a frame twice, the TRAKE
+allocation favours the structurally weakest event and still sums to the cap, the Q&A VLM
+budget is enforced, and with the controller disabled the system reproduces B0_CLEAN
+exactly.
+
+What is **not** verified, and cannot be here:
+
+- whether allocating compute by uncertainty improves any answer;
+- whether the uncertainty signals correlate with correctness at all — they are
+  transparent functions of existing scores, calibrated against nothing;
+- whether `cutoff_aware_top100` produces a better Top-100 than the baseline allocator;
+- whether the cost-proxy weights reflect real relative cost on other hardware.
+
+Two R1 defaults were chosen structurally and are stated as such: the per-event TRAKE
+ceiling is half the per-query budget (so no event can take everything, and a weak event
+can still be favoured), and the cost weights are order-of-magnitude placeholders. Neither
+was fitted to output.
+
+## 12. What would change these answers
 
 Only two things:
 

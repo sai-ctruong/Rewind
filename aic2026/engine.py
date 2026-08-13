@@ -34,7 +34,7 @@ from .config import AppConfig, config_hash, config_to_dict
 from .dataset import AICDatasetLoader, AICDatasetStats, official_frame_id
 from .dataset_validation import write_dataset_report
 from .frame_provider import FrameProvider
-from .frame_scorer import FrameScorer, build_frame_scorer
+from .frame_scorer import SCORER_STATE_UNAVAILABLE, FrameScorer, build_frame_scorer
 from .fusion import CandidateEvidence, FusionConfig, RankedCandidate, fuse_candidates, object_match_score, token_overlap_score
 from .local_refinement import (
     FRAME_OUTPUT_DECODED_FRAME,
@@ -45,7 +45,21 @@ from .local_refinement import (
     LocalRefinementResult,
     RefinementCandidate,
 )
+from .budget import (
+    ACTION_DENSE_TEMPORAL_ZOOM,
+    ACTION_OFFICIAL_GRID_REFINE,
+    BudgetAction,
+    BudgetLedger,
+    allocate,
+    apply_channel_policy,
+    channel_policy,
+    kis_uncertainty,
+    split_budget_by_uncertainty,
+    trake_event_uncertainty,
+)
 from .cost import QueryCost
+from .official_grid import OfficialGridRefiner
+from .progressive_refinement import progressive_sample
 from .query_cache import (
     QueryEmbeddingCache,
     QueryEmbeddingKey,
@@ -86,7 +100,7 @@ from .qa import (
     is_unknown_answer,
     select_evidence_frames,
 )
-from .ranking import RankingConfig, video_aware_top100
+from .ranking import RankingConfig, cutoff_aware_top100, video_aware_top100
 from .trake import (
     METHOD_BEAM_DP,
     AlignmentConfig,
@@ -162,6 +176,7 @@ class KISSearchResult:
     total_search_ms: float = 0.0
     coarse: Optional["CoarseSearchResult"] = None
     cost: Optional[QueryCost] = None
+    budget: Optional[dict] = None
 
     def diagnostics(self) -> dict:
         """Structural counters and timings. Never an accuracy measurement."""
@@ -181,6 +196,8 @@ class KISSearchResult:
         base["total_search_ms"] = round(self.total_search_ms, 3)
         if self.cost is not None:
             base["cost"] = self.cost.to_dict()
+        # Present only when the experimental controller ran, so its absence is visible.
+        base["adaptive_budget"] = self.budget or {"enabled": False}
         return base
 
 
@@ -319,6 +336,8 @@ class AICCompetitionEngine:
         self.refinement_config = self.app_config.refinement
         self.trake_config = self.app_config.trake
         self.qa_config = self.app_config.qa
+        # R1. Disabled by default; every gated path checks `.enabled` before running.
+        self.budget_config = self.app_config.adaptive_budget
         self.config_hash = config_hash(self.app_config)
         # Visual access is on demand only: constructing this touches no video file.
         self.frame_provider = frame_provider or FrameProvider(
@@ -862,9 +881,23 @@ class AICCompetitionEngine:
             if context is None
             else context.representation(query, lambda: normalize_query(query))
         )
+        depths = channel_depths(self.app_config.retrieval_channels, scale=depth_scale)
+        policy: dict[str, str] = {}
+        if self.budget_config.enabled and self.budget_config.channel_policy_enabled:
+            # R1 experiment: ask a channel with nothing to match on less deeply. CLIP is
+            # never reduced. Off by default; the baseline queries every channel fully.
+            policy = channel_policy(
+                representation,
+                enabled_channels=[
+                    name
+                    for name, info in self.channels.status().items()
+                    if info.get("usable")
+                ],
+            )
+            depths = apply_channel_policy(depths, policy)
         union = self.channels.search(
             representation,
-            depths=channel_depths(self.app_config.retrieval_channels, scale=depth_scale),
+            depths=depths,
             default_top_k=self.fusion_depth,
         )
         channel_ms = (time.perf_counter() - started) * 1000.0
@@ -958,6 +991,8 @@ class AICCompetitionEngine:
         diagnostics["filtered_out"] = len(union.candidates) - len(pooled)
         diagnostics["returned"] = len(out)
         diagnostics["query"] = representation.to_dict()
+        if policy:
+            diagnostics["channel_policy"] = {"policy": policy, "depths": depths}
         return CoarseSearchResult(
             candidates=out,
             union=union,
@@ -1023,17 +1058,40 @@ class AICCompetitionEngine:
                     ))
             return out
 
-        ranked = video_aware_top100(
-            pool,
-            video_id=lambda c: c.video_id,
-            frame_id=lambda c: int(official_frame_id(self.entry, c.keyframe_id)),
-            score=lambda c: c.score,
-            neighbors=nearby,
-            config=replace(self.ranking_config, final_top_k=requested, top_k=None),
-        )
+        # R1, off by default: bounded extra work chosen by uncertainty and by where the
+        # official cutoffs make an improvement worth the most. With the budget disabled
+        # this is skipped entirely and the baseline path below is unchanged.
+        budget_info: Optional[dict] = None
+        if self.budget_config.enabled:
+            budget_info = self._run_kis_budget(query, coarse, pool, cost)
+
+        allocation: dict[str, Any] = {}
+        allocator_config = replace(self.ranking_config, final_top_k=requested, top_k=None)
+        if self.budget_config.enabled and self.budget_config.cutoff_aware_enabled:
+            ranked = cutoff_aware_top100(
+                pool,
+                video_id=lambda c: c.video_id,
+                frame_id=lambda c: int(official_frame_id(self.entry, c.keyframe_id)),
+                score=lambda c: c.score,
+                neighbors=nearby,
+                config=allocator_config,
+                tail_min_videos=int(self.budget_config.cutoff_tail_min_videos),
+                diagnostics=allocation,
+            )
+        else:
+            ranked = video_aware_top100(
+                pool,
+                video_id=lambda c: c.video_id,
+                frame_id=lambda c: int(official_frame_id(self.entry, c.keyframe_id)),
+                score=lambda c: c.score,
+                neighbors=nearby,
+                config=allocator_config,
+            )
         predictions = [
             self._from_candidate(c, refinement=by_keyframe.get(c.keyframe_id)) for c in ranked
         ]
+        if budget_info is not None:
+            budget_info["allocation"] = allocation
         self._record_encoder_cost(cost, encoder_before)
         cost.total_wall_ms = (time.perf_counter() - started) * 1000.0
         return KISSearchResult(
@@ -1044,7 +1102,204 @@ class AICCompetitionEngine:
             total_search_ms=(time.perf_counter() - started) * 1000.0,
             coarse=coarse,
             cost=cost,
+            budget=budget_info,
         )
+
+    def _run_kis_budget(
+        self, query: str, coarse: "CoarseSearchResult", pool: list[Candidate], cost: QueryCost
+    ) -> dict:
+        """R1 controller for one KIS query. Experimental; never runs when disabled.
+
+        Order matters: the official-grid stage is bought first because it is ~100x
+        cheaper than decoding the same neighbourhood, and because everything it can
+        promote already carries an official `frame_idx`. Only what the grid cannot settle
+        is worth paying an MP4 decode for.
+        """
+        config = self.budget_config
+        ledger = BudgetLedger(max_cost_units=float(config.max_cost_units))
+        channel_heads = []
+        if coarse.union is not None:
+            for name, info in (coarse.union.diagnostics.get("channels") or {}).items():
+                head = info.get("head") or []
+                if head:
+                    channel_heads.append([str(item) for item in head])
+        signals = kis_uncertainty(
+            pool,
+            channel_heads=channel_heads,
+            use_margin=bool(config.uncertainty_margin),
+            use_channel_disagreement=bool(config.uncertainty_channel_disagreement),
+            use_temporal_ambiguity=bool(config.uncertainty_temporal_ambiguity),
+        )
+        info: dict[str, Any] = {
+            "enabled": True,
+            "uncertainty": signals.to_dict(),
+            "official_grid": None,
+            "actions": [],
+        }
+
+        actions: list[BudgetAction] = []
+        if config.official_grid_enabled and pool:
+            examined = min(int(config.official_grid_max_candidates), len(pool))
+            actions.append(
+                BudgetAction(
+                    name=ACTION_OFFICIAL_GRID_REFINE,
+                    target="top_candidates",
+                    units=examined * max(1, int(config.official_grid_neighbors) * 2),
+                    rank=1,
+                    uncertainty=signals.uncertainty,
+                    # Reading indexed vectors cannot make an answer worse and cannot
+                    # produce an unsubmittable frame, so its proxy is 1.0 — that is a
+                    # statement about safety, not about expected accuracy.
+                    expected_gain_proxy=1.0,
+                    detail={"candidates": examined},
+                )
+            )
+        if config.progressive_video_enabled and pool:
+            budget_frames = sum(int(value) for value in config.progressive_stage_frames)
+            actions.append(
+                BudgetAction(
+                    name=ACTION_DENSE_TEMPORAL_ZOOM,
+                    target=str(getattr(pool[0], "keyframe_id", "")),
+                    units=budget_frames,
+                    rank=1,
+                    uncertainty=signals.uncertainty,
+                    expected_gain_proxy=1.0,
+                    detail={"frames": budget_frames},
+                )
+            )
+
+        taken = allocate(actions, ledger)
+        for action in taken:
+            if action.name == ACTION_OFFICIAL_GRID_REFINE:
+                grid = self._refine_official_grid(coarse, pool, int(action.detail["candidates"]))
+                info["official_grid"] = grid
+                cost.add_channel_search(
+                    "official_grid", candidates=int(grid.get("vectors_read", 0)), ms=0.0
+                )
+            elif action.name == ACTION_DENSE_TEMPORAL_ZOOM:
+                info["progressive_video"] = self._progressive_probe(
+                    query, pool[0], int(action.detail["frames"]), cost
+                )
+        info["actions"] = ledger.to_dict()
+        return info
+
+    def _progressive_probe(
+        self, query: str, candidate: Candidate, budget_frames: int, cost: QueryCost
+    ) -> dict:
+        """Staged MP4 sampling around one candidate, under a hard frame budget.
+
+        The stage plan and the stop margin come from configuration; the decode and the
+        scorer are the same ones the fixed refiner uses. When no scorer or no MP4 is
+        available nothing is decoded and the refusal is reported — a missing capability
+        is never silently treated as "found nothing".
+        """
+        config = self.budget_config
+        scorer = self.frame_scorer
+        if scorer is None:
+            return {"skipped_reason": "no visual scorer configured", "frames_scored": 0}
+        # `not_loaded` is lazy, not broken: the scorer loads on first use, and
+        # `prepare_query` below is what actually decides. Only a scorer that has already
+        # reported itself unusable is refused here.
+        status = scorer.status()
+        if status.state == SCORER_STATE_UNAVAILABLE:
+            return {
+                "skipped_reason": f"visual scorer unavailable: {status.fallback_reason or status.state}",
+                "frames_scored": 0,
+            }
+        try:
+            prepared = scorer.prepare_query(str(query))
+        except Exception as exc:  # noqa: BLE001 - a scorer that cannot load is reported
+            return {
+                "skipped_reason": f"scorer could not prepare the query: {type(exc).__name__}",
+                "frames_scored": 0,
+            }
+        raw = self.entry.raws.get(candidate.keyframe_id)
+        if raw is None or raw.frame_idx is None:
+            return {"skipped_reason": "candidate has no official frame", "frames_scored": 0}
+        try:
+            metadata = self.frame_provider.video_metadata(candidate.video_id)
+        except Exception as exc:  # noqa: BLE001 - a missing video is reported, not raised
+            return {"skipped_reason": f"video metadata unavailable: {type(exc).__name__}", "frames_scored": 0}
+        if metadata is None or not getattr(metadata, "fps", 0):
+            return {"skipped_reason": "video unavailable", "frames_scored": 0}
+
+        fps = float(metadata.fps)
+        frame_count = int(getattr(metadata, "frame_count", 0) or 0)
+        window = max(1, int(round(float(self.refinement_config.window_before_s) * fps)))
+        anchor = int(raw.frame_idx)
+        low = max(0, anchor - window)
+        high = anchor + window
+        if frame_count > 0:
+            high = min(high, frame_count - 1)
+
+        decoded_total = 0
+
+        def score_frames(indices):
+            nonlocal decoded_total
+            started = time.perf_counter()
+            frames, _ = self.frame_provider.decode_frames(
+                candidate.video_id, list(indices), source_video=raw.source_video
+            )
+            decode_ms = (time.perf_counter() - started) * 1000.0
+            usable = [frame for frame in frames if getattr(frame, "image", None) is not None]
+            decoded_total += len(usable)
+            cost.add_decode(requested=len(list(indices)), decoded=len(usable), ms=decode_ms)
+            if not usable:
+                return {}
+            embed_started = time.perf_counter()
+            try:
+                scores = scorer.score_frames(prepared, [frame.image for frame in usable])
+            except Exception:  # noqa: BLE001 - degrades to coarse behaviour
+                return {}
+            cost.add_image_embeddings(
+                len(usable), ms=(time.perf_counter() - embed_started) * 1000.0
+            )
+            # Keyed by the index the plan ASKED for: that is the identity the sampler
+            # tracks, and the decoder's own landing point is recorded separately.
+            return {
+                int(frame.requested_frame_idx): float(value)
+                for frame, value in zip(usable, scores)
+            }
+
+        result = progressive_sample(
+            anchor=anchor,
+            low=low,
+            high=high,
+            budget=int(budget_frames),
+            stage_frames=tuple(int(v) for v in config.progressive_stage_frames),
+            stop_margin=float(config.progressive_stop_margin),
+            score_frames=score_frames,
+            fps=fps,
+        )
+        payload = result.to_dict()
+        payload["video_id"] = candidate.video_id
+        payload["coarse_frame_idx"] = anchor
+        payload["frames_decoded"] = decoded_total
+        # Evidence only. A decoded frame index is NOT an official frame and never becomes
+        # the submitted one; `frame_output_policy` stays `preserve_coarse`.
+        payload["applied_to_submission"] = False
+        return payload
+
+    def _refine_official_grid(
+        self, coarse: "CoarseSearchResult", pool: list[Candidate], candidates: int
+    ) -> dict:
+        """Score each strong candidate's official neighbours from indexed vectors."""
+        refiner = OfficialGridRefiner(
+            self.entry,
+            neighbors=int(self.budget_config.official_grid_neighbors),
+            max_candidates=int(self.budget_config.official_grid_max_candidates),
+        )
+        try:
+            vector = self.encode_query(coarse.query.dense_query if coarse.query else "")
+        except Exception as exc:  # noqa: BLE001 - a missing encoder skips the stage
+            return {"skipped_reason": f"query vector unavailable: {type(exc).__name__}"}
+        result = refiner.refine(vector, pool, budget_candidates=candidates)
+        payload = result.to_dict()
+        # Evidence only. The grid never rewrites a candidate's submitted frame here:
+        # promoting a neighbour is a ranking decision, and R1 does not make it until
+        # ground truth can say whether it helps.
+        payload["applied_to_ranking"] = False
+        return payload
 
     def _record_channel_cost(self, cost: QueryCost, coarse: "CoarseSearchResult") -> None:
         """Attribute one coarse retrieval's per-channel work to this query."""
@@ -1896,6 +2151,11 @@ class AICCompetitionEngine:
         diagnostics.update(refinement_stats)
         diagnostics["query_execution"] = context.to_dict()
         diagnostics["query_embedding_cache"] = self._query_embeddings.to_dict()
+        diagnostics["adaptive_budget"] = (
+            self._trake_event_budget(by_event, expansion_info)
+            if self.budget_config.enabled
+            else {"enabled": False}
+        )
         self._record_encoder_cost(cost, encoder_before)
         cost.add_decode(
             requested=int(refinement_stats.get("frames_decoded", 0) or 0),
@@ -2045,6 +2305,49 @@ class AICCompetitionEngine:
             int(report.diagnostics.get("videos_with_full_event_coverage", 0)) - coverage_before,
         )
         return report, info
+
+    def _trake_event_budget(self, by_event: dict, expansion_info: dict) -> dict:
+        """R1: hand the optional per-event budget to the structurally weakest event.
+
+        The organizer gives zero for the wrong video, so finding a complete video
+        hypothesis comes first and is untouched here. What this changes is what happens
+        *after* one exists: an equal split spends as much on a settled event as on the
+        one that is holding the sequence together.
+
+        Every invariant of Phase 7/8 survives: all N events remain present, ordering is
+        unchanged, candidates stay within one video, and the per-event allocations sum to
+        exactly the global cap with no event allowed to take more than
+        `trake_event_frame_cap`.
+        """
+        config = self.budget_config
+        if not config.trake_weakest_event_enabled:
+            return {"enabled": True, "trake_weakest_event": False}
+        expanded = list(expansion_info.get("events_expanded") or ())
+        signals = trake_event_uncertainty(by_event, expanded=expanded)
+        weights = {item.event_index: item.uncertainty for item in signals}
+        requested = max(1, int(self.trake_config.refinement_max_frames_per_query))
+        allocation = split_budget_by_uncertainty(
+            weights, requested, minimum=0, maximum=int(config.trake_event_frame_cap)
+        )
+        # The per-event cap can make the requested total unreachable. Both numbers are
+        # reported: what was asked for, and what the caps actually allowed.
+        allocated = sum(allocation.values())
+        weakest = max(weights, key=lambda key: (weights[key], key)) if weights else None
+        return {
+            "enabled": True,
+            "trake_weakest_event": True,
+            "event_uncertainty": [item.to_dict() for item in signals],
+            "frame_budget_requested": requested,
+            "frame_budget_total": allocated,
+            "frame_budget_by_event": allocation,
+            "event_frame_cap": int(config.trake_event_frame_cap),
+            "weakest_event_index": weakest,
+            "note": (
+                "Allocation only. Which event is structurally weakest is measurable; "
+                "whether spending more on it improves the answer is not, without "
+                "ground truth."
+            ),
+        }
 
     def _refine_trake_sequences(self, report, config, *, refine: bool, refine_window_s):
         """Locally refine only the top few COMPLETE sequences, within a frame budget."""
