@@ -22,6 +22,8 @@ Last reviewed: R0 on branch `research/aic2026-metric-budget`.
 | [docs/COMPETITION_RELEASE_CHECKLIST.md](COMPETITION_RELEASE_CHECKLIST.md) | Pre-session, per-query and pre-submission procedure. |
 | [docs/CURRENT_IMPLEMENTATION_AUDIT.md](CURRENT_IMPLEMENTATION_AUDIT.md) | Item-by-item audit; the final section carries FIXED/PARTIAL/OPEN/BLOCKED_EXTERNAL. |
 | [docs/RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md](RESEARCH_R0_R1_METRIC_AWARE_BUDGET.md) | The research programme: problem, method, evaluation protocol, no-GT status. |
+| [docs/RESEARCH_DATASET_AND_EVALUATION_PROTOCOL.md](RESEARCH_DATASET_AND_EVALUATION_PROTOCOL.md) | What is searchable, what may be measured, and the private-GT rules. |
+| [evaluation/private_dev/README.md](../evaluation/private_dev/README.md) | Private development ground truth: schema, annotation protocol, split discipline. |
 | [PHASE_REPORT.md](../PHASE_REPORT.md) | Chronological history. Each entry is a record of its own phase. |
 
 ## Phase reports — HISTORICAL (accurate for their phase)

@@ -1,0 +1,18 @@
+{
+  "label_source": "private_dev",
+  "task": "kis",
+  "dataset": "AIC 2026 local visual-development subset (29 MP4-backed videos)",
+  "notes": "Textual KIS labels. Real human annotations go in `entries`. The row below is a TEMPLATE: its query_id carries EXAMPLE_ONLY, so the loader parses it for shape and then excludes it from every scored set. Delete it or leave it; either way it can never unlock an evaluation.",
+  "entries": [
+    {
+      "query_id": "EXAMPLE_ONLY_kis_template",
+      "query": "Describe what is visible, in the words you would use if you had not seen the file name.",
+      "video_id": "L21_V001",
+      "frame_ranges": [[0, 0]],
+      "label_source": "private_dev",
+      "annotated_by": "EXAMPLE_ONLY",
+      "split": "development",
+      "notes": "EXAMPLE_ONLY — replace query_id, query, video_id and frame_ranges with a real annotation, and put your own name in annotated_by. frame_ranges are OFFICIAL frame_idx values read from map-keyframes, not seconds and not keyframe ordinals."
+    }
+  ]
+}

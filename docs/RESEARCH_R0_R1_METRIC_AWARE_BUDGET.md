@@ -133,8 +133,10 @@ is worse than an error.
   844 videos have complete supporting data (map, CLIP, objects, media-info) and no local
   MP4. The release scope discarded all of them from *retrieval*, for a reason retrieval
   does not care about. `configs/competition_full_retrieval.yaml` uses the global scope
-  and a separate cache; building that index is a deliberate step and nothing does it
-  automatically.
+  and a separate cache.
+
+  **That index has since been built** — see §12. R0 made the scope expressible; the
+  build made it real.
 
 ### 6.3 Zero-risk speed and cost work
 
@@ -408,7 +410,134 @@ failure. Without labels it is only a difference.
 - **Fixture bias.** The smoke fixture is fixed and small; it proves the pipeline runs, not
   that behaviour generalises.
 
-## 11. Open questions for the organizers
+## 11. Full retrieval-ready collection
+
+R0 made the global scope *expressible*. This section records making it *real*.
+
+> **Full retrieval coverage does NOT mean full visual refinement coverage.** They are
+> separate capabilities and the system keeps them separate. Indexing a video whose MP4 is
+> absent adds it to search; it adds nothing to preview, local refinement or visual Q&A,
+> and every one of those reports itself unavailable rather than pretending.
+
+### 11.1 What the collection actually contains
+
+Read-only inventory of the current data root — measured, not assumed:
+
+| Quantity | Value |
+|---|---|
+| Discovered video ids | 873 |
+| Retrieval-ready (valid map + valid CLIP) | **873** |
+| Map rows | **177,321** |
+| CLIP vectors | **177,321** |
+| Map/vector mismatches | **0** |
+| Feature dimension / dtype | 512 / float16 |
+| Object coverage | 873 / 873 |
+| Metadata coverage | 873 / 873 |
+| Invalid videos | **0** |
+| Visual-accessible (JPEG or MP4) | 29 |
+| Refinement-ready (MP4) | 29 |
+| Q&A-visual-ready | 29 |
+| CLIP features on disk | 173.3 MB |
+| Free disk at build time | 142.8 GB of 456.2 GB |
+
+844 videos have complete supporting data and no local MP4. Nothing about that prevents
+coarse retrieval, which scores the CLIP vectors the organizers supplied.
+
+### 11.2 A note on the inspection pass
+
+A deep `inspect-data` run over the full scope was started first and stopped after 40
+minutes: it had used 116 s of CPU and was I/O-bound reading 177k object JSONs, duplicating
+validation the index build performs anyway. The numbers above come from a fast read-only
+pass; the **build's own validation gate is the authoritative full check**. Nothing was
+weakened to make the build pass — the build refuses on invalid data, and a validation
+error would have stopped this work rather than been worked around.
+
+### 11.3 The build
+
+`build-index --load-objects --include-media-text`, no `--allow-stale-cache`, against
+`configs/competition_full_retrieval.yaml`.
+
+| | |
+|---|---|
+| Cache path | `artifacts/aic2026_index_retrieval_ready` |
+| Scope mode | `retrieval_ready` |
+| Selected videos | **873** |
+| Indexed records | **177,321** |
+| Feature dim / dtype | 512 / float16 |
+| Cache fingerprint | `d09cbd66426dc9e22fc3596f729dada9df29b605320b56c9b7c95391ac24d15e` |
+| Selected-video-IDs hash | `12011cea2c134f09990fbda71a3edb874c58705aa4ba258b2431315e0af334de` |
+| Cache schema / record schema | 1 / 3 |
+| Size | 1,040.5 MB |
+| Build duration | 113.6 minutes |
+| `valid` / `stale` / `legacy` / `corrupt` | **true / false / false / false**, 0 hard and 0 soft mismatches |
+
+The three pre-existing caches were not touched.
+
+Channel records on the full index, beside the 29-video one:
+
+| Channel | 873-video | 29-video |
+|---|---|---|
+| clip | 177,321 | 7,800 |
+| bm25 | 177,321 | 7,800 |
+| objects | 169,909 | 7,663 |
+| metadata | 873 | 29 |
+| ocr / asr / caption | 0, disabled | 0, disabled |
+
+OCR, ASR and captions stay disabled with empty sources: still reported, still not a
+readiness warning, because the operator switched them off deliberately.
+
+### 11.4 Structural smoke: 29 videos vs 873
+
+Same fixed fixture, same code, two indexes. **No semantic comparison is possible or
+attempted** — the searchable collection changed, so results changed; that is a fact, not
+an improvement.
+
+| Measure | 29-video | 873-video |
+|---|---|---|
+| Indexed videos / records | 29 / 7,800 | 873 / 177,321 |
+| Mean candidate union per KIS query | 1,897.8 | 2,675.8 |
+| Mean distinct videos per KIS query | 25.0 | 51.5 |
+| KIS result rows from videos with no MP4 | 0 | **245** |
+| Warm KIS mean latency | 166.9 ms | 1,606.5 ms |
+| Engine startup | 914 ms | 23,109 ms |
+| RSS after the fixture | 753.7 MB | 5,353.7 MB |
+| Query-embedding cache | 18 entries, 7 hits / 18 misses | 19 entries, 12 hits / 19 misses |
+| Distinct cache fingerprints | — | **yes**: separate identities |
+
+The cost of 22.7× more records is roughly 10× warm latency and 7× resident memory on this
+CPU-only machine. That is a resource fact to plan around, not a quality statement.
+
+### 11.5 A video with no pixels behaves correctly
+
+Concrete examples returned by the fixture on the full index: **`L30_V053`** (submitted
+frame 7087), `L30_V091` (2149), `L28_V008` (19918) — all retrieved, none refined.
+
+Direct probe of `L22_V001` (`L22_V001/kf_000001`, official frame 0):
+
+| Capability | Result |
+|---|---|
+| Coarse KIS retrieval | reached, official mapped `frame_idx` preserved |
+| Frame / preview request | `available: false`, no bytes, **no exception** |
+| Local refinement | ran, 1 candidate, **0 applied, 0 frames decoded**; candidate not dropped |
+| Submission eligibility | structurally valid on the official mapped frame |
+
+TRAKE on the full index returned 30 / 13 / 30 complete sequences, of which 8 / 4 / 6 of
+the represented videos have no MP4. Every structural counter stayed **0**:
+`malformed_prediction_count`, `wrong_event_count_prediction_count`,
+`cross_video_step_count`, and no unordered submission sequence.
+
+Q&A, probed with a wider hypothesis count so pixel-less videos were included: 30
+hypotheses, **19 without pixels**, every one of them with `evidence_with_image: 0`,
+`backend_visual: false`, and the warning *"Answered by the non-visual mock backend from
+caption/OCR/ASR text; this is not visual Q&A."* **0 VLM calls.** The mock echoed media
+text, and the submission validator refused the whole batch with `QA_ANSWER_TOO_LONG`.
+Nothing was fabricated and nothing was exportable.
+
+Artifacts: `artifacts/full_retrieval_smoke/{summary.json, comparison_29_vs_full.json}`
+(gitignored). Neither contains an accuracy, recall, precision or Final Score figure,
+because no ground truth exists.
+
+## 12. Open questions for the organizers
 
 1. What are the frame-ID semantics of an arbitrary decoded frame that is not in
    `map-keyframes`? Until answered, `frame_output_policy` stays `preserve_coarse` and a

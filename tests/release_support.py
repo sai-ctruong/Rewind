@@ -47,6 +47,27 @@ def make_data(root, video_ids=("L01_V001",)):
     return root
 
 
+def make_retrieval_only_video(root, video_id: str) -> None:
+    """A video with map + CLIP + objects + metadata and NO pixels at all.
+
+    This is the shape of 844 of the 873 videos in the real collection: complete
+    supporting data, no local MP4 and no keyframe JPEGs. Retrieval must reach it; every
+    visual capability must report itself unavailable rather than pretend.
+    """
+    (root / "map-keyframes").mkdir(parents=True, exist_ok=True)
+    (root / "clip-features-32").mkdir(parents=True, exist_ok=True)
+    (root / "media-info").mkdir(parents=True, exist_ok=True)
+    (root / "map-keyframes" / f"{video_id}.csv").write_text(
+        "n,pts_time,fps,frame_idx\n1,0.0,30,100\n2,1.0,30,130\n", encoding="utf-8"
+    )
+    np.save(
+        root / "clip-features-32" / f"{video_id}.npy",
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+    )
+    (root / "media-info" / f"{video_id}.json").write_text("{}", encoding="utf-8")
+    # Deliberately absent: video/<id>.mp4 and keyframes/<id>/.
+
+
 def make_config(root, cache, **overrides):
     data: dict[str, Any] = {
         "aic2026": {

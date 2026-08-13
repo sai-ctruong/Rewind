@@ -106,13 +106,22 @@ than `WARN`. Re-enable them the moment a source is populated.
 29 of 873 discovered videos on this machine. The other 844 are excluded because their
 MP4s were not downloaded, not because they are broken.
 
-**R0 update — this is a configuration choice, not a capability limit.** All 873 videos are
-retrieval-ready (map + CLIP + objects + media-info all present); only 29 have MP4s. Scope
-mode `retrieval_ready` searches all 873 and `configs/competition_full_retrieval.yaml`
-uses it. That config has **no index built** in this checkout: building it is a large,
-deliberate step, and until it is built the shipped competition config still searches 29
-videos. What an absent MP4 actually costs is preview, local refinement and visual Q&A —
-never retrieval.
+**Update — this is a configuration choice, not a capability limit, and the full index now
+exists.** All 873 videos are retrieval-ready (map + CLIP + objects + media-info present);
+only 29 have MP4s. `configs/competition_full_retrieval.yaml` uses scope mode
+`retrieval_ready` and its index has been **built**: 873 videos, 177,321 records, 1,040.5
+MB, fingerprint `d09cbd66…`, `valid=true stale=false legacy=false corrupt=false`.
+
+What an absent MP4 costs is preview, local refinement and visual Q&A — never retrieval.
+Verified on the built index: pixel-less videos reach KIS and TRAKE results with their
+official mapped `frame_idx`, frame requests return `available: false` without raising,
+refinement skips them without dropping them, and Q&A produces no visual answer and
+nothing exportable.
+
+Two consequences to plan around, both resource facts rather than quality claims: warm KIS
+latency rises from ~167 ms to ~1.6 s and resident memory from ~754 MB to ~5.4 GB on this
+CPU-only machine. The shipped `configs/competition.yaml` still uses the 29-video visual
+scope; choosing between them is an explicit decision, not a default.
 
 Everything measured in this repository was measured on those 29 videos (7,800 frames).
 Latency, memory and candidate counts will change on the full collection; the structural

@@ -1,0 +1,21 @@
+{
+  "label_source": "private_dev",
+  "task": "qa",
+  "dataset": "AIC 2026 local visual-development subset (29 MP4-backed videos)",
+  "notes": "Grounded Q&A labels. A Q&A row scores only when the submitted frame falls inside a labelled interval AND the answer matches, so both halves have to be right. The row below is a TEMPLATE and is excluded from every scored set.",
+  "entries": [
+    {
+      "query_id": "EXAMPLE_ONLY_qa_template",
+      "event_description": "The moment the question is about, described as an observable event.",
+      "question": "A question whose answer genuinely requires seeing that event.",
+      "video_id": "L21_V001",
+      "frame_ranges": [[0, 0]],
+      "answers": ["EXAMPLE_ONLY"],
+      "answer_type": "text",
+      "label_source": "private_dev",
+      "annotated_by": "EXAMPLE_ONLY",
+      "split": "development",
+      "notes": "EXAMPLE_ONLY — list EVERY acceptable surface form in `answers`, including the Vietnamese one where it applies; matching is normalized, not exact. answer_type is one of number | yes/no | color | text."
+    }
+  ]
+}

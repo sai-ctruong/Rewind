@@ -1,0 +1,26 @@
+{
+  "label_source": "private_dev",
+  "task": "trake",
+  "dataset": "AIC 2026 local visual-development subset (29 MP4-backed videos)",
+  "notes": "Ordered-event TRAKE labels. Every event needs its own interval list, in event order, from the SAME video. The organizers' semantic intervals are often very short — under ten frames is normal — so do not widen them to make retrieval easier. The row below is a TEMPLATE and is excluded from every scored set.",
+  "entries": [
+    {
+      "query_id": "EXAMPLE_ONLY_trake_template",
+      "events": [
+        "First event, described on its own terms.",
+        "Second event, which must happen after the first.",
+        "Third event."
+      ],
+      "video_id": "L21_V001",
+      "event_frame_ranges": [
+        [[0, 0]],
+        [[0, 0]],
+        [[0, 0]]
+      ],
+      "label_source": "private_dev",
+      "annotated_by": "EXAMPLE_ONLY",
+      "split": "development",
+      "notes": "EXAMPLE_ONLY — one interval list per event, same order as `events`. An event may carry a second interval if the action genuinely recurs; the official scorer uses the first and the record keeps both."
+    }
+  ]
+}
