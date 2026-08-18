@@ -18,8 +18,9 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 
 @pytest.fixture()
-def client():
-    app = create_app()
+def client(tmp_path):
+    # index_dir rỗng -> test không bị index đã lưu trên đĩa làm nhiễu
+    app = create_app(index_dir=tmp_path / "index")
     app.testing = True
     return app.test_client()
 

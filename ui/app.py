@@ -31,7 +31,10 @@ FRAMES_DIR = _ROOT / "artifacts" / "frames"    # nơi lưu keyframe trích ra
 INDEX_DIR = _ROOT / "artifacts" / "index"      # nơi lưu index (A2 — nạp lại, không embed lại)
 
 
-def create_app() -> Flask:
+def create_app(index_dir: Path | None = None) -> Flask:
+    # index_dir cho phép TEST trỏ vào thư mục tạm rỗng -> không nhặt index thật
+    # của developer trên đĩa (artifacts/index) làm sai kỳ vọng 'trạng thái sạch'.
+    index_dir = Path(index_dir) if index_dir is not None else INDEX_DIR
     app = Flask(__name__)
 
     @app.get("/")
@@ -83,8 +86,8 @@ def create_app() -> Flask:
         return "".join(c if c.isalnum() or c in "-_." else "_" for c in vid)
 
     # Tự NẠP LẠI các index đã lưu ở lần chạy trước (A2) — không phải embed lại.
-    if INDEX_DIR.exists():
-        for d in sorted(INDEX_DIR.iterdir()):
+    if index_dir.exists():
+        for d in sorted(index_dir.iterdir()):
             if (d / "entry.pkl").exists():
                 try:
                     entry = VideoIndexEntry.load(d)
@@ -315,13 +318,13 @@ def create_app() -> Flask:
         saved = []
         for vid, entry in video_state["videos"].items():
             try:
-                entry.save(INDEX_DIR / _safe_name(vid))
+                entry.save(index_dir / _safe_name(vid))
                 saved.append(vid)
             except Exception as e:  # pragma: no cover
                 return jsonify(error=f"Lỗi lưu {vid}: {e}"), 500
         if not saved:
             return jsonify(error="Chưa có index nào để lưu. Nạp video trước."), 400
-        return jsonify(saved=saved, dir=str(INDEX_DIR))
+        return jsonify(saved=saved, dir=str(index_dir))
 
     @app.get("/api/video/explore")
     def video_explore():
