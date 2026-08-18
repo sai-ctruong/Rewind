@@ -94,8 +94,8 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Số test trong README/HUONG_DAN phải đúng với thực tế
-        # Lỗi đã xảy ra: README ghi "262 passed", HUONG_DAN ghi "243", thực tế 273.
+      - name: Số test trong README phải đúng với thực tế
+        # Lỗi đã xảy ra: README ghi "262 passed" nhưng thực tế 273.
         # Số gõ tay thì luôn lệch — để CI canh.
         # Đếm qua HOOK của pytest, không bới chữ trong stdout: addopts="-ra -q" của
         # project khiến dòng "N passed" có thể không được in ra.
@@ -123,7 +123,7 @@ jobs:
               sys.exit("pytest thất bại.")
           real = Count.total
           bad = []
-          for f in ("README.md", "HUONG_DAN.md"):
+          for f in ("README.md",):
               for claimed in re.findall(r"(\d+)\s+passed", Path(f).read_text(encoding="utf-8")):
                   if int(claimed) != real:
                       bad.append(f"{f}: ghi {claimed} passed, thực tế {real}")
@@ -141,7 +141,7 @@ jobs:
           import re, sys
           from pathlib import Path
           bad = []
-          for f in ("README.md", "HUONG_DAN.md", "HUONG_DAN_GIAO_DIEN.md"):
+          for f in ("README.md",):
               md = Path(f).read_text(encoding="utf-8")
               for src in re.findall(r'<img src="([^"]+)"', md):
                   if not src.startswith("http") and not Path(src).exists():

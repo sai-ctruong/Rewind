@@ -350,8 +350,6 @@ qua `bench_retrieval.py` (accuracy) hoặc `bench_scale.py` (quy mô) — **đo,
 
 | Tài liệu | Dành cho |
 |---|---|
-| 🖥️ [`HUONG_DAN_GIAO_DIEN.md`](HUONG_DAN_GIAO_DIEN.md) | Dùng **giao diện web** — từng tab, từng nút, vòng phản hồi |
-| 📘 [`HUONG_DAN.md`](HUONG_DAN.md) | Thao tác bằng **code/CLI** — bảng tra "muốn làm X → dùng gì" |
 | 💬 [`dialogue/`](dialogue/) | Hội thoại thu hẹp bằng Information Gain |
 
 <img src="docs/assets/divider.svg" width="100%" alt="">
