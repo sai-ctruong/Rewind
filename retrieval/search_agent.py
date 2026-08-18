@@ -10,7 +10,7 @@ BỐI CẢNH (Slide Buổi 3):
     Chu trình chuẩn của một Agent: OBSERVE (kết quả tool) → REASON (chọn bước kế) →
     ACT (gọi tool) → lặp cho tới khi FINISH.
 
-ĐỊNH VỊ (rất quan trọng, xem TASKS.md Mục 9):
+ĐỊNH VỊ (rất quan trọng):
     Agent là "smart path" cho query KHÓ / hội thoại — KHÔNG thay pipeline "fast path"
     (`engine.search`) vốn vẫn là mặc định nhanh. Ở đây Agent chỉ ĐIỀU PHỐI các tool đã
     có, không tự cài thuật toán retrieval mới.

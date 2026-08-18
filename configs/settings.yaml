@@ -201,7 +201,7 @@ paths:
 # LƯU Ý: đây là bản GHI LẠI quyết định đã đo (nguồn sự thật là DEFAULT trong
 # retrieval/video_engine.py — engine hiện KHÔNG parse file này; giữ đồng bộ tay).
 # Benchmark: RTX 3060, 3 video data/videos/, 37 nhãn evaluation/labels.json.
-# Đường cong đầy đủ + bảng: xem TASKS.md mục B1 và evaluation/benchmarks/.
+# Đường cong đầy đủ + bảng: xem evaluation/benchmarks/.
 video_engine:
   # [ĐO 2026-07-12] Lấy mẫu 1 frame/giây: hit@5 phẳng 0.68 ở 2.0/1.0/0.5s (recall
   # bị chặn bởi ENCODER, không phải lấy mẫu). 0.5s tăng hit@1 (0.36 vs 0.28) nhưng
@@ -218,7 +218,7 @@ video_engine:
   # -> CHỈ dùng cho KIS (top-K nhỏ), KHÔNG cho AVS. Không OOM trên 6GB VRAM.
   rerank_pool: 8
   # A1 batch embedding: ×2.15 sau khi luồng hoá load ảnh (nút thắt = tiền xử lý CPU,
-  # không phải GPU). Xem TASKS.md mục A1.
+  # không phải GPU).
   embed_batch_size: 256
   enable_ocr: true
   enable_asr: false             # Whisper nặng, opt-in (cần openai-whisper + ffmpeg)

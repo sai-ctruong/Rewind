@@ -1,6 +1,6 @@
-# KISC Module — Conversational Known-Item Search (AIC 2026)
+# Dialogue — Conversational Known-Item Search (KISC)
 
-Module xử lý bài toán **Conversational KIS (KISC)** — điểm mới và khó nhất của AIC 2026
+Module xử lý bài toán **Conversational KIS (KISC)** — hỏi lại nhiều lượt để thu hẹp ý định trước khi trả kết quả cuối.
 (slide "Bài toán Conversational KIS (KISC)"): thay vì người dùng nhập 1 câu truy vấn rồi
 chờ kết quả, trợ lý ảo **chủ động hội thoại** để làm rõ ý định trước khi trả kết quả cuối.
 
@@ -39,7 +39,7 @@ dialogue/
 ├── slot_extractor.py      # trích filter từ câu trả lời tự nhiên (rule-based + LLM stub)
 ├── question_generator.py  # sinh câu hỏi làm rõ (template + LLM stub)
 ├── dialogue_manager.py    # vòng lặp chính, ghép tất cả module trên
-└── demo.py                # demo CLI tái hiện case study trong slide AIC 2026
+└── demo.py                # demo CLI tái hiện case study hội thoại KISC
 ```
 
 **Vòng lặp hội thoại** (`KISCDialogueManager`):
