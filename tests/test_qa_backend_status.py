@@ -398,6 +398,55 @@ def test_expected_answer_type_flows_from_the_request(client) -> None:
     assert bad.get_json()["error_code"] == "INVALID_ANSWER_TYPE"
 
 
+def test_evidence_retrieval_mode_flows_from_the_request(client) -> None:
+    http, root_a, _ = client
+    assert http.post("/api/video/index_folder", json={"path": str(root_a)}).status_code == 200
+    body = http.post(
+        "/api/video/vqa",
+        json={
+            "question": "what color is it?",
+            "event": "a vehicle",
+            "retrieval_query_mode": "evidence",
+            "topk": 10,
+        },
+    ).get_json()
+    assert body["retrieval_query_mode"] == "evidence"
+    assert body["ground_query"]
+    assert "color" in body["ground_query"]
+
+
+def test_vqa_http_caps_answer_text_at_100_characters(tmp_path: Path, monkeypatch) -> None:
+    long_answer = " ".join(["metadata_title"] * 40)
+    monkeypatch.setattr(
+        engine_module,
+        "build_qa_answerer",
+        lambda *a, **k: ScriptedQAAnswerer(
+            {"L21_V001": long_answer, "L21_V002": long_answer}
+        ),
+    )
+    root = make_qa_root(tmp_path / "root_long")
+    config = make_qa_config(root, tmp_path / "cache_long", tmp_path / "frames")
+    app = appmod.create_app(app_config=config)
+    app.testing = True
+    http = app.test_client()
+    assert http.post("/api/video/index_folder", json={"path": str(root)}).status_code == 200
+
+    body = http.post(
+        "/api/video/vqa",
+        json={"question": "what is shown?", "event": "a vehicle", "topk": 20},
+    ).get_json()
+
+    assert len(body["answer"]) <= 100
+    assert len(body["answer_normalized"]) <= 100
+    assert all(len(item["normalized_answer"]) <= 100 for item in body["hypotheses"])
+    assert all(len(row[2]) <= 100 for row in body["predictions"])
+    assert all(
+        len(row["answer"]["current_value"]) <= 100
+        for row in body["result_batch"]["rows"]
+        if row.get("answer")
+    )
+
+
 def test_qa_uses_one_runtime_generation_snapshot(client) -> None:
     http, root_a, root_b = client
     assert http.post("/api/video/index_folder", json={"path": str(root_a)}).status_code == 200

@@ -7,6 +7,7 @@ defaults consulted while *constructing* the initial state, never while serving.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import replace as dataclass_replace
 from io import BytesIO
 from pathlib import Path
@@ -40,6 +41,11 @@ from aic2026.system_profile import (
     SUBMISSION_VALIDATION_VERSION,
     build_system_profile,
     evaluate_readiness,
+)
+from aic2026.query_normalization import (
+    build_competition_retrieval_query,
+    build_trake_event_retrieval_query,
+    competition_retrieval_hints,
 )
 from aic2026.submission_validation import (
     SUBMISSION_TASKS,
@@ -80,6 +86,20 @@ AIC_CACHE_DIR = _ROOT / "artifacts" / "aic2026_index"
 SUBMISSION_DIR = _ROOT / "artifacts" / "submissions"
 
 STATE_EXTENSION_KEY = "aic_runtime_state"
+QA_ANSWER_MAX_CHARS = 100
+
+
+def quiet_access_log() -> None:
+    """Hide per-request development-server lines from the operator terminal."""
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+
+def _compact_answer(value: Any, *, limit: int = QA_ANSWER_MAX_CHARS) -> str:
+    """One-line Q&A answer cap for the operator UI and editable result rows."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def create_app(
@@ -653,7 +673,8 @@ def create_app(
         # `refine: false` turns local refinement off for this query only, so the two
         # pipelines can be compared without restarting or editing configuration.
         refine = None if data.get("refine") is None else bool(data.get("refine"))
-        outcome = engine.search_kis_detailed(query, top_k=pool_k, refine=refine)
+        retrieval_query = build_competition_retrieval_query(query)
+        outcome = engine.search_kis_detailed(retrieval_query, top_k=pool_k, refine=refine)
         preds = outcome.predictions
         available = _available_videos(state)
         batch = _new_batch(state, "kis", query, preds)
@@ -661,6 +682,8 @@ def create_app(
             task="kis",
             video="__aic2026__",
             query=query,
+            search_query=retrieval_query,
+            query_hints=list(competition_retrieval_hints(query)),
             generation=state.generation,
             result_batch=batch.to_dict(),
             count=len(preds),
@@ -702,12 +725,48 @@ def create_app(
                 window_s=float(data.get("window", 8.0)),
                 # Finally wired: the UI's answer-type selector reaches normalization.
                 expected_answer_type=data.get("expected_answer_type"),
+                retrieval_query_mode=data.get("retrieval_query_mode"),
                 use_local_refinement=(
                     None if data.get("refine") is None else bool(data.get("refine"))
                 ),
             )
         except ValueError as exc:
             return _error(str(exc), "INVALID_ANSWER_TYPE", 400)
+        answer = _compact_answer(info.get("answer"))
+        answer_normalized = _compact_answer(info.get("answer_normalized") or answer)
+        info = {
+            **info,
+            "answer": answer,
+            "answer_normalized": answer_normalized,
+            "hypotheses": [
+                {
+                    **item,
+                    "answer": _compact_answer(item.get("answer")),
+                    "normalized_answer": _compact_answer(
+                        item.get("normalized_answer") or item.get("answer")
+                    ),
+                }
+                for item in info.get("hypotheses", [])
+            ],
+        }
+        preds = [
+            dataclass_replace(
+                pred,
+                answer=_compact_answer(pred.answer),
+                qa=(
+                    None
+                    if pred.qa is None
+                    else {
+                        **pred.qa,
+                        "raw_answer": _compact_answer(pred.qa.get("raw_answer")),
+                        "normalized_answer": _compact_answer(
+                            pred.qa.get("normalized_answer") or pred.qa.get("raw_answer")
+                        ),
+                    }
+                ),
+            )
+            for pred in preds
+        ]
         frames = [
             _frame_json(state, fid)
             for fid in info.get("frame_ids", [])
@@ -742,10 +801,12 @@ def create_app(
             answer_normalized=info.get("answer_normalized"),
             answer_status=info.get("answer_status"),
             expected_answer_type=info.get("expected_answer_type"),
+            retrieval_query_mode=info.get("retrieval_query_mode"),
             grounding_score=info.get("grounding_score"),
             answer_confidence=info.get("answer_confidence"),
             answer_reliability_score=info.get("answer_reliability_score"),
             warning=info.get("warning"),
+            ground_query=info.get("ground_query"),
             evidence_roles=info.get("evidence_roles", []),
             used_frame_ids=info.get("used_frame_ids", []),
             frames=frames,
@@ -770,13 +831,14 @@ def create_app(
         events = [e.strip() for e in (data.get("events") or []) if e and e.strip()]
         if len(events) < 2:
             return _error("At least two ordered events are required.", "QUERY_REQUIRED", 400)
+        retrieval_events = [build_trake_event_retrieval_query(event) for event in events]
         # Same split as KIS: the pool holds every structurally complete sequence the
         # aligner produced, up to the official cap. Nothing is padded when fewer exist.
         pool_k = _pool_size(engine, data.get("max_results"))
         display_limit = _display_limit(data, pool_k)
         try:
             outcome = engine.search_trake_detailed(
-                events,
+                retrieval_events,
                 per_event_k=int(data.get("per_event_k", 40)),
                 max_results=pool_k,
                 refine_window_s=(
@@ -787,20 +849,38 @@ def create_app(
         except ValueError as exc:
             return _error(str(exc), "QUERY_REQUIRED", 400)
         preds = outcome.predictions
+        if len(preds) != len(outcome.trake_predictions):
+            return _error(
+                "TRAKE engine returned inconsistent prediction/alignment counts.",
+                "INTERNAL_TRAKE_MISMATCH",
+                500,
+                prediction_count=len(preds),
+                alignment_count=len(outcome.trake_predictions),
+            )
         out = []
         # Every returned sequence is complete, so step i IS event i. The old code zipped
         # a compacted step list against the full event list and shifted every label after
         # a gap; that is structurally impossible now.
-        for prediction, alignment in zip(preds, outcome.trake_predictions):
+        for alignment in outcome.trake_predictions:
             steps = []
             for step in alignment.steps:
+                event_index = int(step.event_index)
+                if event_index < 0 or event_index >= len(events):
+                    return _error(
+                        "TRAKE engine returned an out-of-range event index.",
+                        "INTERNAL_TRAKE_MISMATCH",
+                        500,
+                        event_index=event_index,
+                        event_count=len(events),
+                    )
                 payload = _frame_json(
                     state,
                     str(step.keyframe_id),
                     {
-                        "event": step.event_text,
-                        "event_index": step.event_index,
-                        "event_label": f"Event {step.event_index + 1}",
+                        "event": events[event_index],
+                        "event_search_text": step.event_text,
+                        "event_index": event_index,
+                        "event_label": f"Event {event_index + 1}",
                         "status": step.status,
                         "submission_frame_id": step.submission_frame_idx,
                         # Evidence only: a refined frame is never the submitted frame.
@@ -841,6 +921,8 @@ def create_app(
             generation=state.generation,
             result_batch=batch.to_dict(),
             events=events,
+            search_events=retrieval_events,
+            event_hints=[list(competition_retrieval_hints(event)) for event in events],
             event_count=len(events),
             count=len(out),
             pool_k=pool_k,
@@ -1179,4 +1261,5 @@ def create_app(
 app = create_app()
 
 if __name__ == "__main__":
+    quiet_access_log()
     app.run(debug=False, port=5000, threaded=True)

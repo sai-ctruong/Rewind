@@ -67,7 +67,7 @@ def test_ui_does_not_advertise_removed_capabilities() -> None:
     lowered = UI_HTML.lower()
     for removed in ("sketch", "dialogue", "agent tab", "image search", "user feedback"):
         assert removed not in lowered
-    assert "Textual KIS" in UI_HTML and "TRAKE" in UI_HTML and "Q&amp;A" in UI_HTML
+    assert "KIS - t" in UI_HTML and "TRAKE - chu" in UI_HTML and "Q&amp;A - t" in UI_HTML
 
 
 # ----------------------------------------------------------------- dead config knobs

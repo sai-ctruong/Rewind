@@ -33,7 +33,12 @@ from .cache_manifest import (
     inspect_cache,
 )
 from .config import AppConfig, config_hash
-from .dataset_scope import hash_selected_video_ids, resolve_dataset_scope, scope_payload
+from .dataset_scope import (
+    ResolvedDatasetScope,
+    hash_selected_video_ids,
+    resolve_dataset_scope,
+    scope_payload,
+)
 from .retrieval_channels import CHANNEL_SCHEMA_VERSION
 from .submission_validation import MAX_SUBMISSION_ROWS, SUBMISSION_TASKS
 from .version import PROJECT_VERSION, git_commit, git_is_dirty
@@ -202,6 +207,8 @@ def build_system_profile(
         selected = sorted({raw.video_id for raw in engine.entry.raws.values()})
     elif manifest.get("selected_video_ids"):
         selected = list(manifest["selected_video_ids"])
+    elif isinstance(resolved_scope, ResolvedDatasetScope) and resolved_scope.source_video_ids is not None:
+        selected = list(resolved_scope.source_video_ids)
 
     channels: dict[str, Any] = {}
     if engine is not None:

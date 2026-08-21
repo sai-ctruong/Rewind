@@ -26,7 +26,7 @@ def test_home_serves_competition_html(client) -> None:
     html = r.get_data(as_text=True)
     assert "<!doctype html>" in html.lower()
     assert "AIC 2026 Rewind" in html
-    assert "Textual KIS" in html and "Q&amp;A" in html and "TRAKE" in html
+    assert "KIS - t" in html and "Q&amp;A - t" in html and "TRAKE - chu" in html
 
 
 def test_health_reports_competition_mode(client) -> None:
@@ -118,9 +118,7 @@ def test_index_html_wires_only_competition_apis() -> None:
         "/api/health",
         "/api/video/list",
         "/api/video/index",
-        "/api/video/index_folder",
         "/api/video/progress",
-        "/api/video/save",
         "/api/video/search",
         "/api/video/vqa",
         "/api/video/temporal",
@@ -143,13 +141,14 @@ def test_index_html_wires_only_competition_apis() -> None:
 
 def test_global_index_controls_and_three_views_exist() -> None:
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-    # `gv-ocr` was renamed to `gv-objects`: the id said OCR while the label said Objects
-    # and the backend key was `objects`. Ids and backend keys now match.
-    for gid in ("gv-bar", "gv-select", "gv-load", "gv-dataset", "gv-folder-btn", "gv-save", "gv-objects", "gv-asr", "gv-caption"):
+    for gid in ("gv-bar", "gv-dataset", "gv-objects"):
         assert f'id="{gid}"' in html
-    assert 'id="gv-ocr"' not in html
-    for sid in ("kis-save", "qa-save", "trake-save", "kis-preflight", "kis-reset"):
+    for hidden in ("gv-ocr", "gv-select", "gv-load", "gv-folder-btn", "gv-save", "gv-asr", "gv-caption"):
+        assert f'id="{hidden}"' not in html
+    for sid in ("kis-reset", "qa-reset", "trake-reset"):
         assert f'id="{sid}"' in html
+    for hidden in ("kis-preflight", "qa-preflight", "trake-preflight", "kis-save", "qa-save", "trake-save"):
+        assert f'id="{hidden}"' not in html
     for view in ("kis", "qa", "trake"):
         assert f'id="view-{view}"' in html
         assert f'data-view="{view}"' in html

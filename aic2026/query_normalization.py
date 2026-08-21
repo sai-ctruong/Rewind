@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 # Bump when the vocabulary or folding rules change in a way that affects retrieval.
-QUERY_VOCABULARY_VERSION = 1
+QUERY_VOCABULARY_VERSION = 2
 
 # Vietnamese `đ` carries no combining mark, so NFD leaves it intact and it must be
 # mapped explicitly. Everything else folds through Unicode decomposition.
@@ -101,6 +101,57 @@ VIETNAMESE_ENGLISH_TERMS: dict[str, tuple[str, ...]] = {
     "qua": ("gift",),
     "thuc an": ("food",),
     "nuoc": ("water",),
+}
+
+# Short visual/action hints for the competition UI. These are intentionally folded
+# ASCII phrases because they are matched against `accent_folded`, and they are kept
+# small so one Vietnamese query does not turn into a noisy paragraph for CLIP.
+ACTION_ENGLISH_TERMS: dict[str, tuple[str, ...]] = {
+    "di vao": ("entering", "walking into"),
+    "buoc vao": ("entering", "walking into"),
+    "vao phong": ("entering a room",),
+    "di ra": ("leaving", "walking out"),
+    "roi khoi": ("leaving",),
+    "di bo": ("walking",),
+    "dang di": ("walking",),
+    "chay": ("running",),
+    "dung lai": ("stopping",),
+    "ngoi": ("sitting",),
+    "dung day": ("standing up",),
+    "cam": ("holding", "person holding object"),
+    "nam giu": ("holding", "person holding object"),
+    "nhat": ("picking up",),
+    "lay": ("taking", "picking up"),
+    "dat xuong": ("putting down",),
+    "bo xuong": ("putting down",),
+    "mo cua": ("opening a door",),
+    "dong cua": ("closing a door",),
+    "noi chuyen": ("talking", "conversation"),
+    "goi dien": ("talking on phone",),
+    "nhin": ("looking at",),
+    "doc": ("reading",),
+    "viet": ("writing",),
+    "an": ("eating",),
+    "uong": ("drinking",),
+    "dua": ("giving",),
+    "nhan": ("receiving",),
+}
+
+COLOR_ENGLISH_TERMS: dict[str, tuple[str, ...]] = {
+    "mau do": ("red",),
+    "ao do": ("red shirt",),
+    "mau xanh la": ("green",),
+    "xanh la": ("green",),
+    "mau xanh duong": ("blue",),
+    "xanh duong": ("blue",),
+    "mau vang": ("yellow",),
+    "mau den": ("black",),
+    "mau trang": ("white",),
+    "mau cam": ("orange",),
+    "mau tim": ("purple",),
+    "mau hong": ("pink",),
+    "mau nau": ("brown",),
+    "xam": ("gray",),
 }
 
 # The reverse direction, so an English query still reaches Vietnamese lexical fields.
@@ -337,8 +388,58 @@ def label_tokens(value: str) -> tuple[str, ...]:
     return tuple(normalize_label(value).split())
 
 
+def _phrase_hints(folded: str, vocabulary: Mapping[str, tuple[str, ...]]) -> list[str]:
+    hints: list[str] = []
+    padded = f" {folded} "
+    for phrase, terms in vocabulary.items():
+        if f" {phrase} " not in padded:
+            continue
+        hints.extend(terms)
+    return hints
+
+
+def competition_retrieval_hints(text: str, *, include_actions: bool = True) -> tuple[str, ...]:
+    """Bounded English hints for CLIP-heavy competition retrieval.
+
+    `normalize_query` still preserves the user's original text. This helper is an
+    explicit opt-in for UI searches where a Vietnamese prompt benefits from English
+    detector/action words being appended next to the original query.
+    """
+    representation = normalize_query(text)
+    hints: list[str] = []
+    for item in representation.expanded_terms:
+        if item.negated or item.source not in {"vi_en_vocabulary", "en_vi_vocabulary"}:
+            continue
+        hints.append(item.term)
+    hints.extend(_phrase_hints(representation.accent_folded, COLOR_ENGLISH_TERMS))
+    if include_actions:
+        hints.extend(_phrase_hints(representation.accent_folded, ACTION_ENGLISH_TERMS))
+    if representation.number_terms:
+        hints.append("counting people objects")
+    return tuple(dict.fromkeys(hint for hint in hints if hint))
+
+
+def build_competition_retrieval_query(
+    text: str, *, include_actions: bool = True, max_hints: int = 14
+) -> str:
+    """Append concise bilingual hints while keeping the user's text first."""
+    original = " ".join(str(text or "").split())
+    hints = competition_retrieval_hints(original, include_actions=include_actions)
+    hints = hints[: max(0, int(max_hints))]
+    if not original or not hints:
+        return original
+    return f"{original}. Visual hints: {', '.join(hints)}."
+
+
+def build_trake_event_retrieval_query(text: str) -> str:
+    """TRAKE event version: action hints matter more than broad object recall."""
+    return build_competition_retrieval_query(text, include_actions=True, max_hints=10)
+
+
 __all__ = [
     "ENGLISH_VIETNAMESE_TERMS",
+    "ACTION_ENGLISH_TERMS",
+    "COLOR_ENGLISH_TERMS",
     "NEGATION_SCOPE_TOKENS",
     "NEGATION_TERMS",
     "QUERY_VOCABULARY_VERSION",
@@ -347,6 +448,9 @@ __all__ = [
     "ExpandedTerm",
     "QueryRepresentation",
     "fold_accents",
+    "build_competition_retrieval_query",
+    "build_trake_event_retrieval_query",
+    "competition_retrieval_hints",
     "label_tokens",
     "normalize_label",
     "normalize_query",

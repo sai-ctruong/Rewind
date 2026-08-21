@@ -3,17 +3,53 @@ from pathlib import Path
 import ui.app as appmod
 
 
-def test_competition_ui_exposes_status_manual_controls_and_background_eval() -> None:
+def test_competition_ui_exposes_status_and_manual_controls() -> None:
     html = (Path(appmod.__file__).parent / "index.html").read_text(encoding="utf-8")
     for token in (
         'id="qa-event"', 'id="qa-type"', 'id="qa-confidence"', 'id="qa-correction"',
-        'id="trake-status"', 'id="view-evaluation"', 'id="evaluation-labels"',
-        "/api/evaluation/run", "/api/evaluation/status",
+        'id="trake-status"', 'id="gv-dataset"', 'id="gv-objects" type="checkbox" checked', "Load Dataset",
+        'id="kis-display" type="hidden" value="100"',
+        "function compactAnswer(value, limit = 100)",
+        "KIS - t", "Q&amp;A - t", "TRAKE - chu",
+        "Copy video_id, frame", "Show nearby keyframes",
+        'id="trake-nearby"', "Copy sequence", "query_hints", "event_hints",
+        'retrieval_query_mode: "evidence"',
         # The edit control is now explicitly row-scoped and names the SUBMISSION frame.
         "Manual SUBMISSION frame edit (this row only)",
         "score_breakdown", "mp4", "encoder_type",
     ):
         assert token in html
+    for token in (
+        'data-view="evaluation"',
+        'id="view-evaluation"',
+        'id="evaluation-labels"',
+        "/api/evaluation/run",
+        "/api/evaluation/status",
+        'id="gv-select"',
+        'id="gv-load"',
+        'id="gv-folder"',
+        'id="gv-folder-btn"',
+        'id="gv-save"',
+        'id="gv-asr"',
+        'id="gv-caption"',
+        'id="kis-refine"',
+        'id="kis-refine-status"',
+        'id="qa-window"',
+        'id="kis-preflight"',
+        'id="qa-preflight"',
+        'id="trake-preflight"',
+        'id="kis-save"',
+        'id="qa-save"',
+        'id="trake-save"',
+        "Video/index",
+        "Dataset Root",
+        "Local refinement",
+        "Save CSV",
+        "Show top",
+        "Per event K",
+        "Expected answer type",
+    ):
+        assert token not in html
 
 
 def test_ui_never_mutates_rows_by_matching_frame_values() -> None:

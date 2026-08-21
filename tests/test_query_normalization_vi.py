@@ -11,11 +11,16 @@ import unicodedata
 import pytest
 
 from aic2026.query_normalization import (
+    ACTION_ENGLISH_TERMS,
+    COLOR_ENGLISH_TERMS,
     ENGLISH_VIETNAMESE_TERMS,
     NEGATION_TERMS,
     QUERY_VOCABULARY_VERSION,
     TEMPORAL_TERMS,
     VIETNAMESE_ENGLISH_TERMS,
+    build_competition_retrieval_query,
+    build_trake_event_retrieval_query,
+    competition_retrieval_hints,
     fold_accents,
     label_tokens,
     normalize_label,
@@ -200,13 +205,32 @@ def test_expansion_can_be_switched_off() -> None:
 
 
 def test_the_vocabulary_is_versioned_and_bidirectional() -> None:
-    assert QUERY_VOCABULARY_VERSION >= 1
+    assert QUERY_VOCABULARY_VERSION >= 2
     assert normalize_query("x").vocabulary_version == QUERY_VOCABULARY_VERSION
     assert VIETNAMESE_ENGLISH_TERMS["nguoi"][0] == "person"
     assert "nguoi" in ENGLISH_VIETNAMESE_TERMS["person"]
     # Every vocabulary key is already folded, or lookups would silently miss.
     for key in VIETNAMESE_ENGLISH_TERMS:
         assert fold_accents(key) == key, f"vocabulary key {key!r} is not accent-folded"
+    for vocabulary in (ACTION_ENGLISH_TERMS, COLOR_ENGLISH_TERMS):
+        for key in vocabulary:
+            assert fold_accents(key) == key, f"vocabulary key {key!r} is not accent-folded"
+
+
+def test_competition_retrieval_query_appends_bounded_visual_hints() -> None:
+    query = build_competition_retrieval_query("nguoi cam dien thoai mau do")
+    assert query.startswith("nguoi cam dien thoai mau do")
+    assert "person" in query
+    assert "mobile phone" in query
+    assert "holding" in query
+    assert "red" in query
+    assert len(competition_retrieval_hints("nguoi cam dien thoai mau do")) <= 14
+
+
+def test_trake_event_retrieval_query_adds_action_language() -> None:
+    query = build_trake_event_retrieval_query("nguoi di vao phong")
+    assert query.startswith("nguoi di vao phong")
+    assert "entering" in query or "walking into" in query
 
 
 # ---------------------------------------------------------------- label side

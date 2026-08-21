@@ -25,6 +25,8 @@ from typing import Any, Iterable, Optional, Protocol, Sequence, runtime_checkabl
 from ingestion.schemas import KeyframeRecord
 from retrieval.vqa_module import MockVqaAnswerer, VqaAnswer, VqaAnswerer
 
+from .query_normalization import fold_accents, normalize_query
+
 # --------------------------------------------------------------------- answer types
 
 ANSWER_TYPE_AUTO = "auto"
@@ -1125,9 +1127,58 @@ class OptionalApiVlmAnswerer(VqaAnswerer):
         )
 
 
+_QUESTION_STOP_TERMS = frozenset(
+    {
+        "ai", "cai", "gi", "gì", "nao", "nào", "o", "ở", "dau", "đâu", "la", "là",
+        "co", "có", "khong", "không", "phai", "phải", "what", "who", "where",
+        "when", "why", "how", "is", "are", "does", "do", "did", "the", "a", "an",
+    }
+)
+
+
+def build_evidence_retrieval_query(data: QAInput) -> str:
+    """Retrieval text for evidence-first Q&A.
+
+    The answerer may be weak or non-visual, so the first job is to find frames a human
+    can inspect. Keep the user's event text, add question cues that describe visual
+    evidence, and append cheap bilingual/object expansions. No external translation or
+    model call happens here.
+    """
+    event = (data.event_description or "").strip()
+    question = (data.question or "").strip()
+    combined = " ".join(part for part in (event, question) if part)
+    representation = normalize_query(combined)
+    folded_question = fold_accents(question.casefold())
+    hints: list[str] = []
+    if any(term in folded_question for term in ("cam gi", "holding", "hold", "carrying", "wearing", "mac gi")):
+        hints.extend(["person holding object", "hands", "item"])
+    if any(term in folded_question for term in ("mau", "color", "colour")):
+        hints.extend(["color", "clothing", "shirt", "vehicle"])
+    if any(term in folded_question for term in ("bao nhieu", "how many", "count", "so luong")):
+        hints.extend(["count", "many", "people", "objects"])
+    if any(term in folded_question for term in ("sau khi", "after", "then", "tiep theo")):
+        hints.extend(["after", "then", "next action"])
+    if any(term in folded_question for term in ("truoc khi", "before")):
+        hints.extend(["before", "previous action"])
+
+    question_terms = [
+        token for token in representation.tokens_folded
+        if token not in _QUESTION_STOP_TERMS and len(token) > 1
+    ]
+    parts = [
+        event,
+        " ".join(question_terms[:12]),
+        " ".join(representation.object_terms[:16]),
+        " ".join(dict.fromkeys(hints)),
+    ]
+    return " ".join(part.strip() for part in parts if part and part.strip())
+
+
 def build_retrieval_query(data: QAInput, mode: str = "event_only", question_weight: float = 0.35) -> str:
     if mode == "event_only":
         return data.event_description.strip() or data.question.strip()
+    if mode == "evidence":
+        return build_evidence_retrieval_query(data)
     if mode == "event_plus_question":
         return " ".join(part.strip() for part in (data.event_description, data.question) if part.strip())
     if mode == "weighted_combination":
@@ -1232,6 +1283,7 @@ __all__ = [
     "answer_matches_type",
     "answer_reliability_score",
     "build_answer_prompt",
+    "build_evidence_retrieval_query",
     "build_qa_answerer",
     "build_retrieval_query",
     "canonical_answer_type",

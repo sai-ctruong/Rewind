@@ -266,13 +266,20 @@ def _system_profile_command(args: argparse.Namespace, app_config, config_path: s
 
 def _serve_command(args: argparse.Namespace, app_config, config_path: str) -> int:
     """The one canonical way to start the competition system."""
-    from ui.app import create_app
+    from ui.app import create_app, quiet_access_log
 
+    quiet_access_log()
     report = evaluate_readiness(app_config, config_path=config_path)
     for check in report.checks:
         if check.status != "PASS":
             print(f"{check.status} {check.name}: {check.message}", file=sys.stderr)
-    if report.status == "NOT_READY":
+    failures = {check.name for check in report.failures}
+    # `serve --no-activate` is intentionally an operator UI: it may open before the
+    # index/cache is usable so the user can inspect state and choose when to pay the
+    # load cost. Still refuse roots/scopes that cannot possibly work.
+    deferred_failures = {"cache", "cache_policy"} if not args.activate else set()
+    blocking_failures = failures - deferred_failures
+    if blocking_failures:
         print(
             json.dumps(
                 {"error": "System is NOT_READY; refusing to serve.", "readiness": report.to_dict()},
@@ -282,6 +289,18 @@ def _serve_command(args: argparse.Namespace, app_config, config_path: str) -> in
             file=sys.stderr,
         )
         return 2
+    if failures:
+        print(
+            json.dumps(
+                {
+                    "warning": "System is NOT_READY, but serve --no-activate is opening the UI for inspection.",
+                    "deferred_failures": sorted(failures),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
 
     app = create_app(config_path=config_path, app_config=app_config)
     if args.activate:

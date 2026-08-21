@@ -31,6 +31,8 @@ button {
 button:hover { border-color: var(--line-strong); background: var(--surface-2); }
 button.primary { background: var(--teal); color: white; border-color: var(--teal); }
 button.primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
+button.secondary { background: var(--surface-2); }
+button.icon { min-width: 34px; padding: 0 9px; }
 button.danger { color: var(--red); }
 button:disabled { opacity: .55; cursor: wait; }
 input, textarea, select {
@@ -53,7 +55,7 @@ a:hover { text-decoration: underline; }
 .badge.ok { color: var(--teal-dark); background: var(--ok-soft); border-color: #b8ded5; }
 .badge.blue { color: #1d4ed8; background: var(--blue-soft); border-color: #c6d7ff; }
 .badge.warn { color: #8a5a10; background: var(--amber-soft); border-color: #eed49a; }
-.controls { display: grid; grid-template-columns: minmax(240px, 1.35fr) auto auto auto auto minmax(260px, 1fr); gap: 8px; align-items: end; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .checks { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .checks label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; border: 1px solid var(--line); padding: 7px 9px; border-radius: 999px; background: var(--surface-2); }
 .checks input { width: auto; }
@@ -68,6 +70,8 @@ a:hover { text-decoration: underline; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 12px; box-shadow: var(--shadow); }
 .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-width: 0; }
 .panel h2 { margin: 0; font-size: 16px; letter-spacing: 0; }
+.helper { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.helper.warn { color: var(--amber); }
 .action-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 11px; align-items: start; }
@@ -82,17 +86,16 @@ a:hover { text-decoration: underline; }
 .score-line { display: flex; gap: 5px; flex-wrap: wrap; }
 .score-chip { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 999px; padding: 2px 7px; font-size: 11px; }
 .evidence { color: #425466; line-height: 1.35; max-height: 3.9em; overflow: hidden; }
-.frame-edit { display: grid; grid-template-columns: 1fr auto; gap: 7px; align-items: center; }
-.frame-edit input { height: 32px; padding: 5px 8px; }
+.frame-edit { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.frame-edit input { height: 32px; padding: 5px 8px; flex: 1 1 96px; }
 .chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--surface-2); margin-bottom: 10px; }
 .chain-label { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.output { white-space: pre-wrap; background: #101820; color: #edf2f7; border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; overflow: auto; max-height: 250px; border: 1px solid #243142; }
-.output:empty { display: none; }
+.output { display: none; }
 .empty { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 20px; color: var(--muted); background: var(--surface-2); }
-.answer-box { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--blue-soft); color: #1e3a8a; font-size: 18px; font-weight: 700; min-height: 56px; }
+.answer-box { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--blue-soft); color: #1e3a8a; font-size: 18px; font-weight: 700; min-height: 56px; overflow-wrap: anywhere; }
 .answer-box.empty { font-size: 13px; font-weight: 400; color: var(--muted); background: var(--surface-2); }
+.answer-box.compact { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; font-size: 15px; line-height: 1.35; }
 @media (max-width: 1080px) {
-  .controls { grid-template-columns: minmax(220px, 1fr) repeat(4, auto); }
   .checks { grid-column: 1 / -1; justify-content: flex-start; }
 }
 @media (max-width: 880px) {
@@ -112,23 +115,12 @@ a:hover { text-decoration: underline; }
         <div id="health" class="health-strip status"><span class="badge">loading</span></div>
       </div>
       <div id="gv-bar" class="controls">
-        <label>Video/index
-          <select id="gv-select"></select>
-        </label>
-        <button id="gv-load" class="primary" title="Load selected index">Index</button>
-        <button id="gv-dataset" title="Load full dataset cache">Dataset</button>
-        <button id="gv-folder-btn" title="Activate a different AIC dataset root (DATA_ROOT). This replaces the whole runtime dataset state: engine, frames, videos and cache.">Dataset Root</button>
-        <button id="gv-save" title="Save current index cache">Save</button>
+        <button id="gv-dataset" class="primary" title="Load full dataset cache">Load Dataset</button>
         <div class="checks" aria-label="Index signals">
           <!-- The id was `gv-ocr` while the label said Objects; the backend key is
                `objects`, so the id now matches what it actually controls. -->
-          <label><input id="gv-objects" type="checkbox"> Objects</label>
-          <label id="gv-asr-label"><input id="gv-asr" type="checkbox"> ASR</label>
-          <label id="gv-caption-label"><input id="gv-caption" type="checkbox"> Caption</label>
+          <label><input id="gv-objects" type="checkbox" checked> Objects</label>
         </div>
-      </div>
-      <div class="folder-row">
-        <input id="gv-folder" placeholder="C:\Users\ad\Downloads\codepython\project\KISC_module\data" aria-label="AIC DATA_ROOT">
         <div id="progress" class="status"></div>
       </div>
     </div>
@@ -138,31 +130,20 @@ a:hover { text-decoration: underline; }
       <button class="tab active" data-view="kis">KIS</button>
       <button class="tab" data-view="qa">Q&amp;A</button>
       <button class="tab" data-view="trake">TRAKE</button>
-      <button class="tab" data-view="evaluation">Evaluation</button>
     </nav>
 
     <section id="view-kis" class="view active">
       <form id="kis-form" class="panel">
-        <div class="panel-header"><h2>Textual KIS</h2><span class="badge blue">Top 100 cap</span></div>
-        <label>Query<textarea id="kis-query" required></textarea></label>
-        <div class="two">
-          <!-- Display only. The result batch always holds the full competition pool
-               (up to 100 rows); this controls how many cards are drawn. -->
-          <label>Show top<input id="kis-display" type="number" min="1" max="100" value="20"></label>
-          <span id="kis-pool-status" class="badge"></span>
-        </div>
-        <div class="two">
-          <label>Local refinement<select id="kis-refine"><option value="config">Follow config</option><option value="0">Off (compare)</option></select></label>
-          <span id="kis-refine-status" class="badge"></span>
-        </div>
+        <div class="panel-header"><h2>KIS - tìm frame</h2><span class="badge blue">keyframe</span></div>
+        <label>Mô tả cảnh cần tìm<textarea id="kis-query" required placeholder="Nhập nguyên câu hỏi hoặc mô tả cảnh trong đề"></textarea></label>
+        <input id="kis-display" type="hidden" value="100">
+        <p id="kis-pool-status" class="helper"></p>
         <button class="primary">Search</button>
       </form>
       <section class="panel">
         <div class="panel-header"><h2>Results</h2>
           <span id="kis-edit-status" class="status"></span>
-          <button id="kis-preflight" type="button">Preflight</button>
-          <button id="kis-reset" type="button">Reset edits</button>
-          <button id="kis-save">Save CSV</button></div>
+          <button id="kis-reset" class="secondary" type="button">Reset edits</button></div>
         <div id="kis-results" class="results"></div>
         <pre id="kis-output" class="output"></pre>
       </section>
@@ -170,26 +151,21 @@ a:hover { text-decoration: underline; }
 
     <section id="view-qa" class="view">
       <form id="qa-form" class="panel">
-        <div class="panel-header"><h2>Q&amp;A</h2><span class="badge blue">Grounded</span></div>
-        <label>Event description<textarea id="qa-event" required></textarea></label>
-        <label>Question<textarea id="qa-question" required></textarea></label>
-        <div class="two">
-          <label>Expected answer type<select id="qa-type"><option value="">Auto</option><option>number</option><option>yes/no</option><option>color</option><option>text</option></select></label>
-          <label>Window seconds<input id="qa-window" type="number" min="1" max="60" value="8"></label>
-        </div>
+        <div class="panel-header"><h2>Q&amp;A - tìm bằng chứng</h2><span class="badge blue">helper</span></div>
+        <label>Mô tả cảnh/video liên quan<textarea id="qa-event" required placeholder="Ví dụ: cảnh có người đang..."></textarea></label>
+        <label>Câu hỏi cần trả lời<textarea id="qa-question" required placeholder="Ví dụ: người đó đang cầm gì?"></textarea></label>
+        <select id="qa-type" hidden><option value="">Auto</option><option>number</option><option>yes/no</option><option>color</option><option>text</option></select>
         <button class="primary">Answer</button>
       </form>
       <section class="panel">
         <div class="panel-header"><h2>Grounded Answer</h2>
           <span id="qa-edit-status" class="status"></span>
-          <button id="qa-preflight" type="button">Preflight</button>
-          <button id="qa-reset" type="button">Reset edits</button>
-          <button id="qa-save">Save CSV</button></div>
-        <div id="qa-backend" class="status"></div>
+          <button id="qa-reset" class="secondary" type="button">Reset edits</button></div>
+        <div id="qa-backend" class="status" hidden></div>
         <div id="qa-answer" class="answer-box empty"></div>
         <div id="qa-confidence" class="status"></div>
-        <label>Manual answer correction (selected row only)<input id="qa-correction"></label>
-        <label class="inline"><input id="qa-apply-all" type="checkbox"> Apply to all rows in this video hypothesis</label>
+        <label>Sửa đáp án nháp<input id="qa-correction"></label>
+        <label class="inline" hidden><input id="qa-apply-all" type="checkbox"> Apply to all rows in this video hypothesis</label>
         <div id="qa-hypotheses" class="results"></div>
         <div id="qa-results" class="results"></div>
         <pre id="qa-output" class="output"></pre>
@@ -198,38 +174,23 @@ a:hover { text-decoration: underline; }
 
     <section id="view-trake" class="view">
       <form id="trake-form" class="panel">
-        <div class="panel-header"><h2>TRAKE</h2><span class="badge warn">Ordered</span></div>
-        <label>Ordered events<textarea id="trake-events" required placeholder="event 1&#10;event 2"></textarea></label>
-        <div class="two">
-          <label>Per event K<input id="trake-perk" type="number" min="1" max="100" value="20"></label>
-          <!-- Display only; the batch keeps every complete sequence up to the 100 cap. -->
-          <label>Show top<input id="trake-display" type="number" min="1" max="100" value="20"></label>
-        </div>
+        <div class="panel-header"><h2>TRAKE - chuỗi sự kiện</h2><span class="badge warn">ordered</span></div>
+        <label>Mỗi dòng là một sự kiện theo đúng thứ tự<textarea id="trake-events" required placeholder="event 1&#10;event 2"></textarea></label>
+        <input id="trake-perk" type="hidden" value="40">
+        <input id="trake-display" type="hidden" value="12">
         <button class="primary">Search Chain</button>
       </form>
       <section class="panel">
         <div class="panel-header"><h2>Chains</h2>
           <span id="trake-edit-status" class="status"></span>
-          <button id="trake-preflight" type="button">Preflight</button>
-          <button id="trake-reset" type="button">Reset edits</button>
-          <button id="trake-save">Save CSV</button></div>
+          <button id="trake-reset" class="secondary" type="button">Reset edits</button></div>
         <div id="trake-status" class="status"></div>
+        <div id="trake-nearby" class="results"></div>
         <div id="trake-results"></div>
         <pre id="trake-output" class="output"></pre>
       </section>
     </section>
 
-    <section id="view-evaluation" class="view">
-      <form id="evaluation-form" class="panel">
-        <div class="panel-header"><h2>Evaluation</h2><span class="badge blue">Official metrics</span></div>
-        <label>AIC labels JSONL<input id="evaluation-labels" placeholder="evaluation\labels\dev.jsonl" required></label>
-        <button class="primary">Run benchmark</button>
-      </form>
-      <section class="panel">
-        <h2>Official metrics</h2>
-        <pre id="evaluation-output" class="output"></pre>
-      </section>
-    </section>
   </main>
 </div>
 <script>
@@ -239,6 +200,7 @@ const state = {
   // Backend result batches, one per task: the authority for editing and export.
   batches: { kis: null, qa: null, trake: null },
   activeTask: "kis", qaHypotheses: [], qaSelectedVideo: null, trakeEventCount: null,
+  loaded: false, loadingDataset: false,
 };
 // Attach the batch row identity to each rendered item, so an edit names one row.
 function withRowIds(task, items, batch) {
@@ -251,10 +213,8 @@ function withRowIds(task, items, batch) {
   }));
 }
 
-function currentVideo() { return $("gv-select").value || "__dataset__"; }
-// Only `objects` is a real build-time switch. ASR and Caption are shown so their absence
-// is visible, and `applyChannelAvailability` disables them when there is no source data.
-function opts() { return { objects: $("gv-objects").checked, asr: $("gv-asr").checked, caption: $("gv-caption").checked }; }
+function currentVideo() { return "__dataset__"; }
+function opts() { return { objects: $("gv-objects").checked, asr: false, caption: false }; }
 function applyChannelAvailability(channels) {
   if (!channels) return;
   const wire = (id, name) => {
@@ -274,20 +234,78 @@ function applyChannelAvailability(channels) {
     }
   };
   wire("gv-objects", "objects");
-  wire("gv-asr", "asr");
-  wire("gv-caption", "caption");
 }
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.code = data.error_code || "";
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 function jsonBody(body) { return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }; }
 function setBusy(btn, busy) { btn.disabled = busy; }
-function renderOutput(id, rows) { $(id).textContent = rows && rows.length ? rows.map(r => r.join(", ")).join("\n") : ""; }
+function renderOutput(id, rows) {
+  const box = $(id);
+  if (!box) return;
+  box.textContent = rows && rows.length ? rows.map(r => r.join(", ")).join("\n") : "";
+}
 function textEl(tag, className, value) { const el = document.createElement(tag); if (className) el.className = className; el.textContent = value ?? ""; return el; }
 function badge(value, tone = "") { const el = textEl("span", "badge " + tone, value); return el; }
+function compactAnswer(value, limit = 100) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  return text.slice(0, Math.max(0, limit - 3)).trimEnd() + "...";
+}
+function setAnswerBox(el, value, { compact = true } = {}) {
+  const full = String(value || "").trim();
+  el.textContent = compact ? compactAnswer(full) : full;
+  el.title = full && full !== el.textContent ? full : "";
+  el.classList.toggle("compact", compact && full.length > 0);
+  el.classList.toggle("empty", !full);
+}
+function copyText(value) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(value);
+  }
+  const el = document.createElement("textarea");
+  el.value = value; document.body.append(el); el.select(); document.execCommand("copy"); el.remove();
+  return Promise.resolve();
+}
+function taskErrorMessage(err) {
+  if (err && err.code === "RUNTIME_STATE_UNINITIALIZED") {
+    return "Index chua load. Bam Load Dataset mot lan, roi chay query lai.";
+  }
+  return (err && err.message) || "Request failed.";
+}
+function renderEmpty(id, message) {
+  const box = $(id);
+  box.innerHTML = "";
+  box.append(textEl("div", "empty", message));
+}
+function showTaskError(task, err) {
+  const message = taskErrorMessage(err);
+  if (task === "kis") {
+    $("kis-pool-status").className = "helper warn";
+    $("kis-pool-status").textContent = message;
+    renderEmpty("kis-results", message);
+    renderOutput("kis-output", []);
+  } else if (task === "qa") {
+    setAnswerBox($("qa-answer"), "");
+    $("qa-confidence").textContent = message;
+    renderEmpty("qa-results", message);
+    renderOutput("qa-output", []);
+  } else if (task === "trake") {
+    $("trake-status").textContent = message;
+    renderEmpty("trake-results", message);
+    renderOutput("trake-output", []);
+  } else {
+    alert(message);
+  }
+}
 // Manual edits and export both address a BACKEND result batch by id. The frontend never
 // builds the competition CSV and never mutates rows by matching values.
 const batchId = (task) => (state.batches[task] || {}).result_id;
@@ -391,15 +409,34 @@ function frameCard(it) {
     });
   };
   editWrap.append(edit);
+  const copy = document.createElement("button");
+  copy.type = "button"; copy.className = "icon secondary"; copy.title = "Copy video_id, frame";
+  copy.textContent = "Copy";
+  copy.onclick = (ev) => {
+    ev.stopPropagation();
+    copyText(`${it.video_id || ""}, ${edit.value || submitted}`).then(() => {
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy"; }, 900);
+    }).catch(e => alert(e.message));
+  };
+  editWrap.append(copy);
+  const nearby = document.createElement("button");
+  nearby.type = "button"; nearby.className = "icon secondary"; nearby.title = "Show nearby keyframes";
+  nearby.textContent = "Nearby";
+  nearby.onclick = (ev) => {
+    ev.stopPropagation();
+    loadNeighbors(it.id || it.frame_id, it.task || state.activeTask);
+  };
+  editWrap.append(nearby);
   if (it.video_url) { const link = document.createElement("a"); link.href = it.video_url; link.target = "_blank"; link.textContent = "Open mp4"; editWrap.append(link); }
   meta.append(top, where); if (scoreLine.childNodes.length) meta.append(scoreLine); if (evidenceText) meta.append(evidence); if (refinedBlock) meta.append(refinedBlock); meta.append(editWrap);
-  d.append(img, meta); d.onclick = () => loadNeighbors(it.id || it.frame_id);
+  d.append(img, meta);
   return d;
 }
-function renderFrames(id, items) {
+function renderFrames(id, items, task = null) {
   const box = $(id); box.innerHTML = "";
   if (!items || !items.length) { box.innerHTML = '<div class="empty">No results</div>'; return; }
-  items.forEach(it => box.append(frameCard(it)));
+  items.forEach(it => box.append(frameCard({ ...it, task: it.task || task })));
 }
 function renderChains(chains, eventCount, batch) {
   const box = $("trake-results"); box.innerHTML = "";
@@ -423,6 +460,18 @@ function renderChains(chains, eventCount, batch) {
       badge(valid ? "order valid" : "invalid order", valid ? "blue" : "warn")
     );
     if (ch.method) label.append(badge(ch.method, ""));
+    const copySeq = document.createElement("button");
+    copySeq.type = "button"; copySeq.className = "secondary"; copySeq.title = "Copy video_id and all submitted event frames";
+    copySeq.textContent = "Copy sequence";
+    copySeq.onclick = () => {
+      const frames = Array.from(chain.querySelectorAll(".frame-edit input"))
+        .map(input => input.value).filter(Boolean);
+      copyText(`${ch.video_id || ""}, ${frames.join(", ")}`).then(() => {
+        copySeq.textContent = "Copied";
+        setTimeout(() => { copySeq.textContent = "Copy sequence"; }, 900);
+      }).catch(e => alert(e.message));
+    };
+    label.append(copySeq);
     chain.append(label);
     ch.steps.forEach((step, i) => {
       // A TRAKE edit targets row_id + event_index, so editing event 2 of sequence 4
@@ -449,20 +498,30 @@ function renderHealth(health) {
   const rt = health.runtime || {};
   const scope = (rt.scope && rt.scope.mode) || "patterns";
   const rootName = String(rt.data_root || "").split("/").filter(Boolean).pop() || "no root";
+  state.loaded = Boolean(rt.engine_loaded);
+  const loadBtn = $("gv-dataset");
+  if (loadBtn && !state.loadingDataset) {
+    loadBtn.disabled = false;
+    loadBtn.textContent = state.loaded ? "Dataset loaded" : "Load Dataset";
+    loadBtn.classList.toggle("secondary", state.loaded);
+    loadBtn.classList.toggle("primary", !state.loaded);
+    loadBtn.title = state.loaded ? "Index/model dang o trong RAM cua server nay" : "Load index/model mot lan cho phien lam viec";
+  }
+  const channels = health.retrieval_channels || {};
+  const channelBadges = ["clip", "objects", "metadata", "ocr"].map(name => {
+    const info = channels[name] || {};
+    if (!info.available) return badge(`${name} n/a`, name === "ocr" ? "" : "warn");
+    return badge(`${name} ${info.records || ""}`.trim(), info.enabled ? "ok" : "");
+  });
   const items = [
-    badge(health.mode || "aic2026", "ok"),
-    badge(`gen ${rt.generation ?? "?"}`, rt.engine_loaded ? "ok" : "warn"),
-    badge(`root ${rootName}`, ""),
-    badge(`scope ${scope}`, ""),
+    badge(state.loaded ? "ready" : "not loaded", state.loaded ? "ok" : "warn"),
     badge(`${health.videos || 0} videos`, ""),
     badge(`${health.dataset_size || 0} frames`, ""),
-    badge(`${health.mp4_available || 0} mp4`, "blue"),
-    badge(`refine ${(health.refinement || {}).mode || "?"}/${((health.refinement || {}).scorer || {}).state || "n/a"}`, ""),
+    badge(`root ${rootName}`, ""),
+    badge(`scope ${scope}`, ""),
+    ...channelBadges,
     badge(`qa ${(health.qa || {}).backend_type || "n/a"}${(health.qa || {}).visual_capable ? " visual" : " non-visual"}`, (health.qa || {}).visual_capable ? "ok" : "warn"),
-    ...Object.entries(health.retrieval_channels || {}).map(([name, info]) =>
-      badge(`${name}${info.available ? " " + info.records : " n/a"}`, info.available ? (info.enabled ? "ok" : "") : "warn")),
-    badge(enc.encoder_type || "encoder pending", enc.production_ready ? "ok" : "warn"),
-    badge(enc.device || "device pending", "")
+    badge(enc.encoder_type || "encoder pending", enc.production_ready ? "ok" : "warn")
   ];
   if (health.warning) items.push(badge("warning", "warn"));
   const box = $("health"); box.innerHTML = ""; items.forEach(item => box.append(item));
@@ -472,14 +531,6 @@ async function refresh() {
   const [health, list] = await Promise.all([api("/api/health"), api("/api/video/list")]);
   state.indexed = list.indexed || [];
   renderHealth(health);
-  const sel = $("gv-select"); const old = sel.value; sel.innerHTML = "";
-  [...(list.indexed || []), ...(list.videos || [])].forEach(v => {
-    const o = document.createElement("option"); o.value = v; o.textContent = v; sel.append(o);
-  });
-  if (![...sel.options].some(o => o.value === "__dataset__")) {
-    const o = document.createElement("option"); o.value = "__dataset__"; o.textContent = "__dataset__"; sel.prepend(o);
-  }
-  sel.value = old || (state.indexed.includes("__dataset__") ? "__dataset__" : sel.options[0]?.value || "__dataset__");
 }
 async function pollProgress() {
   try {
@@ -487,41 +538,60 @@ async function pollProgress() {
     $("progress").textContent = p.active ? `${p.label}: ${p.count} frames · ${p.fps} fps · ${p.elapsed}s` : "";
   } catch (_) {}
 }
-async function loadNeighbors(id) {
+async function loadNeighbors(id, task = null) {
   try {
     const j = await api(`/api/video/neighbors/${encodeURIComponent(id)}`);
-    renderFrames("kis-results", j.frames || []);
+    const targetId = task === "qa" ? "qa-results" : (task === "trake" ? "trake-nearby" : "kis-results");
+    const targetTask = task === "qa" ? "qa" : (task === "trake" ? "trake" : "kis");
+    renderFrames(targetId, j.frames || [], targetTask);
   } catch (_) {}
 }
 
 document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => {
   document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  state.activeTask = btn.dataset.view;
   btn.classList.add("active"); $("view-" + btn.dataset.view).classList.add("active");
 });
-$("gv-load").onclick = async () => { const btn = $("gv-load"); setBusy(btn, true); try { await api("/api/video/index", jsonBody({ video: currentVideo(), ...opts() })); await refresh(); } catch(e) { alert(e.message); } finally { setBusy(btn, false); } };
-$("gv-dataset").onclick = async () => { const btn = $("gv-dataset"); setBusy(btn, true); try { await api("/api/video/index", jsonBody({ video: "__dataset__", ...opts() })); await refresh(); $("gv-select").value = "__dataset__"; } catch(e) { alert(e.message); } finally { setBusy(btn, false); } };
-$("gv-folder-btn").onclick = async () => { const btn = $("gv-folder-btn"); setBusy(btn, true); try { await api("/api/video/index_folder", jsonBody({ path: $("gv-folder").value, ...opts() })); await refresh(); $("gv-select").value = "__dataset__"; } catch(e) { alert(e.message); } finally { setBusy(btn, false); } };
-$("gv-save").onclick = async () => { try { await api("/api/video/save", jsonBody({})); await refresh(); } catch(e) { alert(e.message); } };
+window.addEventListener("unhandledrejection", ev => {
+  ev.preventDefault();
+  showTaskError(state.activeTask || "kis", ev.reason);
+});
+$("gv-dataset").onclick = async () => {
+  const btn = $("gv-dataset");
+  if (state.loaded) { $("progress").textContent = "Dataset already loaded for this server session."; return; }
+  state.loadingDataset = true;
+  setBusy(btn, true); btn.textContent = "Loading...";
+  try {
+    await api("/api/video/index", jsonBody({ video: "__dataset__", ...opts() }));
+    await refresh();
+    $("progress").textContent = "Dataset loaded. You can run queries now.";
+  } catch(e) {
+    alert(e.message);
+  } finally {
+    state.loadingDataset = false;
+    setBusy(btn, false);
+    await refresh().catch(() => {});
+  }
+};
 $("kis-form").onsubmit = async (ev) => {
   ev.preventDefault();
+  state.activeTask = "kis";
   // `display_limit` controls RENDERING only. The engine always retrieves the full
   // competition pool and the result batch keeps every row, so exporting after looking
   // at 20 cards still submits the full validated Top-100.
   const body = { video: currentVideo(), query: $("kis-query").value, display_limit: $("kis-display").value };
-  if ($("kis-refine").value === "0") body.refine = false;
   const j = await api("/api/video/search", jsonBody(body));
   state.activeTask = "kis";
   await refreshBatch("kis", j.result_batch);
   const shown = Math.max(1, Math.min(Number(j.display_limit || j.count), j.count));
-  renderFrames("kis-results", withRowIds("kis", j.results, j.result_batch).slice(0, shown));
+  renderFrames("kis-results", withRowIds("kis", j.results, j.result_batch).slice(0, shown), "kis");
   const pool = $("kis-pool-status");
-  pool.className = "badge blue";
-  pool.textContent = `showing ${shown} of ${j.count} · batch keeps ${(j.result_batch || {}).row_count || j.count} for export`;
-  const r = j.refinement || {}, d = j.diagnostics || {};
-  const status = $("kis-refine-status");
-  status.className = "badge " + (d.refinement_triggered ? "ok" : "");
-  status.textContent = `refine ${r.mode || "?"} · ${d.refinement_triggered ? "triggered" : "skipped"} (${d.trigger_reason || "n/a"}) · ${d.candidates_refined || 0} refined · ${d.frames_decoded || 0} frames · ${Math.round(d.refinement_ms || 0)}ms`;
+  pool.className = "helper";
+  const hints = (j.query_hints || []).slice(0, 8).join(", ");
+  pool.textContent = `Dang hien ${shown}/${j.count} ket qua gan nhat.`
+    + (hints ? ` Hint tu dong: ${hints}.` : "")
+    + " Card van co video_id, frame va nut Copy de ban lay dap an nhap.";
 };
 // A Q&A answer belongs to ONE video hypothesis. Each card shows that video's own
 // answer and its own evidence; selecting a card scopes the manual correction to it.
@@ -534,11 +604,11 @@ function renderQaHypotheses(hypotheses) {
     const meta = document.createElement("div"); meta.className = "meta";
     const top = document.createElement("div"); top.className = "meta-top";
     top.append(textEl("b", "", h.video_id), badge("#" + h.rank, ""),
-      badge(h.backend_visual ? "visual" : "non-visual", h.backend_visual ? "ok" : "warn"),
-      badge(h.answer_status || "?", h.answer_status === "answered" ? "ok" : "warn"));
-    meta.append(top, textEl("div", "answer-box", h.normalized_answer || h.answer || "(no answer)"));
-    meta.append(textEl("span", "", `backend ${h.backend_type} · reliability ${Number(h.answer_reliability_score || 0).toFixed(3)} · ${(h.evidence || []).length} evidence frames`));
-    if (h.warning) meta.append(textEl("div", "evidence", h.warning));
+      badge(`${(h.evidence || []).length} frames`, ""));
+    const answer = h.normalized_answer || h.answer || "";
+    const answerBox = textEl("div", "answer-box", "");
+    setAnswerBox(answerBox, answer || "(no answer)");
+    meta.append(top, answerBox);
     const strip = document.createElement("div"); strip.className = "score-line";
     (h.evidence || []).slice(0, 6).forEach(ev => {
       if (!ev.image) { strip.append(textEl("span", "score-chip", `${ev.source} n/a`)); return; }
@@ -548,37 +618,31 @@ function renderQaHypotheses(hypotheses) {
     });
     meta.append(strip);
     card.append(meta);
-    card.onclick = () => { state.qaSelectedVideo = h.video_id; $("qa-correction").value = h.normalized_answer || h.answer || ""; renderQaHypotheses(state.qaHypotheses); };
+    card.onclick = () => { state.qaSelectedVideo = h.video_id; $("qa-correction").value = compactAnswer(h.normalized_answer || h.answer || ""); renderQaHypotheses(state.qaHypotheses); };
     box.append(card);
   });
 }
 $("qa-form").onsubmit = async (ev) => {
   ev.preventDefault();
-  const j = await api("/api/video/vqa", jsonBody({ video: currentVideo(), event: $("qa-event").value, question: $("qa-question").value, expected_answer_type: $("qa-type").value, window: $("qa-window").value }));
-  $("qa-answer").textContent = j.answer_normalized || j.answer || "";
-  $("qa-answer").classList.toggle("empty", !(j.answer_normalized || j.answer));
-  $("qa-correction").value = j.answer_normalized || j.answer || "";
-  const backend = j.qa || {};
-  const badgeTone = backend.visual_capable ? "ok" : "warn";
+  state.activeTask = "qa";
+  const j = await api("/api/video/vqa", jsonBody({ video: currentVideo(), event: $("qa-event").value, question: $("qa-question").value, expected_answer_type: $("qa-type").value, retrieval_query_mode: "evidence", window: 8 }));
+  setAnswerBox($("qa-answer"), j.answer_normalized || j.answer || "");
+  $("qa-correction").value = compactAnswer(j.answer_normalized || j.answer || "");
   $("qa-backend").innerHTML = "";
-  $("qa-backend").append(
-    badge(`backend ${backend.backend_type || "?"}`, badgeTone),
-    badge(backend.visual_capable ? "visual" : "Mock / non-visual fallback", badgeTone),
-    badge(`${(j.diagnostics || {}).answered_video_hypotheses || 0}/${(j.diagnostics || {}).retrieved_video_hypotheses || 0} videos answered`, ""),
-    badge(`${Math.round((j.diagnostics || {}).total_ms || 0)}ms`, "")
-  );
-  $("qa-confidence").textContent = "answer_reliability_score " + Number(j.answer_reliability_score || 0).toFixed(3) + " · status " + (j.answer_status || "?") + (j.warning ? " · " + j.warning : "");
+  $("qa-confidence").textContent = "Day la dap an goi y. Hay xem frame bang chung ben duoi de chot dap an.";
   state.activeTask = "qa";
   await refreshBatch("qa", j.result_batch);
   state.qaHypotheses = j.hypotheses || [];
   state.qaSelectedVideo = j.video_id || null;
   state.qaSelectedRow = ((j.result_batch || {}).rows || [])[0]?.row_id || null;
   renderQaHypotheses(state.qaHypotheses);
-  renderFrames("qa-results", j.frames);
+  renderFrames("qa-results", j.frames, "qa");
 };
 $("trake-form").onsubmit = async (ev) => {
   ev.preventDefault();
-  $("trake-status").textContent = "Aligning ordered events...";
+  state.activeTask = "trake";
+  $("trake-status").textContent = "Dang tim chuoi su kien...";
+  $("trake-nearby").innerHTML = "";
   const events = $("trake-events").value.split(/\n+/).map(s => s.trim()).filter(Boolean);
   const j = await api("/api/video/temporal", jsonBody({ video: currentVideo(), events, per_event_k: $("trake-perk").value, display_limit: $("trake-display").value }));
   state.activeTask = "trake";
@@ -587,14 +651,17 @@ $("trake-form").onsubmit = async (ev) => {
   const shownChains = Math.max(1, Math.min(Number(j.display_limit || j.count), j.count));
   renderChains((j.matches || []).slice(0, shownChains), j.event_count, j.result_batch);
   const d = j.diagnostics || {};
+  const hintCount = (j.event_hints || []).reduce((n, hints) => n + (hints || []).length, 0);
   $("trake-status").textContent = `showing ${shownChains} of ${j.count} · `
     + `${j.count} complete alignments (${d.discarded_incomplete_alignments || 0} incomplete discarded, `
     + `${d.recovered_events || 0} events recovered) · ${d.alignment_method || "beam_dp"} · refinement ${(j.refinement || {}).status || "n/a"}`;
+  if (hintCount) $("trake-status").textContent += ` auto hints ${hintCount}`;
   renderOutput("trake-output", state.rows.trake);
 };
 refresh().catch(e => $("health").textContent = e.message);
 ["kis", "qa", "trake"].forEach(task => {
-  $(task + "-save").onclick = () => saveRows(task).catch(e => alert(e.message));
+  const save = $(task + "-save");
+  if (save) save.onclick = () => saveRows(task).catch(e => alert(e.message));
   const reset = $(task + "-reset");
   if (reset) reset.onclick = () => resetBatch(task).catch(e => alert(e.message));
   const check = $(task + "-preflight");
@@ -631,21 +698,6 @@ $("qa-correction").onchange = async () => {
   state.qaHypotheses = (state.qaHypotheses || []).map(h =>
     (applyAll && h.video_id === state.qaSelectedVideo) ? { ...h, normalized_answer: answer } : h);
   renderQaHypotheses(state.qaHypotheses);
-  $("qa-answer").textContent = answer;
-  $("qa-answer").classList.toggle("empty", !answer);
+  setAnswerBox($("qa-answer"), answer);
 };
-$("evaluation-form").onsubmit = async (ev) => {
-  ev.preventDefault();
-  await api("/api/evaluation/run", jsonBody({ labels: $("evaluation-labels").value }));
-  $("evaluation-output").textContent = "Running...";
-};
-async function pollEvaluation() {
-  try {
-    const status = await api("/api/evaluation/status");
-    if (status.active) return;
-    if (status.error) $("evaluation-output").textContent = status.error;
-    else if (status.summary) $("evaluation-output").textContent = JSON.stringify({ ...status.summary, run_dir: status.run_dir }, null, 2);
-  } catch (_) {}
-}
-setInterval(pollEvaluation, 1500);
 </script>

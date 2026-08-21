@@ -245,6 +245,9 @@ def test_temporal_payload_is_event_preserving(client) -> None:
     events = ["a person appears", "the person moves", "the person leaves"]
     body = client.post("/api/video/temporal", json={"events": events, "max_results": 5}).get_json()
     assert body["event_count"] == 3
+    assert body["events"] == events
+    assert body["search_events"]
+    assert len(body["search_events"]) == len(events)
     assert body["count"] >= 1
     for chain in body["matches"]:
         assert chain["event_count"] == 3
@@ -255,6 +258,7 @@ def test_temporal_payload_is_event_preserving(client) -> None:
         # Each step names its own event and its own index: no positional zipping.
         assert [step["event_index"] for step in chain["steps"]] == [0, 1, 2]
         assert [step["event"] for step in chain["steps"]] == events
+        assert all(step["event_search_text"] for step in chain["steps"])
         assert [step["event_label"] for step in chain["steps"]] == ["Event 1", "Event 2", "Event 3"]
     for row in body["predictions"]:
         assert len(row) == 4
